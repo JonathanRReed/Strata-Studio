@@ -1,0 +1,14 @@
+# Dependencies
+web/node_modules/
+
+# Build output
+web/dist/
+
+# Playwright CLI artifacts
+.playwright-cli/
+
+# Debug logs
+console-*.log
+
+# OS files
+.DS_Store
