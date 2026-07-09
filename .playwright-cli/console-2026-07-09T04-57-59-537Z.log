@@ -1,0 +1,25 @@
+[      89ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:14335
+[  962093ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:14335
+[ 1198433ms] [ERROR] [vite] SyntaxError: The requested module '/src/presets/stylePresets.ts?t=1783574277928' does not provide an export named 'waveformPresets' @ http://localhost:5174/@vite/client:524
+[ 1198435ms] [ERROR] [vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:5174/@vite/client:524
+[ 1198435ms] [ERROR] [vite] SyntaxError: The requested module '/src/presets/stylePresets.ts?t=1783574277928' does not provide an export named 'waveformPresets' @ http://localhost:5174/@vite/client:524
+[ 1198435ms] [ERROR] [vite] Failed to reload /src/components/ControlsPanel.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:5174/@vite/client:524
+[ 1254541ms] TypeError: Cannot read properties of undefined (reading 'toFixed')
+    at Slider (http://localhost:5174/src/components/ControlsPanel.tsx?t=1783574334006:16:21)
+    at Object.react_stack_bottom_frame (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:12866:12)
+    at renderWithHooks (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:4213:19)
+    at updateFunctionComponent (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:5569:16)
+    at beginWork (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:6140:20)
+    at runWithFiberInDEV (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:851:66)
+    at performUnitOfWork (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:8429:92)
+    at workLoopSync (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:8325:37)
+    at renderRootSync (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:8309:6)
+    at performWorkOnRoot (http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:7994:27)
+[ 1254538ms] [WARNING] %s
+
+%s
+ An error occurred in the <Slider> component. Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries. @ http://localhost:5174/@vite/client:524
+[ 1445952ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:14335
+[ 1453485ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:14335
+[ 1477161ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=11b95d6a:14335

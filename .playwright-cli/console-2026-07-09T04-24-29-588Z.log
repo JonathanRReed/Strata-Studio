@@ -1,0 +1,109 @@
+[      80ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=115758c1:14335
+[    1833ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5635.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[    1834ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5635.png:0
+[    1834ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5635.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[    1835ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5637.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[    1835ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5637.png:0
+[    1835ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5637.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[    1835ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5636.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[    1835ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5636.png:0
+[    1835ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5636.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[    1835ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5635.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[    1835ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5635.png:0
+[    1835ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5635.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[    1835ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5637.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[    1835ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5637.png:0
+[    1835ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5637.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[    1835ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5636.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[    1835ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5636.png:0
+[    1836ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5636.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   21666ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5636.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   21666ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5636.png:0
+[   21666ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5636.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   21666ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5636.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   21666ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5636.png:0
+[   21667ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5636.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   21667ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5637.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   21667ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5637.png:0
+[   21667ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5637.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   21667ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5635.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   21667ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5635.png:0
+[   21668ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5635.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   21668ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5635.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   21668ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5635.png:0
+[   21668ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5635.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   21668ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5637.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   21668ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5637.png:0
+[   21669ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5637.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   60901ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5636.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   60901ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5636.png:0
+[   60901ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5636.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   60901ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5636.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   60901ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5636.png:0
+[   60902ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5636.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   60902ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5637.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   60902ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5637.png:0
+[   60902ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5637.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   60902ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5637.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   60902ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5637.png:0
+[   60902ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5637.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   60902ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8298/5635.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   60902ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8298/5635.png:0
+[   60902ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8298/5635.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524
+[   60902ms] [ERROR] Access to fetch at 'https://tile.openstreetmap.org/14/8299/5635.png' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/?lat=48.8566&lng=2.3522&z=13&seed=paris&palette=blueprint&style=blueprint:0
+[   60902ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://tile.openstreetmap.org/14/8299/5635.png:0
+[   60902ms] [ERROR] pt: AJAXError: Failed to fetch (0): https://tile.openstreetmap.org/14/8299/5635.png
+    at http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:494:16
+    at Generator.throw (<anonymous>)
+    at a (http://localhost:5173/node_modules/.vite/deps/maplibre-gl.js?v=096ae03c:37:17) @ http://localhost:5173/@vite/client:524

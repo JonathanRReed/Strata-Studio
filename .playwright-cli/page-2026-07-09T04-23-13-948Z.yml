@@ -1,0 +1,158 @@
+- generic [ref=f1e3]:
+  - generic [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - heading "Strata Studio" [level=1] [ref=f1e6]
+      - paragraph [ref=f1e7]: Experimental Lab / Waveform Terrain
+    - generic [ref=f1e8]:
+      - generic [ref=f1e9]: Presets
+      - generic [ref=f1e10]:
+        - button "Monolith" [ref=f1e11]
+        - button "Signal Peak" [ref=f1e12]
+        - button "White Noise" [ref=f1e13]
+        - button "Mountain Broadcast" [ref=f1e14]
+        - button "Blueprint" [ref=f1e15]
+        - button "Neon Pulse" [ref=f1e16]
+    - generic [ref=f1e17]:
+      - generic [ref=f1e18]:
+        - generic [ref=f1e19]:
+          - text: Amplitude
+          - generic [ref=f1e20]: "40.00"
+        - slider "Amplitude 40.00" [ref=f1e21]: "40"
+      - generic [ref=f1e22]:
+        - generic [ref=f1e23]:
+          - text: Spacing
+          - generic [ref=f1e24]: "8.00"
+        - slider "Spacing 8.00" [ref=f1e25]: "8"
+      - generic [ref=f1e26]:
+        - generic [ref=f1e27]:
+          - text: Line thickness
+          - generic [ref=f1e28]: "1.50"
+        - slider "Line thickness 1.50" [ref=f1e29]: "1.5"
+      - generic [ref=f1e30]:
+        - generic [ref=f1e31]:
+          - text: Noise
+          - generic [ref=f1e32]: "0.15"
+        - slider "Noise 0.15" [ref=f1e33]: "0.15"
+      - generic [ref=f1e34]:
+        - generic [ref=f1e35]:
+          - text: Detail
+          - generic [ref=f1e36]: "1.00"
+        - slider "Detail 1.00" [ref=f1e37]: "1"
+      - generic [ref=f1e38]:
+        - generic [ref=f1e39]:
+          - text: Vertical compression
+          - generic [ref=f1e40]: "1.00"
+        - slider "Vertical compression 1.00" [ref=f1e41]: "1"
+    - generic [ref=f1e42]:
+      - generic [ref=f1e43]: Feature influence
+      - button "Fetch OSM features (buildings, roads, water)" [ref=f1e44]
+      - generic [ref=f1e45]:
+        - generic [ref=f1e46]:
+          - generic [ref=f1e47]:
+            - text: Building influence
+            - generic [ref=f1e48]: "0.00"
+          - slider "Building influence 0.00" [ref=f1e49]: "0"
+        - generic [ref=f1e50]:
+          - text: Building mode
+          - combobox "Building mode" [ref=f1e51]:
+            - option "Interrupt" [selected]
+            - option "Amplify"
+            - option "Flatten"
+            - option "Glow"
+        - generic [ref=f1e52]:
+          - generic [ref=f1e53]:
+            - text: Road influence
+            - generic [ref=f1e54]: "0.00"
+          - slider "Road influence 0.00" [ref=f1e55]: "0"
+        - generic [ref=f1e56]:
+          - text: Road mode
+          - combobox "Road mode" [ref=f1e57]:
+            - option "Interrupt"
+            - option "Amplify" [selected]
+            - option "Flatten"
+            - option "Glow"
+        - generic [ref=f1e58]:
+          - generic [ref=f1e59]:
+            - text: Water influence
+            - generic [ref=f1e60]: "0.00"
+          - slider "Water influence 0.00" [ref=f1e61]: "0"
+        - generic [ref=f1e62]:
+          - text: Water mode
+          - combobox "Water mode" [ref=f1e63]:
+            - option "Interrupt"
+            - option "Amplify"
+            - option "Flatten" [selected]
+            - option "Glow"
+    - generic [ref=f1e64]:
+      - generic [ref=f1e65]: Composition
+      - generic [ref=f1e66]:
+        - generic [ref=f1e67]:
+          - text: Grain
+          - generic [ref=f1e68]: "0.00"
+        - slider "Grain 0.00" [ref=f1e69]: "0"
+      - generic [ref=f1e70]:
+        - generic [ref=f1e71]:
+          - text: Rotation
+          - generic [ref=f1e72]: "0.00"
+        - slider "Rotation 0.00" [ref=f1e73]: "0"
+      - generic [ref=f1e74]:
+        - text: Label
+        - textbox "Label" [ref=f1e75]:
+          - /placeholder: Optional place name
+      - generic [ref=f1e76]:
+        - text: Aspect ratio
+        - combobox "Aspect ratio" [ref=f1e77]:
+          - option "Square (1:1)" [selected]
+          - option "Wallpaper (16:9)"
+          - option "Phone (9:16)"
+          - option "Poster (12:18)"
+    - generic [ref=f1e78]:
+      - generic [ref=f1e79]:
+        - text: Seed
+        - textbox "Seed" [ref=f1e80]: monolith
+      - generic [ref=f1e81]:
+        - text: Palette
+        - combobox "Palette" [ref=f1e82]:
+          - option "monochrome" [selected]
+          - option "cream"
+          - option "blueprint"
+          - option "neon"
+          - option "desert"
+          - option "glacier"
+    - generic [ref=f1e83]:
+      - button "Generate" [ref=f1e84]
+      - generic [ref=f1e85]:
+        - button "Export JSON" [ref=f1e86]
+        - button "Copy URL" [ref=f1e87]
+      - generic [ref=f1e88]:
+        - generic [ref=f1e89]: Export PNG
+        - generic [ref=f1e90]:
+          - button "1024²" [ref=f1e91]
+          - button "2048²" [ref=f1e92]
+          - button "3000²" [ref=f1e93]
+      - generic [ref=f1e94]:
+        - generic [ref=f1e95]: Export SVG
+        - generic [ref=f1e96]:
+          - button "1024²" [ref=f1e97]
+          - button "2048²" [ref=f1e98]
+          - button "3000²" [ref=f1e99]
+    - group [ref=f1e100]:
+      - generic "Credits" [ref=f1e101] [cursor=pointer]
+  - generic [ref=f1e103]:
+    - generic [ref=f1e104]:
+      - generic [ref=f1e105]: Select area
+      - generic [ref=f1e107]:
+        - generic "Map for area selection":
+          - region "Map" [ref=f1e108]
+        - generic:
+          - generic:
+            - textbox "Search for a location" [ref=f1e109]:
+              - /placeholder: Search location...
+            - button "Search" [ref=f1e110]
+        - generic: Map data © OpenStreetMap contributors | Terrain © Mapzen / AWS Open Data
+      - paragraph [ref=f1e111]: Pan and zoom to your place. The square is the selected area.
+    - generic [ref=f1e112]:
+      - generic [ref=f1e113]: Preview
+      - generic [ref=f1e114]:
+        - generic:
+          - generic: Click Generate to create your artwork

@@ -1,0 +1,187 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Strata Studio" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Experimental Lab / Waveform Terrain
+    - generic [ref=e8]:
+      - tablist "Studio" [ref=e9]:
+        - tab "Classic Studio" [ref=e10]
+        - tab "Experimental Lab" [selected] [ref=e11]
+      - generic [ref=e12]:
+        - button "Waveform Terrain" [ref=e13]
+        - button "Noise Amplifier" [ref=e14]
+        - button "Seismic" [ref=e15]
+        - button "Melt Map" [ref=e16]
+        - button "Gravity Well" [ref=e17]
+        - button "Magnetic Field" [ref=e18]
+        - button "Pulse Rings" [ref=e19]
+        - button "Terrain Sonogram" [ref=e20]
+        - button "Building Interference" [ref=e21]
+      - paragraph [ref=e22]: Horizontal terrain slices displaced by elevation, like a topographic pulse record.
+    - generic [ref=e23]:
+      - generic [ref=e24]: Presets
+      - generic [ref=e25]:
+        - button "Monolith" [ref=e26]
+        - button "Signal Peak" [ref=e27]
+        - button "White Noise" [ref=e28]
+        - button "Mountain Broadcast" [ref=e29]
+        - button "Fault Line" [ref=e30]
+        - button "Seismic Choir" [ref=e31]
+        - button "Black Ridge" [ref=e32]
+        - button "Interference Map" [ref=e33]
+        - button "Neon Pulse" [ref=e34]
+        - button "Iron Filings" [ref=e35]
+        - button "Ghost Terrain" [ref=e36]
+        - button "Gravity Collapse" [ref=e37]
+        - button "Static Bloom" [ref=e38]
+        - button "Topo Classic" [ref=e39]
+        - button "Drafting Table" [ref=e40]
+        - button "Carved Ink" [ref=e41]
+        - button "City Circuit" [ref=e42]
+        - button "Atlas" [ref=e43]
+        - button "Quarry" [ref=e44]
+        - button "Survey" [ref=e45]
+    - generic [ref=e46]:
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - text: Amplitude
+          - generic [ref=e49]: "45.00"
+        - slider "Amplitude 45.00" [ref=e50]: "45"
+      - generic [ref=e51]:
+        - generic [ref=e52]:
+          - text: Spacing
+          - generic [ref=e53]: "6.00"
+        - slider "Spacing 6.00" [ref=e54]: "6"
+      - generic [ref=e55]:
+        - generic [ref=e56]:
+          - text: Line thickness
+          - generic [ref=e57]: "1.20"
+        - slider "Line thickness 1.20" [ref=e58]: "1.25"
+      - generic [ref=e59]:
+        - generic [ref=e60]:
+          - text: Noise
+          - generic [ref=e61]: "0.10"
+        - slider "Noise 0.10" [ref=e62]: "0.1"
+      - generic [ref=e63]:
+        - generic [ref=e64]:
+          - text: Detail
+          - generic [ref=e65]: "1.00"
+        - slider "Detail 1.00" [ref=e66]: "1"
+      - generic [ref=e67]:
+        - generic [ref=e68]:
+          - text: Vertical compression
+          - generic [ref=e69]: "1.00"
+        - slider "Vertical compression 1.00" [ref=e70]: "1"
+      - generic [ref=e71]:
+        - generic [ref=e72]:
+          - text: Occlusion
+          - generic [ref=e73]: "1.00"
+        - slider "Occlusion 1.00" [ref=e74]: "1"
+    - generic [ref=e75]:
+      - generic [ref=e76]: Feature influence
+      - button "Fetch OSM features (buildings, roads, water)" [ref=e77]
+      - paragraph [ref=e78]: Area is 218.9 km² — zoom in to under 25 km² to fetch OSM features
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - generic [ref=e81]:
+            - text: Building influence
+            - generic [ref=e82]: "0.00"
+          - slider "Building influence 0.00" [ref=e83]: "0"
+        - generic [ref=e84]:
+          - text: Building mode
+          - combobox "Building mode" [ref=e85]:
+            - option "Interrupt" [selected]
+            - option "Amplify"
+            - option "Flatten"
+            - option "Glow"
+        - generic [ref=e86]:
+          - generic [ref=e87]:
+            - text: Road influence
+            - generic [ref=e88]: "0.00"
+          - slider "Road influence 0.00" [ref=e89]: "0"
+        - generic [ref=e90]:
+          - text: Road mode
+          - combobox "Road mode" [ref=e91]:
+            - option "Interrupt"
+            - option "Amplify" [selected]
+            - option "Flatten"
+            - option "Glow"
+        - generic [ref=e92]:
+          - generic [ref=e93]:
+            - text: Water influence
+            - generic [ref=e94]: "0.00"
+          - slider "Water influence 0.00" [ref=e95]: "0"
+        - generic [ref=e96]:
+          - text: Water mode
+          - combobox "Water mode" [ref=e97]:
+            - option "Interrupt"
+            - option "Amplify"
+            - option "Flatten" [selected]
+            - option "Glow"
+    - generic [ref=e98]:
+      - generic [ref=e99]: Composition
+      - generic [ref=e100]:
+        - generic [ref=e101]:
+          - text: Grain
+          - generic [ref=e102]: "0.00"
+        - slider "Grain 0.00" [ref=e103]: "0"
+      - generic [ref=e104]:
+        - generic [ref=e105]:
+          - text: Rotation
+          - generic [ref=e106]: "0.00"
+        - slider "Rotation 0.00" [ref=e107]: "0"
+      - generic [ref=e108]:
+        - text: Label
+        - textbox "Label" [ref=e109]:
+          - /placeholder: Optional place name
+      - generic [ref=e110]:
+        - text: Aspect ratio
+        - combobox "Aspect ratio" [ref=e111]:
+          - option "Square (1:1)" [selected]
+          - option "Wallpaper (16:9)"
+          - option "Phone (9:16)"
+          - option "Poster (12:18)"
+    - generic [ref=e112]:
+      - generic [ref=e113]:
+        - text: Seed
+        - textbox "Seed" [ref=e114]: monolith
+      - generic [ref=e115]:
+        - text: Palette
+        - combobox "Palette" [ref=e116]:
+          - option "Black & White" [selected]
+          - option "Cream & Ink"
+          - option "Blueprint"
+          - option "Neon"
+          - option "Desert"
+          - option "Glacier"
+    - generic [ref=e117]:
+      - button "Generate" [ref=e118]
+      - generic [ref=e119]:
+        - button "Export JSON" [ref=e120]
+        - button "Copy URL" [ref=e121]
+      - generic [ref=e122]:
+        - generic [ref=e123]: Export PNG
+        - generic [ref=e124]:
+          - button "1024²" [ref=e125]
+          - button "2048²" [ref=e126]
+          - button "3000²" [ref=e127]
+      - generic [ref=e128]:
+        - generic [ref=e129]: Export SVG
+        - generic [ref=e130]:
+          - button "1024²" [ref=e131]
+          - button "2048²" [ref=e132]
+          - button "3000²" [ref=e133]
+    - group [ref=e134]:
+      - generic "Credits" [ref=e135] [cursor=pointer]
+  - generic [ref=e137]:
+    - generic [ref=e138]:
+      - generic [ref=e139]: Select area
+      - paragraph [ref=e142]: Pan and zoom to your place. The square is the selected area.
+      - generic [ref=e143]:
+        - generic [ref=e144]: 37.7750°, -122.4250° · zoom 11
+        - generic [ref=e145]: 218.9 km² · zoom in for OSM
+    - generic [ref=e146]:
+      - generic [ref=e147]: Preview
+      - generic [ref=e148]:
+        - generic:
+          - generic: Click Generate to create your artwork
