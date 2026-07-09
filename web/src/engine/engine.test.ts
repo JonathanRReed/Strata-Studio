@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, spyOn } from "bun:test";
 import {
   lngToPixelX,
   latToPixelY,
@@ -6,7 +6,7 @@ import {
   pixelYToLat,
   normalizeBounds,
 } from "./projection.ts";
-import { hashSeed, createSeededNoise, createNoise } from "./noise.ts";
+import { hashSeed, createSeededNoise, createNoise, createAnimatedNoise } from "./noise.ts";
 import {
   buildOverpassQuery,
   classifyFeature,
@@ -14,6 +14,7 @@ import {
   overpassToGeoJSON,
   bboxAreaKm2,
   isBboxSmallEnough,
+  fetchOsmFeatures,
 } from "../data/osmOverpass.ts";
 import { sampleGrid, clamp, normalizeGrid, projectGeoPoint, cropGridToAspect } from "./grid.ts";
 import {
@@ -23,6 +24,9 @@ import {
 import { allStyles, stylesByStudio, renderStyleSvg } from "../studios/registry.ts";
 import { defaultStyleParams } from "../presets/stylePresets.ts";
 import { marchingSquares } from "./contours.ts";
+import { animateScene, sceneWithDrawProgress, sceneWithParallax, framePhase, needsRegeneration, needsPostProcess } from "./animation.ts";
+import { applyFeatureInfluence } from "../studios/common.ts";
+import type { FeatureMasks, StyleParams } from "./types.ts";
 
 function decodeElevation(r: number, g: number, b: number): number {
   return r * 256 + g + b / 256 - 32768;
@@ -187,6 +191,102 @@ describe("overpassToGeoJSON", () => {
     if (feature.geometry.type === "LineString") {
       expect(feature.geometry.coordinates.length).toBe(3);
     }
+  });
+
+  it("assembles rings using head-extension when ways are not tail-ordered", () => {
+    // Ways ordered so that the second way must be prepended to the head
+    // of the first to close the ring: [2,3,4] + [4,1,2] → [2,3,4,1,2].
+    // With the old tail-only assembler, [4,1,2] matches tail=4 so this
+    // particular case works via tail. But [3,4,5] + [1,2,3] + [5,1] tests
+    // head-extension: starting with [3,4,5], [1,2,3] matches head=3.
+    const result = overpassToGeoJSON({
+      elements: [
+        { type: "node", id: 1, lat: 0, lon: 0 },
+        { type: "node", id: 2, lat: 0, lon: 1 },
+        { type: "node", id: 3, lat: 1, lon: 1 },
+        { type: "node", id: 4, lat: 1, lon: 0 },
+        { type: "node", id: 5, lat: 0.5, lon: 0.5 },
+        { type: "way", id: 10, nodes: [3, 4, 5] },
+        { type: "way", id: 11, nodes: [1, 2, 3] },
+        { type: "way", id: 12, nodes: [5, 1] },
+        {
+          type: "relation",
+          id: 100,
+          members: [
+            { type: "way", ref: 10, role: "outer" },
+            { type: "way", ref: 11, role: "outer" },
+            { type: "way", ref: 12, role: "outer" },
+          ],
+          tags: { type: "multipolygon", natural: "water", water: "lake" },
+        },
+      ],
+    });
+
+    expect(result.features.length).toBe(1);
+    const feature = result.features[0];
+    expect(feature.geometry.type).toBe("Polygon");
+    if (feature.geometry.type === "Polygon") {
+      expect(feature.geometry.coordinates[0].length).toBe(6);
+    }
+  });
+
+  it("assigns inner rings to the correct outer in a multi-outer multipolygon", () => {
+    // Two disjoint outer squares with one inner hole each. The inner rings
+    // must be assigned to their containing outer, not duplicated across both.
+    const result = overpassToGeoJSON({
+      elements: [
+        // Outer 1: square (0,0)-(2,2)
+        { type: "node", id: 1, lat: 0, lon: 0 },
+        { type: "node", id: 2, lat: 0, lon: 2 },
+        { type: "node", id: 3, lat: 2, lon: 2 },
+        { type: "node", id: 4, lat: 2, lon: 0 },
+        { type: "way", id: 10, nodes: [1, 2, 3, 4, 1] },
+        // Inner 1: hole inside outer 1 at (0.5,0.5)-(1,1)
+        { type: "node", id: 5, lat: 0.5, lon: 0.5 },
+        { type: "node", id: 6, lat: 0.5, lon: 1 },
+        { type: "node", id: 7, lat: 1, lon: 1 },
+        { type: "node", id: 8, lat: 1, lon: 0.5 },
+        { type: "way", id: 11, nodes: [5, 6, 7, 8, 5] },
+        // Outer 2: square (3,3)-(5,5)
+        { type: "node", id: 9, lat: 3, lon: 3 },
+        { type: "node", id: 10, lat: 3, lon: 5 },
+        { type: "node", id: 11, lat: 5, lon: 5 },
+        { type: "node", id: 12, lat: 5, lon: 3 },
+        { type: "way", id: 12, nodes: [9, 10, 11, 12, 9] },
+        // Inner 2: hole inside outer 2 at (3.5,3.5)-(4,4)
+        { type: "node", id: 13, lat: 3.5, lon: 3.5 },
+        { type: "node", id: 14, lat: 3.5, lon: 4 },
+        { type: "node", id: 15, lat: 4, lon: 4 },
+        { type: "node", id: 16, lat: 4, lon: 3.5 },
+        { type: "way", id: 13, nodes: [13, 14, 15, 16, 13] },
+        {
+          type: "relation",
+          id: 200,
+          members: [
+            { type: "way", ref: 10, role: "outer" },
+            { type: "way", ref: 12, role: "outer" },
+            { type: "way", ref: 11, role: "inner" },
+            { type: "way", ref: 13, role: "inner" },
+          ],
+          tags: { type: "multipolygon", natural: "water", water: "lake" },
+        },
+      ],
+    });
+
+    expect(result.features.length).toBe(1);
+    const feature = result.features[0];
+    expect(feature.geometry.type).toBe("MultiPolygon");
+    if (feature.geometry.type === "MultiPolygon") {
+      // Each polygon should have exactly 2 rings: outer + its inner.
+      expect(feature.geometry.coordinates[0].length).toBe(2);
+      expect(feature.geometry.coordinates[1].length).toBe(2);
+    }
+  });
+
+  it("classifies water=sea and water=lagoon as ocean", () => {
+    expect(classifyWaterType({ natural: "water", water: "sea" })).toBe("ocean");
+    expect(classifyWaterType({ natural: "water", water: "lagoon" })).toBe("ocean");
+    expect(classifyWaterType({ natural: "water", water: "reservoir" })).toBe("lake");
   });
 });
 
@@ -388,6 +488,103 @@ describe("style registry", () => {
     const b = renderStyleSvg(waveformTerrain.id, input, params);
     expect(a).toBe(b);
   });
+
+  it("classic styles apply feature influence (interrupt mode breaks strokes)", () => {
+    // Build a mask with a building footprint covering the center
+    const maskW = 120, maskH = 120;
+    const building = new Float32Array(maskW * maskH);
+    const road = new Float32Array(maskW * maskH);
+    const water = new Float32Array(maskW * maskH);
+    const ocean = new Float32Array(maskW * maskH);
+    const lake = new Float32Array(maskW * maskH);
+    const river = new Float32Array(maskW * maskH);
+    // Fill center region with building mask
+    for (let y = 40; y < 80; y++) {
+      for (let x = 40; x < 80; x++) {
+        building[y * maskW + x] = 1.0;
+      }
+    }
+    const masks: FeatureMasks = {
+      width: maskW, height: maskH,
+      building, road, water, ocean, lake, river,
+    };
+    const inputWithMasks = { ...input, masks };
+
+    const classicStyleIds = ["contour", "flow", "blueprint", "woodcut", "drift", "signal"];
+    for (const styleId of classicStyleIds) {
+      const style = allStyles.find((s) => s.id === styleId)!;
+      const baseParams = { ...defaultStyleParams, ...style.defaultParams };
+      // Without influence: normal generation
+      const sceneNoInfluence = style.generate(inputWithMasks, baseParams);
+      // With building influence + interrupt mode: should break strokes
+      const sceneWithInfluence = style.generate(inputWithMasks, {
+        ...baseParams,
+        buildingInfluence: 100,
+        buildingMode: "interrupt" as const,
+      });
+      // The number of strokes should differ (interrupt mode splits lines)
+      // or the total point count should differ
+      const noInfStrokes = sceneNoInfluence.strokes.length;
+      const withInfStrokes = sceneWithInfluence.strokes.length;
+      // At least one of these should be true:
+      // 1. More strokes (lines were broken)
+      // 2. Fewer total points (segments were removed)
+      const noInfPoints = sceneNoInfluence.strokes.reduce((s, st) => s + st.points.length, 0);
+      const withInfPoints = sceneWithInfluence.strokes.reduce((s, st) => s + st.points.length, 0);
+      const strokesChanged = withInfStrokes !== noInfStrokes;
+      const pointsChanged = withInfPoints !== noInfPoints;
+      expect(strokesChanged || pointsChanged).toBe(true);
+    }
+  });
+
+  it("type-aware feature influence: water influence does not affect road lines", () => {
+    // Build a mask with water covering the center
+    const maskW = 120, maskH = 120;
+    const building = new Float32Array(maskW * maskH);
+    const road = new Float32Array(maskW * maskH);
+    const ocean = new Float32Array(maskW * maskH);
+    const lake = new Float32Array(maskW * maskH);
+    const river = new Float32Array(maskW * maskH);
+    const water = new Float32Array(maskW * maskH);
+    // Fill center with water mask
+    for (let y = 40; y < 80; y++) {
+      for (let x = 40; x < 80; x++) {
+        ocean[y * maskW + x] = 1.0;
+        water[y * maskW + x] = 1.0;
+      }
+    }
+    const masks: FeatureMasks = {
+      width: maskW, height: maskH,
+      building, road, water, ocean, lake, river,
+    };
+
+    // A horizontal road line crossing through the water area
+    // (conceptually — we test the influence function directly below)
+
+    // Without strataType (terrain): water influence SHOULD affect the line
+    const terrainResult = applyFeatureInfluence(1, 0.5, 0.5, masks, {
+      ...defaultStyleParams,
+      oceanInfluence: 100,
+      oceanMode: "interrupt" as const,
+    });
+    expect(terrainResult.break_).toBe(true);
+
+    // With strataType="road": water influence should NOT affect the line
+    const roadResult = applyFeatureInfluence(1, 0.5, 0.5, masks, {
+      ...defaultStyleParams,
+      oceanInfluence: 100,
+      oceanMode: "interrupt" as const,
+    }, "road");
+    expect(roadResult.break_).toBe(false);
+
+    // With strataType="water": water influence SHOULD affect the line
+    const waterResult = applyFeatureInfluence(1, 0.5, 0.5, masks, {
+      ...defaultStyleParams,
+      oceanInfluence: 100,
+      oceanMode: "interrupt" as const,
+    }, "water");
+    expect(waterResult.break_).toBe(true);
+  });
 });
 
 describe("marching squares", () => {
@@ -435,5 +632,253 @@ describe("antimeridian bounds", () => {
     const b = normalizeBounds({ west: 179, east: -179, north: 10, south: 9 });
     expect(b.east).toBeGreaterThan(b.west);
     expect(b.east - b.west).toBeLessThan(5);
+  });
+});
+
+describe("animated noise", () => {
+  it("produces different output for different phases", () => {
+    const noise = createAnimatedNoise("anim-test", 4, 0.5);
+    const a = noise(0.5, 0.5, 0);
+    const b = noise(0.5, 0.5, 0.5);
+    expect(a).not.toBe(b);
+  });
+
+  it("matches createNoise when phase is 0", () => {
+    const animated = createAnimatedNoise("match-test", 4, 0.5);
+    const regular = createNoise("match-test", 4, 0.5);
+    expect(animated(0.3, 0.7, 0)).toBeCloseTo(regular(0.3, 0.7), 10);
+  });
+
+  it("phase 0 matches default (no phase argument)", () => {
+    const noise = createAnimatedNoise("loop-test", 4, 0.5);
+    const a = noise(0.5, 0.5, 0);
+    const b = noise(0.5, 0.5);
+    expect(a).toBe(b);
+  });
+});
+
+describe("animation engine", () => {
+  it("framePhase returns 0 at start and approaches 1 at end", () => {
+    expect(framePhase(0, 48)).toBe(0);
+    expect(framePhase(24, 48)).toBe(0.5);
+    expect(framePhase(47, 48)).toBeCloseTo(47/48, 10);
+  });
+
+  it("needsRegeneration is true only for drift", () => {
+    expect(needsRegeneration("drift")).toBe(true);
+    expect(needsRegeneration("draw")).toBe(false);
+    expect(needsRegeneration("parallax")).toBe(false);
+    expect(needsRegeneration("none")).toBe(false);
+  });
+
+  it("needsPostProcess is true for draw and parallax", () => {
+    expect(needsPostProcess("draw")).toBe(true);
+    expect(needsPostProcess("parallax")).toBe(true);
+    expect(needsPostProcess("drift")).toBe(false);
+    expect(needsPostProcess("none")).toBe(false);
+  });
+
+  it("sceneWithDrawProgress reveals strokes progressively", () => {
+    const scene = {
+      strokes: [
+        { points: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 2 }] },
+        { points: [{ x: 0, y: 1 }, { x: 1, y: 2 }] },
+      ],
+    };
+    // At progress 0, no strokes should be visible
+    const atStart = sceneWithDrawProgress(scene, 0);
+    expect(atStart.strokes.length).toBe(0);
+    // At progress 1, all strokes should be fully visible
+    const atEnd = sceneWithDrawProgress(scene, 1);
+    expect(atEnd.strokes.length).toBe(2);
+  });
+
+  it("sceneWithParallax offsets stroke points", () => {
+    const scene = {
+      strokes: [
+        { points: [{ x: 50, y: 0 }, { x: 50, y: 100 }] },
+      ],
+    };
+    const result = sceneWithParallax(scene, 0.25, 100, 100);
+    // At phase 0.25, the offset should be non-zero
+    const origX = scene.strokes[0].points[0].x;
+    const newX = result.strokes[0].points[0].x;
+    expect(newX).not.toBe(origX);
+  });
+
+  it("animateScene returns scene unchanged for none mode", () => {
+    const scene = { strokes: [{ points: [{ x: 1, y: 2 }] }] };
+    const result = animateScene(scene, { ...defaultStyleParams, animationMode: "none" }, 0, 48, 100, 100);
+    expect(result).toBe(scene);
+  });
+});
+
+describe("per-type water influence", () => {
+  function makeMasks(w: number, h: number, fill: Partial<Record<keyof FeatureMasks, number>>): FeatureMasks {
+    const make = (v: number | undefined) => new Float32Array(w * h).fill(v ?? 0);
+    return {
+      width: w,
+      height: h,
+      building: make(fill.building),
+      road: make(fill.road),
+      water: make(fill.water),
+      ocean: make(fill.ocean),
+      lake: make(fill.lake),
+      river: make(fill.river),
+    };
+  }
+
+  it("ocean influence with flatten mode damps displacement", () => {
+    const masks = makeMasks(4, 4, { ocean: 0.8 });
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      oceanInfluence: 100,
+      oceanMode: "flatten",
+      waterInfluence: 0,
+      lakeInfluence: 0,
+      riverInfluence: 0,
+    };
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    expect(Math.abs(result.displacement)).toBeLessThan(10);
+  });
+
+  it("lake influence with amplify mode increases displacement", () => {
+    const masks = makeMasks(4, 4, { lake: 0.8 });
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      lakeInfluence: 100,
+      lakeMode: "amplify",
+      waterInfluence: 0,
+      oceanInfluence: 0,
+      riverInfluence: 0,
+    };
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    expect(Math.abs(result.displacement)).toBeGreaterThan(10);
+  });
+
+  it("river influence with interrupt mode sets break_", () => {
+    const masks = makeMasks(4, 4, { river: 0.8 });
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      riverInfluence: 100,
+      riverMode: "interrupt",
+      waterInfluence: 0,
+      oceanInfluence: 0,
+      lakeInfluence: 0,
+    };
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    expect(result.break_).toBe(true);
+  });
+
+  it("combined water influence still works alongside per-type", () => {
+    const masks = makeMasks(4, 4, { water: 0.8, ocean: 0 });
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      waterInfluence: 100,
+      waterMode: "flatten",
+      oceanInfluence: 0,
+      lakeInfluence: 0,
+      riverInfluence: 0,
+    };
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    expect(Math.abs(result.displacement)).toBeLessThan(10);
+  });
+
+  it("zero influence on all types does not modify displacement", () => {
+    const masks = makeMasks(4, 4, { ocean: 0.8, lake: 0.8, river: 0.8, water: 0.8 });
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      waterInfluence: 0,
+      oceanInfluence: 0,
+      lakeInfluence: 0,
+      riverInfluence: 0,
+    };
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    expect(result.displacement).toBe(10);
+    expect(result.break_).toBe(false);
+    expect(result.glow).toBe(false);
+  });
+});
+
+describe("transparent rendering", () => {
+  const testInput = {
+    bounds: { west: 0, east: 1, north: 1, south: 0 },
+    elevationGrid: {
+      width: 8,
+      height: 8,
+      bounds: { west: 0, east: 1, north: 1, south: 0 },
+      data: new Float32Array(64).map((_, i) => (i % 8) / 7),
+    },
+    width: 100,
+    height: 100,
+    seed: "transparent-test",
+  };
+
+  it("SVG with transparent=true omits the background rect", () => {
+    const svg = renderStyleSvg(waveformTerrain.id, testInput, { ...defaultStyleParams, ...waveformTerrain.defaultParams }, undefined, true);
+    // Should NOT contain a standalone background <rect> (stroke fills are ok)
+    expect(svg).not.toMatch(/<rect[^>]*fill="[^"]*"[^>]*\/>/);
+    // Should still have paths
+    expect(svg).toContain("<path");
+  });
+
+  it("SVG with transparent=false includes the background rect", () => {
+    const svg = renderStyleSvg(waveformTerrain.id, testInput, { ...defaultStyleParams, ...waveformTerrain.defaultParams }, undefined, false);
+    expect(svg).toMatch(/<rect[^>]*fill="[^"]*"[^>]*\/>/);
+  });
+});
+
+describe("OSM retry", () => {
+  it("fetchOsmFeatures retries on 504 and succeeds", async () => {
+    let callCount = 0;
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve(new Response("Gateway Timeout", { status: 504 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ elements: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }) as unknown as typeof fetch);
+
+    const cacheModule = await import("../data/cache.ts");
+    const getOsmSpy = spyOn(cacheModule, "getOsm").mockResolvedValue(undefined);
+    const setOsmSpy = spyOn(cacheModule, "setOsm").mockResolvedValue(undefined);
+
+    try {
+      const bounds = { west: 0, east: 0.001, north: 0.001, south: 0 };
+      const result = await fetchOsmFeatures(bounds);
+      expect(result.features.length).toBe(0);
+      expect(callCount).toBe(2); // First failed, second succeeded
+    } finally {
+      fetchSpy.mockRestore();
+      getOsmSpy.mockRestore();
+      setOsmSpy.mockRestore();
+    }
+  });
+
+  it("fetchOsmFeatures does not retry on non-retryable errors (400)", async () => {
+    let callCount = 0;
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((() => {
+      callCount++;
+      return Promise.resolve(new Response("Bad Request", { status: 400 }));
+    }) as unknown as typeof fetch);
+
+    const cacheModule = await import("../data/cache.ts");
+    const getOsmSpy = spyOn(cacheModule, "getOsm").mockResolvedValue(undefined);
+    const setOsmSpy = spyOn(cacheModule, "setOsm").mockResolvedValue(undefined);
+
+    try {
+      const bounds = { west: 0, east: 0.001, north: 0.001, south: 0 };
+      await expect(fetchOsmFeatures(bounds)).rejects.toThrow();
+      expect(callCount).toBe(1); // No retry
+    } finally {
+      fetchSpy.mockRestore();
+      getOsmSpy.mockRestore();
+      setOsmSpy.mockRestore();
+    }
   });
 });

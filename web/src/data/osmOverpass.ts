@@ -119,6 +119,7 @@ function assembleRings(memberNodeLists: number[][]): number[][] {
     let extended = true;
     while (extended && ring[0] !== ring[ring.length - 1]) {
       extended = false;
+      const head = ring[0];
       const tail = ring[ring.length - 1];
       for (let i = 0; i < remaining.length; i++) {
         const seg = remaining[i];
@@ -126,6 +127,10 @@ function assembleRings(memberNodeLists: number[][]): number[][] {
           ring.push(...seg.slice(1));
         } else if (seg[seg.length - 1] === tail) {
           ring.push(...seg.slice(0, -1).reverse());
+        } else if (seg[seg.length - 1] === head) {
+          ring.unshift(...seg.slice(0, -1));
+        } else if (seg[0] === head) {
+          ring.unshift(...seg.slice(1).reverse());
         } else {
           continue;
         }
@@ -180,6 +185,25 @@ function chainOpenWays(memberNodeLists: number[][]): number[][] {
   return chains;
 }
 
+/**
+ * Ray-casting point-in-polygon test for a closed ring (first point == last
+ * point). Returns true if the point is strictly inside the ring.
+ */
+function isPointInRing(point: [number, number], ring: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    const intersect =
+      yi > point[1] !== yj > point[1] &&
+      point[0] < ((xj - xi) * (point[1] - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
 export function overpassToGeoJSON(
   response: { elements: OverpassElement[] },
 ): GeoFeatureCollection {
@@ -228,8 +252,15 @@ export function overpassToGeoJSON(
     const inners = collectRings("inner");
     if (outers.length === 0) continue;
 
-    // Attach every inner ring to each outer polygon; evenodd fill keeps holes correct.
-    const polygons: [number, number][][][] = outers.map((outer) => [outer, ...inners]);
+    // Assign each inner ring to the outer ring that contains it. This avoids
+    // duplicating inners across all outers, which would flip evenodd hole
+    // parity and fill holes with water.
+    const polygons: [number, number][][][] = outers.map((outer) => {
+      const contained = inners.filter((inner) =>
+        inner.length > 0 ? isPointInRing(inner[0], outer) : false,
+      );
+      return [outer, ...contained];
+    });
     const geometry: GeoGeometry =
       polygons.length === 1
         ? { type: "Polygon", coordinates: polygons[0] }
@@ -309,6 +340,34 @@ function boundsCacheKey(bounds: GeoBounds): string {
   return `v2:${bounds.south.toFixed(4)},${bounds.west.toFixed(4)},${bounds.north.toFixed(4)},${bounds.east.toFixed(4)}`;
 }
 
+const OSM_MAX_RETRIES = 2;
+const OSM_BASE_BACKOFF_MS = 1500;
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Aborted"));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(new Error("Aborted"));
+      },
+      { once: true },
+    );
+  });
+}
+
+/** Returns true if the error is retryable (rate limit, timeout, network). */
+function isRetryableOsmError(status: number | undefined, text: string): boolean {
+  if (status === 429 || status === 504 || status === 502 || status === 503) return true;
+  if (/timeout|too busy|server is probably too busy|rate limit/i.test(text)) return true;
+  return false;
+}
+
 export async function fetchOsmFeatures(
   bounds: GeoBounds,
   signal?: AbortSignal,
@@ -325,48 +384,72 @@ export async function fetchOsmFeatures(
 
   const query = buildOverpassQuery(bounds);
 
-  let response: Response;
-  try {
-    response = await fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `data=${encodeURIComponent(query)}`,
-      signal,
-    });
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("OSM fetch was cancelled.");
-    }
-    throw new Error(
-      `Network error while fetching OSM features: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const text = await response.text();
-    if (response.status === 504 || /timeout|too busy|server is probably too busy/i.test(text)) {
+  for (let attempt = 0; attempt <= OSM_MAX_RETRIES; attempt++) {
+    if (signal?.aborted) throw new Error("OSM fetch was cancelled.");
+
+    let response: Response;
+    try {
+      response = await fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `data=${encodeURIComponent(query)}`,
+        signal,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error("OSM fetch was cancelled.");
+      }
+      // Network error — retryable
+      lastError = new Error(
+        `Network error while fetching OSM features: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      if (attempt < OSM_MAX_RETRIES) {
+        const backoff = OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
+        await sleep(backoff, signal);
+        continue;
+      }
+      throw lastError;
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      if (isRetryableOsmError(response.status, text)) {
+        // Honor Retry-After header if present
+        const retryAfter = response.headers.get("Retry-After");
+        const backoff = retryAfter
+          ? Math.min(parseInt(retryAfter, 10) * 1000, 30000)
+          : OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
+        lastError = new Error(
+          response.status === 429
+            ? "Overpass API rate limit reached. Please wait a minute before trying again."
+            : "Overpass API is too busy right now. This is a public server with rate limits. Please wait a few seconds and try again.",
+        );
+        if (attempt < OSM_MAX_RETRIES) {
+          await sleep(backoff, signal);
+          continue;
+        }
+        throw lastError;
+      }
       throw new Error(
-        "Overpass API is too busy right now. This is a public server with rate limits. Please wait a few seconds and try again.",
+        `Overpass API returned ${response.status}: ${text.slice(0, 120).replace(/\s+/g, " ")}`,
       );
     }
-    if (response.status === 429) {
-      throw new Error("Overpass API rate limit reached. Please wait a minute before trying again.");
+
+    let data: { elements: OverpassElement[] };
+    try {
+      data = await response.json();
+    } catch (err) {
+      throw new Error(
+        `Failed to parse Overpass API response: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-    throw new Error(
-      `Overpass API returned ${response.status}: ${text.slice(0, 120).replace(/\s+/g, " ")}`,
-    );
+
+    const result = overpassToGeoJSON(data);
+    await setOsm(cacheKey, result);
+    return result;
   }
 
-  let data: { elements: OverpassElement[] };
-  try {
-    data = await response.json();
-  } catch (err) {
-    throw new Error(
-      `Failed to parse Overpass API response: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
-  const result = overpassToGeoJSON(data);
-  await setOsm(cacheKey, result);
-  return result;
+  throw lastError ?? new Error("OSM fetch failed after retries.");
 }

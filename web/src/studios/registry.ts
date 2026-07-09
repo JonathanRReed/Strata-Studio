@@ -49,11 +49,12 @@ export function renderStyleCanvas(
   input: ArtworkInput,
   params: StyleParams,
   paletteMap: Record<string, Palette> = palettes,
+  transparent = false,
 ): void {
   const style = getStyle(styleId);
   const scene = style.generate(input, params);
   const palette = paletteMap[params.palette] ?? palettes.monochrome;
-  renderSceneCanvas(ctx, scene, params, palette, input.width, input.height);
+  renderSceneCanvas(ctx, scene, params, palette, input.width, input.height, transparent, input.masks);
 }
 
 export function renderStyleSvg(
@@ -61,11 +62,12 @@ export function renderStyleSvg(
   input: ArtworkInput,
   params: StyleParams,
   paletteMap: Record<string, Palette> = palettes,
+  transparent = false,
 ): string {
   const style = getStyle(styleId);
   const scene = style.generate(input, params);
   const palette = paletteMap[params.palette] ?? palettes.monochrome;
-  return sceneToSvg(scene, params, palette, input.width, input.height);
+  return sceneToSvg(scene, params, palette, input.width, input.height, transparent, input.masks);
 }
 
 export { classicStyles };

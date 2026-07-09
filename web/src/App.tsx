@@ -2,12 +2,15 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ControlsPanel } from "./components/ControlsPanel.tsx";
 import { Artboard } from "./components/Artboard.tsx";
 import { renderStyleCanvas, renderStyleSvg, getStyle, DEFAULT_STYLE_ID, stylesById } from "./studios/registry.ts";
+import { renderSceneCanvas } from "./engine/scene.ts";
 import { fetchTerrain } from "./data/terrainTiles.ts";
 import { fetchOsmFeatures, isBboxSmallEnough, bboxAreaKm2, OSM_ATTRIBUTION } from "./data/osmOverpass.ts";
 import { buildFeatureMasks } from "./engine/maskRasterizer.ts";
 import { createOffscreenCanvas, downloadPngWithAttribution, downloadSvgWithAttribution } from "./engine/export.ts";
+import { exportAnimation, type AnimationFormat, type ExportProgress } from "./engine/animationExport.ts";
 import { createNoise } from "./engine/noise.ts";
 import { cropGridToAspect } from "./engine/grid.ts";
+import { animateScene, DEFAULT_FRAMES, DEFAULT_FPS, needsRegeneration } from "./engine/animation.ts";
 import type { GeoBounds, StyleParams, GeoFeatureCollection, ElevationGrid, AspectRatio, Palette } from "./engine/types.ts";
 import { applyPreset, defaultStyleParams, presets, type Preset } from "./presets/stylePresets.ts";
 import { palettes, paletteNames, defaultPalette } from "./presets/palettes.ts";
@@ -180,6 +183,10 @@ export default function App() {
   const [customPalettes, setCustomPalettes] = useState<Record<string, { name: string; palette: Palette }>>(
     () => loadCustomPalettes(),
   );
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [isExportingAnimation, setIsExportingAnimation] = useState(false);
+  const [animationProgress, setAnimationProgress] = useState<{ progress: number; status: string } | null>(null);
+  const [boundsDirty, setBoundsDirty] = useState(false);
 
   const allPalettes = useMemo<Record<string, Palette>>(
     () => ({
@@ -199,8 +206,14 @@ export default function App() {
 
   const masks = useMemo(() => {
     if (!features || !grid) return undefined;
-    return buildFeatureMasks(features, grid.bounds, PREVIEW_SIZE, PREVIEW_SIZE);
-  }, [features, grid]);
+    // Build masks aligned to the cropped preview bounds and dimensions
+    const { width: pvW, height: pvH } = getPreviewDimensions(params.aspectRatio);
+    const croppedGrid = params.aspectRatio === "square" ? grid : cropGridToAspect(grid, pvW, pvH);
+    const maskSize = 512;
+    const maskW = pvW >= pvH ? maskSize : Math.round((maskSize * pvW) / pvH);
+    const maskH = pvW >= pvH ? Math.round((maskSize * pvH) / pvW) : maskSize;
+    return buildFeatureMasks(features, croppedGrid.bounds, maskW, maskH);
+  }, [features, grid, params.aspectRatio]);
 
   useEffect(() => {
     updateUrl(params, styleId, bounds, mapZoom);
@@ -238,6 +251,8 @@ export default function App() {
   // Debounced live preview when params/style/features change
   useEffect(() => {
     if (!grid) return;
+    if (isAnimating) return; // animation loop handles rendering
+    if (boundsDirty) return; // don't re-render stale grid for new bounds
     if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
     renderTimerRef.current = setTimeout(() => {
       renderPreview();
@@ -245,34 +260,109 @@ export default function App() {
     return () => {
       if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
     };
-  }, [grid, renderPreview]);
+  }, [grid, renderPreview, isAnimating, boundsDirty]);
+
+  // Animation preview loop
+  const animFrameRef = useRef<number>(0);
+  const animStartRef = useRef<number>(0);
+  const animSceneRef = useRef<import("./engine/scene.ts").Scene | null>(null);
+  // Ref for the latest params so the loop can read animationSpeed without restarting
+  const animParamsRef = useRef(params);
+  animParamsRef.current = params;
+
+  // Signature of params that should restart the animation loop (excluding animationSpeed)
+  const animRestartKey = JSON.stringify({
+    ...params,
+    animationSpeed: undefined,
+    phase: undefined,
+  });
+
+  useEffect(() => {
+    if (!isAnimating || !grid) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const { width, height } = getPreviewDimensions(params.aspectRatio);
+    const croppedGrid = params.aspectRatio === "square" ? grid : cropGridToAspect(grid, width, height);
+    const input = {
+      bounds: croppedGrid.bounds,
+      elevationGrid: croppedGrid,
+      features,
+      masks,
+      width,
+      height,
+      seed: params.seed,
+    };
+    const style = getStyle(styleId);
+    const palette = allPalettes[params.palette] ?? allPalettes[defaultPalette];
+
+    // For non-regeneration modes, generate the scene once
+    if (!needsRegeneration(params.animationMode)) {
+      animSceneRef.current = style.generate(input, { ...params, phase: 0 });
+    } else {
+      animSceneRef.current = null;
+    }
+
+    animStartRef.current = performance.now();
+    const totalFrames = DEFAULT_FRAMES;
+
+    const loop = (now: number) => {
+      const currentParams = animParamsRef.current;
+      const elapsed = now - animStartRef.current;
+      const loopDurationMs = (1 / currentParams.animationSpeed) * 1000;
+      // Use continuous phase (not wrapping) for drift to avoid noise discontinuity.
+      // For draw/parallax, wrap to [0,1) for frame indexing.
+      const rawPhase = elapsed / loopDurationMs;
+      const phase = needsRegeneration(currentParams.animationMode)
+        ? rawPhase // continuous — noise field scrolls seamlessly
+        : rawPhase % 1;
+      const frame = Math.floor((rawPhase % 1) * totalFrames);
+
+      if (needsRegeneration(currentParams.animationMode)) {
+        // Drift: regenerate with continuous phase
+        const animParams = { ...currentParams, phase };
+        renderStyleCanvas(styleId, ctx, input, animParams, allPalettes);
+      } else {
+        // Draw-in / parallax: post-process the static scene
+        const scene = animateScene(animSceneRef.current!, currentParams, frame, totalFrames, width, height);
+        renderSceneCanvas(ctx, scene, currentParams, palette, width, height, false, input.masks);
+      }
+
+      animFrameRef.current = requestAnimationFrame(loop);
+    };
+    animFrameRef.current = requestAnimationFrame(loop);
+
+    return () => {
+      cancelAnimationFrame(animFrameRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAnimating, grid, features, masks, styleId, allPalettes, animRestartKey]);
 
   const handleBoundsChange = useCallback((newBounds: GeoBounds, zoom: number) => {
     setBounds(newBounds);
     setMapZoom(zoom);
-    setGrid(null);
-    setFeatures(undefined);
-    setFeatureInfo(null);
+    // Abort any in-flight terrain/OSM fetches so stale results don't overwrite state
+    abortRef.current?.abort();
+    osmAbortRef.current?.abort();
+    setIsLoading(false);
+    setIsFeatureLoading(false);
+    // Stop animation — the grid/features are now stale
+    setIsAnimating(false);
+    // Preserve the existing preview — just mark it as stale so the user knows
+    // they need to regenerate. This prevents accidental data loss from small
+    // camera movements.
+    setBoundsDirty(true);
     setError(null);
     setWarning(null);
-    setTerrainInfo(null);
-    setHasGenerated(false);
-    // Clear the canvas
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.restore();
-      }
-    }
   }, []);
 
   const handleStyleChange = useCallback((newStyleId: string) => {
     setStyleId(newStyleId);
     const style = getStyle(newStyleId);
+    // Stop animation when switching styles — the new style may not support the current mode
+    setIsAnimating(false);
     setParams((prev) => ({
       ...prev,
       ...style.defaultParams,
@@ -283,6 +373,8 @@ export default function App() {
       label: prev.label,
       aspectRatio: prev.aspectRatio,
       palette: style.defaultParams.palette ?? prev.palette,
+      // Reset animation to none — let the user re-enable it for the new style
+      animationMode: "none",
     }));
   }, []);
 
@@ -294,7 +386,9 @@ export default function App() {
   const handleSavePalette = useCallback((id: string, name: string, palette: Palette) => {
     setCustomPalettes((prev) => {
       const next = { ...prev, [id]: { name, palette } };
-      saveCustomPalettes(next);
+      if (!saveCustomPalettes(next)) {
+        console.warn("Failed to save custom palette to localStorage (storage may be full or disabled).");
+      }
       return next;
     });
     if (params.palette !== id) {
@@ -305,7 +399,9 @@ export default function App() {
   const handleDeletePalette = useCallback((id: string) => {
     setCustomPalettes((prev) => {
       const { [id]: _, ...next } = prev;
-      saveCustomPalettes(next);
+      if (!saveCustomPalettes(next)) {
+        console.warn("Failed to update localStorage after deleting custom palette.");
+      }
       return next;
     });
     if (params.palette === id) {
@@ -349,68 +445,102 @@ export default function App() {
     setWarning(null);
     setStatusText("Loading terrain tiles...");
     setTerrainInfo(null);
-    try {
-      const newGrid = await fetchTerrain(bounds, PREVIEW_SIZE, controller.signal);
+
+    // Auto-retry with exponential backoff for transient failures
+    const MAX_AUTO_RETRIES = 2;
+    const BASE_BACKOFF = 800;
+    for (let attempt = 0; attempt <= MAX_AUTO_RETRIES; attempt++) {
       if (controller.signal.aborted) return;
-      setGrid(newGrid);
-      setStatusText("Rendering artwork...");
-      const { width: rW, height: rH } = getPreviewDimensions(params.aspectRatio);
-      const renderGrid = params.aspectRatio === "square" ? newGrid : cropGridToAspect(newGrid, rW, rH);
-      const canvas2 = canvasRef.current;
-      const ctx2 = canvas2?.getContext("2d");
-      if (ctx2) {
-        renderStyleCanvas(
-          styleId,
-          ctx2,
-          {
-            bounds: renderGrid.bounds,
-            elevationGrid: renderGrid,
-            features,
-            masks,
-            width: rW,
-            height: rH,
-            seed: params.seed,
-          },
-          params,
-          allPalettes,
-        );
-      }
-      setHasGenerated(true);
+      try {
+        const newGrid = await fetchTerrain(bounds, PREVIEW_SIZE, controller.signal);
+        if (controller.signal.aborted) return;
+        setGrid(newGrid);
+        setBoundsDirty(false);
+        setStatusText("Rendering artwork...");
+        const { width: rW, height: rH } = getPreviewDimensions(params.aspectRatio);
+        const renderGrid = params.aspectRatio === "square" ? newGrid : cropGridToAspect(newGrid, rW, rH);
+        // Rebuild masks locally — the `masks` useMemo hasn't recomputed yet
+        // because setGrid hasn't triggered a re-render at this point.
+        const maskSize = 512;
+        const maskW = rW >= rH ? maskSize : Math.round((maskSize * rW) / rH);
+        const maskH = rW >= rH ? Math.round((maskSize * rH) / rW) : maskSize;
+        const renderMasks = features
+          ? buildFeatureMasks(features, renderGrid.bounds, maskW, maskH)
+          : undefined;
+        const canvas2 = canvasRef.current;
+        const ctx2 = canvas2?.getContext("2d");
+        if (ctx2) {
+          renderStyleCanvas(
+            styleId,
+            ctx2,
+            {
+              bounds: renderGrid.bounds,
+              elevationGrid: renderGrid,
+              features,
+              masks: renderMasks,
+              width: rW,
+              height: rH,
+              seed: params.seed,
+            },
+            params,
+            allPalettes,
+          );
+        }
+        setHasGenerated(true);
 
-      let min = Infinity, max = -Infinity;
-      for (let i = 0; i < newGrid.data.length; i++) {
-        const v = newGrid.data[i];
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-      if (min === 0 && max === 0) {
-        setTerrainInfo("Terrain: all zeros (ocean or failed tiles)");
-      } else {
-        const range = max - min;
-        const centerLat = ((bounds.north + bounds.south) / 2).toFixed(4);
-        const centerLng = ((bounds.east + bounds.west) / 2).toFixed(4);
-        setTerrainInfo(`Elevation ${min.toFixed(0)}m – ${max.toFixed(0)}m (${range.toFixed(0)}m range) · ${centerLat}°, ${centerLng}°`);
-      }
+        let min = Infinity, max = -Infinity;
+        for (let i = 0; i < newGrid.data.length; i++) {
+          const v = newGrid.data[i];
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        if (min === 0 && max === 0) {
+          setTerrainInfo("Terrain: all zeros (ocean or failed tiles)");
+        } else {
+          const range = max - min;
+          const centerLat = ((bounds.north + bounds.south) / 2).toFixed(4);
+          const centerLng = ((bounds.east + bounds.west) / 2).toFixed(4);
+          setTerrainInfo(`Elevation ${min.toFixed(0)}m – ${max.toFixed(0)}m (${range.toFixed(0)}m range) · ${centerLat}°, ${centerLng}°`);
+        }
 
-      if (isAllZeros(newGrid) && !isAtOcean(features)) {
-        setWarning("Some terrain tiles failed to load — showing partial data.");
-      }
-      setStatusText(null);
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        setError(err instanceof Error ? err.message : "Unknown error");
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        setIsLoading(false);
+        if (isAllZeros(newGrid) && !isAtOcean(features)) {
+          setWarning("Some terrain tiles failed to load — showing partial data.");
+        }
         setStatusText(null);
+        break; // Success — exit retry loop
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        const errMsg = err instanceof Error ? err.message : "Unknown error";
+        // Only retry on transient/network errors, not on permanent ones
+        if (attempt < MAX_AUTO_RETRIES && isRetryableError(errMsg)) {
+          const backoff = BASE_BACKOFF * Math.pow(2, attempt);
+          setStatusText(`Retrying in ${backoff / 1000}s... (${attempt + 1}/${MAX_AUTO_RETRIES})`);
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, backoff);
+            controller.signal.addEventListener("abort", () => {
+              clearTimeout(timer);
+              reject(new Error("Aborted"));
+            }, { once: true });
+          });
+          if (controller.signal.aborted) return;
+          setStatusText("Loading terrain tiles...");
+          continue;
+        }
+        setError(errMsg);
+        break;
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoading(false);
+          setStatusText(null);
+        }
       }
     }
   };
 
   const handleRetry = () => {
     setRetryCount((count) => count + 1);
-    handleGenerate();
+    // Small delay before manual retry to avoid hammering the server
+    setTimeout(() => handleGenerate(), 500);
   };
 
   const getExportDimensions = (size: number): { width: number; height: number } => {
@@ -562,6 +692,35 @@ export default function App() {
     }
   };
 
+  const handleToggleAnimation = () => {
+    setIsAnimating((prev) => !prev);
+  };
+
+  const handleExportAnimation = async (format: AnimationFormat) => {
+    setIsExportingAnimation(true);
+    setAnimationProgress({ progress: 0, status: "Starting..." });
+    setError(null);
+    try {
+      const size = 512;
+      const { width, height } = getExportDimensions(size);
+      const input = await prepareExportInput(width, height);
+      const onProgress: ExportProgress = (progress, status) => {
+        setAnimationProgress({ progress, status });
+      };
+      await exportAnimation(styleId, input, params, allPalettes, format, {
+        frames: DEFAULT_FRAMES,
+        fps: DEFAULT_FPS,
+        transparent: params.transparent,
+        onProgress,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Animation export failed");
+    } finally {
+      setIsExportingAnimation(false);
+      setAnimationProgress(null);
+    }
+  };
+
   return (
     <div className="flex flex-col lg:flex-row h-screen bg-black text-white">
       <ControlsPanel
@@ -573,12 +732,15 @@ export default function App() {
         onGenerate={handleGenerate}
         onExportPng={handleExportPng}
         onExportSvg={handleExportSvg}
+        onExportAnimation={handleExportAnimation}
         onFetchFeatures={handleFetchFeatures}
         onExportJson={handleExportJson}
         onCopyUrl={handleCopyUrl}
         copiedUrl={copiedUrl}
         isLoading={isLoading}
         isFeatureLoading={isFeatureLoading}
+        isExportingAnimation={isExportingAnimation}
+        animationProgress={animationProgress}
         featureInfo={featureInfo}
         hasFeatures={!!features}
         osmAreaHint={!isBboxSmallEnough(bounds) ? `Area is ${bboxAreaKm2(bounds).toFixed(1)} km² — zoom in to under 25 km² to fetch OSM features` : null}
@@ -586,6 +748,8 @@ export default function App() {
         allPaletteNames={allPaletteNames}
         onSavePalette={handleSavePalette}
         onDeletePalette={handleDeletePalette}
+        isAnimating={isAnimating}
+        onToggleAnimation={handleToggleAnimation}
       />
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-4 p-4">
@@ -635,6 +799,18 @@ export default function App() {
                 <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/80 border border-white/20 rounded-full text-xs text-white px-4 py-2 z-10 flex items-center gap-2">
                   <span className="w-3 h-3 rounded-full bg-white/60 animate-pulse" />
                   {statusText}
+                </div>
+              )}
+              {boundsDirty && hasGenerated && !isLoading && (
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-yellow-500/20 border border-yellow-400/40 rounded-full text-xs text-yellow-200 px-4 py-2 z-10 flex items-center gap-3">
+                  <span>Selection moved — artwork is stale</span>
+                  <button
+                    type="button"
+                    onClick={handleGenerate}
+                    className="bg-yellow-400 text-black rounded-full px-2.5 py-0.5 text-[10px] font-medium hover:bg-yellow-300 transition-colors"
+                  >
+                    Regenerate
+                  </button>
                 </div>
               )}
               <Artboard ref={canvasRef} aspectRatio={params.aspectRatio} />

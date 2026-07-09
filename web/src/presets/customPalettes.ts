@@ -53,11 +53,14 @@ export function loadCustomPalettes(): Record<string, { name: string; palette: Pa
   }
 }
 
-export function saveCustomPalettes(map: Record<string, { name: string; palette: Palette }>): void {
+export function saveCustomPalettes(
+  map: Record<string, { name: string; palette: Palette }>,
+): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    return true;
   } catch {
-    // Storage may be disabled or full; ignore silently.
+    return false;
   }
 }
 

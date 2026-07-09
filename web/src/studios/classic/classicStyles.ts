@@ -1,6 +1,6 @@
 import type { ArtStyle, ArtworkInput, StyleParams, ControlKey } from "../../engine/types.ts";
 import type { ScenePoint, Stroke, StrokeRole } from "../../engine/scene.ts";
-import { createNoise } from "../../engine/noise.ts";
+import { createAnimatedNoise } from "../../engine/noise.ts";
 import { clamp } from "../../engine/grid.ts";
 import { marchingSquares, smoothLine } from "../../engine/contours.ts";
 import {
@@ -10,6 +10,9 @@ import {
   waterRole,
   densify,
   createRng,
+  applyFeatureInfluence,
+  applyInfluenceToLine,
+  glowRuns,
 } from "../common.ts";
 import { generateRows, rowsToScene } from "../experimental/waveformTerrain.ts";
 
@@ -44,7 +47,10 @@ function contourLines(
   return perLevel;
 }
 
-const classicControls: ControlKey[] = ["spacing", "lineWidth", "detail", "grain", "rotation", "label", "aspectRatio", "seed", "palette"];
+const classicControls: ControlKey[] = [
+  "spacing", "lineWidth", "detail", "grain", "rotation", "label", "aspectRatio", "seed", "palette",
+  "buildingInfluence", "roadInfluence", "waterInfluence", "oceanInfluence", "lakeInfluence", "riverInfluence",
+];
 
 export const contour: ArtStyle = {
   id: "contour",
@@ -54,18 +60,16 @@ export const contour: ArtStyle = {
   defaultParams: { spacing: 10, lineWidth: 1.2, detail: 0.8, noise: 0, occlusion: 0 },
   controls: classicControls,
   generate: (input, params) => {
+    const { width, height, masks } = input;
     const levels = Math.round(clamp(160 / params.spacing, 6, 48));
     const strokes: Stroke[] = [];
     const perLevel = contourLines(input, params, levels);
     perLevel.forEach((lines, i) => {
       const isIndex = (i + 1) % 5 === 0;
+      const w = isIndex ? params.lineWidth * 1.8 : params.lineWidth;
+      const op = isIndex ? 1 : 0.75;
       for (const points of lines) {
-        strokes.push({
-          points,
-          role: "foreground",
-          width: isIndex ? params.lineWidth * 1.8 : params.lineWidth,
-          opacity: isIndex ? 1 : 0.75,
-        });
+        strokes.push(...applyInfluenceToLine(points, width, height, masks, params, w, op, "foreground"));
       }
     });
     return { strokes };
@@ -78,7 +82,7 @@ export const ridge: ArtStyle = {
   studio: "classic",
   description: "Dense ridge-line terrain with occluded horizontal relief lines.",
   defaultParams: { amplitude: 55, spacing: 4, lineWidth: 1, noise: 0, occlusion: 1 },
-  controls: [...classicControls, "amplitude", "occlusion"],
+  controls: [...classicControls, "amplitude", "noise", "compression", "occlusion"],
   generate: (input, params) => rowsToScene(generateRows(input, params), params, input.height),
 };
 
@@ -87,12 +91,13 @@ export const flow: ArtStyle = {
   name: "Flow",
   studio: "classic",
   description: "Terrain and streets bent into smooth flow-field paths.",
-  defaultParams: { amplitude: 50, spacing: 12, lineWidth: 1, noise: 0.3, detail: 0.7, occlusion: 0 },
-  controls: [...classicControls, "amplitude", "noise"],
+  defaultParams: { amplitude: 50, spacing: 12, lineWidth: 1, noise: 0.3, occlusion: 0 },
+  controls: [...classicControls.filter((c) => c !== "detail"), "amplitude", "noise"],
   generate: (input, params) => {
-    const { width, height } = input;
+    const { width, height, masks } = input;
     const sample = elevationSampler(input);
-    const noise = createNoise(params.seed + ":flow", 3, 0.5);
+    const phase = params.phase ?? 0;
+    const noise = createAnimatedNoise(params.seed + ":flow", 3, 0.5);
     const rng = createRng(params.seed + ":flowseeds");
     const strokes: Stroke[] = [];
 
@@ -105,19 +110,25 @@ export const flow: ArtStyle = {
         let x = ((gx + rng()) / gridN) * width;
         let y = ((gy + rng()) / gridN) * height;
         const points: ScenePoint[] = [{ x, y }];
+        let glow = false;
         for (let s = 0; s < steps; s++) {
           const u = clamp(x / (width - 1 || 1), 0, 1);
           const v = clamp(y / (height - 1 || 1), 0, 1);
           const grad = elevationGradient(sample, u, v, 0.02);
           const baseAngle = Math.atan2(grad.dx, -grad.dy);
-          const angle = baseAngle + noise(u * 4, v * 4) * Math.PI * (0.3 + params.noise);
-          x += Math.cos(angle) * stepLen;
-          y += Math.sin(angle) * stepLen;
+          const angle = baseAngle + (noise(u * 4, v * 4, phase)) * Math.PI * (0.3 + params.noise);
+          // Feature influence: break on interrupt, displace on amplify/flatten, glow
+          const res = applyFeatureInfluence(stepLen, u, v, masks, params);
+          if (res.break_) break;
+          if (res.glow) glow = true;
+          const dispStep = res.displacement;
+          x += Math.cos(angle) * dispStep;
+          y += Math.sin(angle) * dispStep;
           if (x < 0 || x > width || y < 0 || y > height) break;
           points.push({ x, y });
         }
         if (points.length > 6) {
-          strokes.push({ points, role: "foreground", opacity: 0.85 });
+          strokes.push({ points, role: glow ? "accent" : "foreground", opacity: 0.85, glow: glow || undefined });
         }
       }
     }
@@ -125,11 +136,11 @@ export const flow: ArtStyle = {
     // Streets and rivers as emphasized flow paths when available.
     for (const line of featureLines(input.features, input.bounds, width, height)) {
       if (line.strataType === "building") continue;
-      strokes.push({
-        points: densify(line.points, 6),
-        role: line.strataType === "water" ? waterRole(line) : "foreground",
-        width: params.lineWidth * 1.5,
-      });
+      const role = line.strataType === "water" ? waterRole(line) : "foreground";
+      strokes.push(...applyInfluenceToLine(
+        densify(line.points, 6), width, height, masks, params,
+        params.lineWidth * 1.5, 1, role, false, line.strataType,
+      ));
     }
     return { strokes };
   },
@@ -143,7 +154,7 @@ export const blueprint: ArtStyle = {
   defaultParams: { spacing: 12, lineWidth: 0.8, detail: 0.8, noise: 0, palette: "blueprint", occlusion: 0 },
   controls: classicControls,
   generate: (input, params) => {
-    const { width, height } = input;
+    const { width, height, masks } = input;
     const strokes: Stroke[] = [];
 
     // Grid overlay
@@ -165,22 +176,23 @@ export const blueprint: ArtStyle = {
       });
     }
 
-    // Contours
+    // Contours — apply feature influence (break/glow/modulate)
     const levels = Math.round(clamp(80 / params.spacing, 5, 30));
     for (const lines of contourLines(input, params, levels)) {
       for (const points of lines) {
-        strokes.push({ points, role: "foreground", width: params.lineWidth });
+        strokes.push(...applyInfluenceToLine(points, width, height, masks, params, params.lineWidth, 1, "foreground"));
       }
     }
 
-    // Roads / water in accent
+    // Roads / water in accent — apply feature influence
     for (const line of featureLines(input.features, input.bounds, width, height)) {
       if (line.strataType === "building") {
-        strokes.push({ points: line.points, role: "accent", width: 0.7, closed: line.closed, opacity: 0.9 });
+        strokes.push(...applyInfluenceToLine(line.points, width, height, masks, params, 0.7, 0.9, "accent", line.closed, "building"));
       } else if (line.strataType === "water") {
-        strokes.push({ points: line.points, role: waterRole(line), width: params.lineWidth, opacity: 0.85, closed: line.closed });
+        const role = waterRole(line);
+        strokes.push(...applyInfluenceToLine(line.points, width, height, masks, params, params.lineWidth, 0.85, role, line.closed, "water"));
       } else {
-        strokes.push({ points: line.points, role: "foreground", width: params.lineWidth, opacity: 0.8 });
+        strokes.push(...applyInfluenceToLine(line.points, width, height, masks, params, params.lineWidth, 0.8, "foreground", false, "road"));
       }
     }
 
@@ -215,9 +227,10 @@ export const woodcut: ArtStyle = {
   defaultParams: { amplitude: 30, spacing: 5, lineWidth: 1.6, noise: 0.4, grain: 0.35, palette: "cream", occlusion: 0 },
   controls: [...classicControls, "amplitude", "noise"],
   generate: (input, params) => {
-    const { width, height } = input;
+    const { width, height, masks } = input;
     const sample = elevationSampler(input);
-    const rough = createNoise(params.seed + ":woodcut", 4, 0.6);
+    const phase = params.phase ?? 0;
+    const rough = createAnimatedNoise(params.seed + ":woodcut", 4, 0.6);
     const strokes: Stroke[] = [];
 
     const rowStep = Math.max(2, params.spacing);
@@ -227,7 +240,7 @@ export const woodcut: ArtStyle = {
     for (let baseY = 0; baseY < height; baseY += rowStep) {
       flip = !flip;
       const v = baseY / (height - 1 || 1);
-      let segment: ScenePoint[] = [];
+      let segment: { x: number; y: number; glow: boolean }[] = [];
       let segElev = 0;
       const flush = () => {
         if (segment.length > 1) {
@@ -236,6 +249,9 @@ export const woodcut: ArtStyle = {
             role: "foreground",
             width: params.lineWidth * (0.5 + segElev * 1.2),
           });
+          for (const run of glowRuns(segment)) {
+            strokes.push({ points: run, role: "accent", glow: true });
+          }
         }
         segment = [];
         segElev = 0;
@@ -243,15 +259,21 @@ export const woodcut: ArtStyle = {
       for (let x = 0; x < width; x += xStep) {
         const u = x / (width - 1 || 1);
         const elev = sample(u, v);
-        const jag = rough(u * 20, v * 20);
+        const jag = phase > 0 ? rough(u * 20, v * 20, phase) : rough(u * 20, v * 20);
         // Carve gaps in low-elevation areas for the hatched-band look.
         const cut = (jag * 0.5 + 0.5) * (1 - elev);
         if (cut > 0.62) {
           flush();
           continue;
         }
-        const wobble = rough(u * 8 + (flip ? 40 : 0), v * 8) * params.noise * rowStep * 0.9;
-        segment.push({ x, y: baseY + wobble - elev * params.amplitude * 0.25 });
+        const wobble = (phase > 0 ? rough(u * 8 + (flip ? 40 : 0), v * 8, phase) : rough(u * 8 + (flip ? 40 : 0), v * 8)) * params.noise * rowStep * 0.9;
+        const displacement = wobble - elev * params.amplitude * 0.25;
+        const res = applyFeatureInfluence(displacement, u, v, masks, params);
+        if (res.break_) {
+          flush();
+          continue;
+        }
+        segment.push({ x, y: baseY + res.displacement, glow: res.glow });
         segElev = Math.max(segElev, elev);
       }
       flush();
@@ -268,13 +290,14 @@ export const drift: ArtStyle = {
   defaultParams: { amplitude: 25, spacing: 8, lineWidth: 1.2, noise: 0.25, occlusion: 0 },
   controls: [...classicControls, "amplitude", "noise"],
   generate: (input, params) => {
-    const { width, height } = input;
+    const { width, height, masks } = input;
     const strokes: Stroke[] = [];
-    const noise = createNoise(params.seed + ":drift", 3, 0.5);
+    const phase = params.phase ?? 0;
+    const noise = createAnimatedNoise(params.seed + ":drift", 3, 0.5);
     const echoes = Math.round(clamp(params.amplitude / 8, 2, 8));
 
     const lines = featureLines(input.features, input.bounds, width, height);
-    const source: { points: ScenePoint[]; role: StrokeRole }[] = [];
+    const source: { points: ScenePoint[]; role: StrokeRole; strataType?: "building" | "road" | "water" }[] = [];
 
     if (lines.length > 0) {
       for (const line of lines) {
@@ -282,6 +305,7 @@ export const drift: ArtStyle = {
         source.push({
           points: densify(line.points, 8),
           role: line.strataType === "water" ? waterRole(line) : "foreground",
+          strataType: line.strataType,
         });
       }
     }
@@ -300,16 +324,12 @@ export const drift: ArtStyle = {
         const t = e / Math.max(1, echoes - 1);
         const offset = e * params.spacing * 0.6;
         const opacity = 1 - t * 0.82;
+        const w = params.lineWidth * (1 - t * 0.5);
         const points = line.points.map((p, i) => {
-          const wob = noise(p.x * 0.01 + e * 3, p.y * 0.01 + i * 0.001) * params.noise * 20;
+          const wob = (noise(p.x * 0.01 + e * 3, p.y * 0.01 + i * 0.001, phase)) * params.noise * 20;
           return { x: p.x + offset + wob, y: p.y + offset * 0.5 + wob * 0.5 };
         });
-        strokes.push({
-          points,
-          role: line.role,
-          width: params.lineWidth * (1 - t * 0.5),
-          opacity,
-        });
+        strokes.push(...applyInfluenceToLine(points, width, height, masks, params, w, opacity, line.role, false, line.strataType));
       }
     }
     return { strokes };
@@ -324,7 +344,7 @@ export const signal: ArtStyle = {
   defaultParams: { spacing: 8, lineWidth: 1.1, detail: 0.8, noise: 0, occlusion: 0 },
   controls: classicControls,
   generate: (input, params) => {
-    const { width, height } = input;
+    const { width, height, masks } = input;
     const strokes: Stroke[] = [];
     const lines = featureLines(input.features, input.bounds, width, height);
     const rng = createRng(params.seed + ":signal");
@@ -332,7 +352,7 @@ export const signal: ArtStyle = {
     const roads = lines.filter((l) => l.strataType === "road");
     if (roads.length > 0) {
       for (const road of roads) {
-        strokes.push({ points: road.points, role: "foreground", width: params.lineWidth });
+        strokes.push(...applyInfluenceToLine(road.points, width, height, masks, params, params.lineWidth, 1, "foreground", false, "road"));
         // Circuit "pads" at trace endpoints.
         for (const end of [road.points[0], road.points[road.points.length - 1]]) {
           if (rng() < 0.35) {
@@ -342,9 +362,10 @@ export const signal: ArtStyle = {
       }
       for (const line of lines) {
         if (line.strataType === "building") {
-          strokes.push({ points: line.points, role: "foreground", width: 0.6, closed: line.closed, opacity: 0.45 });
+          strokes.push(...applyInfluenceToLine(line.points, width, height, masks, params, 0.6, 0.45, "foreground", line.closed, "building"));
         } else if (line.strataType === "water") {
-          strokes.push({ points: line.points, role: waterRole(line), width: params.lineWidth, opacity: 0.6, closed: line.closed });
+          const role = waterRole(line);
+          strokes.push(...applyInfluenceToLine(line.points, width, height, masks, params, params.lineWidth, 0.6, role, line.closed, "water"));
         }
       }
     } else {
@@ -352,7 +373,7 @@ export const signal: ArtStyle = {
       const levels = Math.round(clamp(70 / params.spacing, 5, 24));
       for (const perLevel of contourLines(input, params, levels, 0)) {
         for (const points of perLevel) {
-          strokes.push({ points, role: "foreground", width: params.lineWidth });
+          strokes.push(...applyInfluenceToLine(points, width, height, masks, params, params.lineWidth, 1, "foreground"));
           if (rng() < 0.3 && points.length > 0) {
             strokes.push(circleStroke(points[0], params.lineWidth * 2.2, "accent"));
           }

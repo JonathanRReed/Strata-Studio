@@ -60,10 +60,19 @@ export function buildFeatureMasks(
     river: createLayerCanvas(width, height),
   };
 
+  const oceanCoastlines: { points: { x: number; y: number }[]; isClosed: boolean; waterInside: boolean }[] = [];
+
   for (const feature of features.features) {
     const { strataType } = feature.properties;
 
     if (strataType === 'water') {
+      const waterType: WaterType = feature.properties.waterType ?? 'lake';
+      if (waterType === 'ocean' && feature.geometry.type === 'LineString') {
+        const points = feature.geometry.coordinates.map((c) => projectPoint(c, bounds, width, height));
+        const coast = classifyCoastline(points);
+        if (coast) oceanCoastlines.push(coast);
+        continue;
+      }
       rasterizeWaterFeature(feature, layers, bounds, width, height);
       continue;
     }
@@ -72,6 +81,8 @@ export function buildFeatureMasks(
     ctx.lineWidth = 2;
     drawGeometry(ctx, feature.geometry, bounds, width, height, strataType === 'road' ? 'stroke' : 'fill');
   }
+
+  fillOceanLayer(layers.ocean, oceanCoastlines, width, height);
 
   const building = readMask(layers.building, width, height);
   const road = readMask(layers.road, width, height);
@@ -95,19 +106,9 @@ function rasterizeWaterFeature(
   height: number,
 ): void {
   const waterType: WaterType = feature.properties.waterType ?? 'lake';
+  const ctx = layers[waterType];
   const geometry = feature.geometry;
 
-  if (waterType === 'ocean' && geometry.type === 'LineString') {
-    fillOceanFromCoastline(
-      layers.ocean,
-      geometry.coordinates.map((c) => projectPoint(c, bounds, width, height)),
-      width,
-      height,
-    );
-    return;
-  }
-
-  const ctx = layers[waterType];
   if (geometry.type === 'LineString' || geometry.type === 'MultiLineString') {
     const waterway =
       typeof feature.properties.waterway === 'string' ? feature.properties.waterway : undefined;
@@ -118,56 +119,112 @@ function rasterizeWaterFeature(
   }
 }
 
+type Coastline = {
+  points: { x: number; y: number }[];
+  isClosed: boolean;
+  waterInside: boolean;
+};
+
 /**
- * Fills the ocean side of a projected coastline.
+ * Classifies a projected coastline chain as open or closed, and for closed
+ * rings determines whether water is inside (lake/bay) or outside (island).
  *
  * OSM convention: water is on the RIGHT of the coastline's direction of
- * travel. Open coastlines are closed by walking the viewport border
- * clockwise (screen space) from the exit point back to the entry point,
- * which encloses the water side. Closed coastlines are islands: the whole
- * viewport is flooded and the land ring is erased.
+ * travel. In screen space (y down), a clockwise ring (positive signed area)
+ * has its interior on the right, so water is inside. A counter-clockwise
+ * ring (negative signed area) has land inside — it's an island.
  */
-function fillOceanFromCoastline(
-  ctx: CanvasRenderingContext2D,
-  points: { x: number; y: number }[],
-  width: number,
-  height: number,
-): void {
-  if (points.length < 2) return;
+function classifyCoastline(points: { x: number; y: number }[]): Coastline | null {
+  if (points.length < 2) return null;
 
   const first = points[0];
   const last = points[points.length - 1];
   const isClosed =
     Math.abs(first.x - last.x) < 1e-6 && Math.abs(first.y - last.y) < 1e-6;
 
-  if (isClosed) {
-    // Signed area in screen space (y down): positive = clockwise on screen.
-    let area = 0;
-    for (let i = 0; i < points.length - 1; i++) {
-      area += points[i].x * points[i + 1].y - points[i + 1].x * points[i].y;
-    }
-    const waterInside = area < 0; // counterclockwise ring: water on right = interior
-
-    if (waterInside) {
-      ctx.beginPath();
-      tracePath(ctx, points);
-      ctx.closePath();
-      ctx.fill('evenodd');
-    } else {
-      // Island: flood the viewport, then erase the land.
-      ctx.fillRect(0, 0, width, height);
-      ctx.save();
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.beginPath();
-      tracePath(ctx, points);
-      ctx.closePath();
-      ctx.fill('evenodd');
-      ctx.restore();
-    }
-    return;
+  if (!isClosed) {
+    return { points, isClosed: false, waterInside: false };
   }
 
-  // Open coastline: close along the viewport border, keeping water enclosed.
+  // Signed area in screen space (y down): positive = clockwise on screen.
+  let area = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    area += points[i].x * points[i + 1].y - points[i + 1].x * points[i].y;
+  }
+  // Clockwise (positive area) → interior on right → water inside.
+  // Counter-clockwise (negative area) → interior on left → land inside (island).
+  return { points, isClosed: true, waterInside: area > 0 };
+}
+
+/**
+ * Fills the ocean layer from all coastline chains in the viewport.
+ *
+ * Processing order:
+ * 1. If there are islands but no open coastlines or water rings, flood the
+ *    viewport once so island holes can be punched out.
+ * 2. Fill open coastlines additively (water side via border walk).
+ * 3. Fill closed water-enclosing rings additively (lakes/bays).
+ * 4. Erase all islands (destination-out) in a single pass — LAST so that
+ *    island holes are not refilled by subsequent source-over fills.
+ *
+ * This avoids the per-island fillRect that previously overwrote other fills.
+ */
+function fillOceanLayer(
+  ctx: CanvasRenderingContext2D,
+  coastlines: Coastline[],
+  width: number,
+  height: number,
+): void {
+  const open = coastlines.filter((c) => !c.isClosed);
+  const waterRings = coastlines.filter((c) => c.isClosed && c.waterInside);
+  const islands = coastlines.filter((c) => c.isClosed && !c.waterInside);
+
+  // If there are islands but no open coastlines or water rings to define the
+  // ocean boundary, flood the viewport first so island holes can be punched out.
+  if (islands.length > 0 && open.length === 0 && waterRings.length === 0) {
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // Fill open coastlines additively.
+  for (const coast of open) {
+    fillOpenCoastline(ctx, coast.points, width, height);
+  }
+
+  // Fill closed water-enclosing rings additively.
+  for (const ring of waterRings) {
+    ctx.beginPath();
+    tracePath(ctx, ring.points);
+    ctx.closePath();
+    ctx.fill('evenodd');
+  }
+
+  // Erase all islands in a single destination-out pass — must be LAST so
+  // island holes are not refilled by the source-over fills above.
+  if (islands.length > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath();
+    for (const island of islands) {
+      tracePath(ctx, island.points);
+      ctx.closePath();
+    }
+    ctx.fill('evenodd');
+    ctx.restore();
+  }
+}
+
+/**
+ * Fills the ocean side of an open coastline by closing along the viewport
+ * border. Water is on the RIGHT of travel direction (OSM convention); we
+ * walk clockwise (screen space) from the exit point to the entry point,
+ * which encloses the right-hand (water) side.
+ */
+function fillOpenCoastline(
+  ctx: CanvasRenderingContext2D,
+  points: { x: number; y: number }[],
+  width: number,
+  height: number,
+): void {
   const perimeter = 2 * (width + height);
   const borderPos = (p: { x: number; y: number }): number => {
     // Clockwise from top-left: top → right → bottom → left.
@@ -191,23 +248,53 @@ function fillOceanFromCoastline(
     return { x: 0, y: height - (m - 2 * width - height) };
   };
 
-  const exit = borderPos(last);
-  const entry = borderPos(first);
-  const path = [...points];
-
-  // Walk clockwise from exit to entry, inserting the corners passed.
+  const exit = borderPos(points[points.length - 1]);
+  const entry = borderPos(points[0]);
   const corners = [0, width, width + height, 2 * width + height];
-  const span = (entry - exit + perimeter) % perimeter;
-  const passed: number[] = [];
-  for (const c of corners) {
-    const rel = (c - exit + perimeter) % perimeter;
-    if (rel > 0 && rel < span) passed.push(rel);
+
+  // Build the closure path in one direction (clockwise from exit to entry).
+  const buildClosure = (clockwise: boolean): { x: number; y: number }[] => {
+    const span = clockwise
+      ? (entry - exit + perimeter) % perimeter
+      : (exit - entry + perimeter) % perimeter;
+    const start = clockwise ? exit : entry;
+    const passed: number[] = [];
+    for (const c of corners) {
+      const rel = (c - start + perimeter) % perimeter;
+      if (rel > 0 && rel < span) passed.push(rel);
+    }
+    passed.sort((a, b) => a - b);
+    const closure: { x: number; y: number }[] = [];
+    for (const rel of passed) {
+      closure.push(posToPoint(start + rel));
+    }
+    closure.push(posToPoint(clockwise ? entry : exit));
+    return closure;
+  };
+
+  // Try clockwise closure first. Compute signed area of the full path
+  // (coastline + closure). In screen space (y down), positive signed area
+  // means clockwise polygon → interior is on the right of the path direction.
+  // The path goes along the coastline from entry (first point) to exit (last
+  // point), then along the border back to entry. OSM convention: water is on
+  // the RIGHT of the coastline's direction. So if signed area > 0, the
+  // clockwise closure correctly encloses the water side. If < 0, it encloses
+  // the land side and we must use counter-clockwise instead.
+  const cwClosure = buildClosure(true);
+  const fullPath = [...points, ...cwClosure];
+  let signedArea = 0;
+  for (let i = 0; i < fullPath.length; i++) {
+    const a = fullPath[i];
+    const b = fullPath[(i + 1) % fullPath.length];
+    signedArea += a.x * b.y - b.x * a.y;
   }
-  passed.sort((a, b) => a - b);
-  for (const rel of passed) {
-    path.push(posToPoint(exit + rel));
+
+  let path = fullPath;
+  if (signedArea < 0) {
+    // Clockwise closure encloses the land side — use counter-clockwise instead.
+    const ccwClosure = buildClosure(false);
+    path = [...points, ...ccwClosure];
   }
-  path.push(posToPoint(entry));
 
   ctx.beginPath();
   tracePath(ctx, path);

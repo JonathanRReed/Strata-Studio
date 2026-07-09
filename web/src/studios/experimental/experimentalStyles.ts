@@ -1,6 +1,6 @@
 import type { ArtStyle, ArtworkInput, StyleParams, ControlKey } from "../../engine/types.ts";
 import type { Scene, ScenePoint, Stroke } from "../../engine/scene.ts";
-import { createNoise } from "../../engine/noise.ts";
+import { createAnimatedNoise } from "../../engine/noise.ts";
 import { clamp } from "../../engine/grid.ts";
 import {
   elevationSampler,
@@ -19,7 +19,14 @@ const expControls: ControlKey[] = [
   "amplitude", "spacing", "lineWidth", "noise", "detail", "compression",
   "occlusion", "grain", "rotation", "label", "aspectRatio", "seed", "palette",
   "buildingInfluence", "roadInfluence", "waterInfluence",
+  "oceanInfluence", "lakeInfluence", "riverInfluence",
 ];
+
+// Variants for styles that don't use all expControls
+const expControlsNoOcclusion: ControlKey[] = expControls.filter((c) => c !== "occlusion");
+const expControlsNoCompressionOcclusion: ControlKey[] = expControls.filter(
+  (c) => c !== "compression" && c !== "occlusion",
+);
 
 function rowLoop(
   input: ArtworkInput,
@@ -70,10 +77,11 @@ export const noiseAmplifier: ArtStyle = {
   controls: expControls,
   generate: (input, params) => {
     const sample = elevationSampler(input);
-    const hf = createNoise(params.seed, 5, 0.6);
+    const phase = params.phase ?? 0;
+    const hf = createAnimatedNoise(params.seed, 5, 0.6);
     return rowLoop(input, params, (u, v, _x, baseY) => {
       const elev = sample(u, v);
-      const signal = hf(u * 24, v * 24) * (0.25 + elev);
+      const signal = (phase > 0 ? hf(u * 24, v * 24, phase) : hf(u * 24, v * 24)) * (0.25 + elev);
       const displacement = -params.amplitude * signal * (0.3 + params.noise);
       const res = applyFeatureInfluence(displacement, u, v, input.masks, params);
       return { y: baseY + res.displacement, glow: res.glow, break_: res.break_ };
@@ -90,14 +98,15 @@ export const seismic: ArtStyle = {
   controls: expControls,
   generate: (input, params) => {
     const sample = elevationSampler(input);
-    const jitter = createNoise(params.seed + ":seismic", 5, 0.7);
+    const phase = params.phase ?? 0;
+    const jitter = createAnimatedNoise(params.seed + ":seismic", 5, 0.7);
     return rowLoop(input, params, (u, v, _x, baseY) => {
       const grad = elevationGradient(sample, u, v);
       const magnitude = Math.min(1, Math.hypot(grad.dx, grad.dy) * 0.5);
-      const spike = jitter(u * 40, v * 6) * magnitude;
+      const spike = (phase > 0 ? jitter(u * 40, v * 6, phase) : jitter(u * 40, v * 6)) * magnitude;
       const displacement =
         -params.amplitude * (sample(u, v) * 0.25 + spike) -
-        params.noise * params.amplitude * jitter(u * 90, v * 90) * magnitude;
+        params.noise * params.amplitude * (phase > 0 ? jitter(u * 90, v * 90, phase) : jitter(u * 90, v * 90)) * magnitude;
       const res = applyFeatureInfluence(displacement, u, v, input.masks, params);
       return { y: baseY + res.displacement, glow: res.glow, break_: res.break_ };
     });
@@ -113,10 +122,11 @@ export const meltMap: ArtStyle = {
   controls: expControls,
   generate: (input, params) => {
     const sample = elevationSampler(input);
-    const drip = createNoise(params.seed + ":melt", 3, 0.55);
+    const phase = params.phase ?? 0;
+    const drip = createAnimatedNoise(params.seed + ":melt", 3, 0.55);
     return rowLoop(input, params, (u, v, _x, baseY) => {
       const elev = sample(u, v);
-      const dripLength = Math.max(0, drip(u * 14, v * 3)) * elev;
+      const dripLength = Math.max(0, phase > 0 ? drip(u * 14, v * 3, phase) : drip(u * 14, v * 3)) * elev;
       const displacement =
         params.amplitude * dripLength * (1 + params.noise * 2) -
         params.amplitude * elev * 0.3;
@@ -132,7 +142,7 @@ export const gravityWell: ArtStyle = {
   studio: "experimental",
   description: "Lines bend toward the highest peak in the selected area.",
   defaultParams: { amplitude: 60, spacing: 8, lineWidth: 1.2, noise: 0.05, occlusion: 0 },
-  controls: expControls,
+  controls: expControlsNoOcclusion,
   generate: (input, params) => {
     const { width, height, masks } = input;
     const sample = elevationSampler(input);
@@ -140,7 +150,8 @@ export const gravityWell: ArtStyle = {
     const px = peak.u * width;
     const py = peak.v * height;
     const pull = params.amplitude / 100;
-    const noise = createNoise(params.seed + ":gravity", 3, 0.5);
+    const phase = params.phase ?? 0;
+    const noise = createAnimatedNoise(params.seed + ":gravity", 3, 0.5);
 
     const rowStep = params.spacing / clamp(params.compression, 0.5, 5);
     const xStep = Math.max(1, Math.round((1.1 - clamp(params.detail, 0.1, 1)) * 10));
@@ -166,15 +177,16 @@ export const gravityWell: ArtStyle = {
         const dist = Math.hypot(dx, dy) || 1;
         const falloff = 1 / (1 + Math.pow(dist / (width * 0.35), 2));
         const w = pull * falloff * (0.5 + sample(u, v) * 0.5);
-        const n = params.noise * params.amplitude * noise(u * 6, v * 6) * 0.2;
-        const res = applyFeatureInfluence(0, u, v, masks, params);
+        const n = params.noise * params.amplitude * (noise(u * 6, v * 6, phase)) * 0.2;
+        const displacement = dy * w + n;
+        const res = applyFeatureInfluence(displacement, u, v, masks, params);
         if (res.break_) {
           flush();
           continue;
         }
         segment.push({
           x: x + dx * w,
-          y: baseY + dy * w + n + res.displacement,
+          y: baseY + res.displacement,
           glow: res.glow,
         });
       }
@@ -190,11 +202,12 @@ export const magneticField: ArtStyle = {
   studio: "experimental",
   description: "Streamlines wrap around terrain like iron filings around a magnet.",
   defaultParams: { amplitude: 50, spacing: 14, lineWidth: 1, noise: 0.2, detail: 0.8, occlusion: 0 },
-  controls: expControls,
+  controls: expControlsNoCompressionOcclusion,
   generate: (input, params) => {
     const { width, height, masks } = input;
     const sample = elevationSampler(input);
-    const noise = createNoise(params.seed + ":field", 3, 0.5);
+    const phase = params.phase ?? 0;
+    const noise = createAnimatedNoise(params.seed + ":field", 3, 0.5);
     const rng = createRng(params.seed + ":fieldseeds");
     const strokes: Stroke[] = [];
 
@@ -212,7 +225,7 @@ export const magneticField: ArtStyle = {
           const u = clamp(x / (width - 1 || 1), 0, 1);
           const v = clamp(y / (height - 1 || 1), 0, 1);
           const grad = elevationGradient(sample, u, v, 0.02);
-          const angleNoise = noise(u * 5, v * 5) * Math.PI * params.noise * 2;
+          const angleNoise = (noise(u * 5, v * 5, phase)) * Math.PI * params.noise * 2;
           // Rotate gradient 90 degrees to follow iso-elevation lines.
           let fx = -grad.dy;
           let fy = grad.dx;
@@ -247,14 +260,15 @@ export const pulseRings: ArtStyle = {
   studio: "experimental",
   description: "Concentric rings radiate from the highest peak, distorted by terrain.",
   defaultParams: { amplitude: 40, spacing: 10, lineWidth: 1.2, noise: 0.15, occlusion: 0 },
-  controls: expControls,
+  controls: expControlsNoCompressionOcclusion,
   generate: (input, params) => {
     const { width, height, masks } = input;
     const sample = elevationSampler(input);
     const peak = findPeak(input);
     const cx = peak.u * width;
     const cy = peak.v * height;
-    const noise = createNoise(params.seed + ":rings", 3, 0.5);
+    const phase = params.phase ?? 0;
+    const noise = createAnimatedNoise(params.seed + ":rings", 3, 0.5);
     const strokes: Stroke[] = [];
 
     const maxR = Math.hypot(Math.max(cx, width - cx), Math.max(cy, height - cy));
@@ -279,7 +293,7 @@ export const pulseRings: ArtStyle = {
         const u = clamp(bx / (width - 1 || 1), 0, 1);
         const v = clamp(by / (height - 1 || 1), 0, 1);
         const elev = sample(u, v);
-        const n = noise(u * 5 + r * 0.01, v * 5) * params.noise;
+        const n = (noise(u * 5 + r * 0.01, v * 5, phase)) * params.noise;
         const offset = params.amplitude * (elev - 0.5 + n) * 0.6;
         const res = applyFeatureInfluence(offset, u, v, masks, params);
         if (res.break_) {
@@ -307,11 +321,12 @@ export const terrainSonogram: ArtStyle = {
   studio: "experimental",
   description: "Elevation becomes a dense spectrogram-like field of vertical intensity lines.",
   defaultParams: { amplitude: 60, spacing: 4, lineWidth: 1.6, noise: 0.2, occlusion: 0 },
-  controls: expControls,
+  controls: expControlsNoCompressionOcclusion,
   generate: (input, params) => {
     const { width, height, masks } = input;
     const sample = elevationSampler(input);
-    const noise = createNoise(params.seed + ":sono", 4, 0.6);
+    const phase = params.phase ?? 0;
+    const noise = createAnimatedNoise(params.seed + ":sono", 4, 0.6);
     const strokes: Stroke[] = [];
 
     const colStep = Math.max(2, params.spacing);
@@ -332,7 +347,7 @@ export const terrainSonogram: ArtStyle = {
       };
       for (let v = 0; v <= 1; v += vStep) {
         const elev = sample(u, v);
-        const n = (noise(u * 30, v * 30) * 0.5 + 0.5) * params.noise;
+        const n = (noise(u * 30, v * 30, phase) * 0.5 + 0.5) * params.noise;
         const intensity = elev * (1 - params.noise * 0.5) + n;
         const res = applyFeatureInfluence(0, u, v, masks, params);
         if (res.break_ || intensity < threshold * 0.6) {

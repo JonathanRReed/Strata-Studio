@@ -29,6 +29,8 @@ export type MaskMode = "interrupt" | "amplify" | "flatten" | "glow";
 
 export type AspectRatio = "square" | "16:9" | "9:16" | "12:18";
 
+export type AnimationMode = "none" | "drift" | "draw" | "parallax";
+
 export type StyleParams = {
   amplitude: number;
   spacing: number;
@@ -41,14 +43,28 @@ export type StyleParams = {
   buildingInfluence: number;
   roadInfluence: number;
   waterInfluence: number;
+  oceanInfluence: number;
+  lakeInfluence: number;
+  riverInfluence: number;
   buildingMode: MaskMode;
   roadMode: MaskMode;
   waterMode: MaskMode;
+  oceanMode: MaskMode;
+  lakeMode: MaskMode;
+  riverMode: MaskMode;
   grain: number;
   rotation: number;
   label: string;
   aspectRatio: AspectRatio;
   occlusion: number;
+  /** Animation phase in [0, 1). 0 = static. */
+  phase: number;
+  /** Animation style: drift, draw-in, parallax, or none. */
+  animationMode: AnimationMode;
+  /** Animation speed in loops per second (for live preview). */
+  animationSpeed: number;
+  /** Whether to export with a transparent background. */
+  transparent: boolean;
 };
 
 export type FeatureMasks = {
@@ -113,7 +129,10 @@ export type ControlKey =
   | "palette"
   | "buildingInfluence"
   | "roadInfluence"
-  | "waterInfluence";
+  | "waterInfluence"
+  | "oceanInfluence"
+  | "lakeInfluence"
+  | "riverInfluence";
 
 export type ArtStyle = {
   id: string;

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { Palette, StyleParams, MaskMode, AspectRatio, Studio, ControlKey } from "../engine/types.ts";
+import { useState, useEffect } from "react";
+import type { Palette, StyleParams, MaskMode, AspectRatio, Studio, ControlKey, AnimationMode } from "../engine/types.ts";
 import { presets, type Preset } from "../presets/stylePresets.ts";
 import { stylesByStudio, getStyle } from "../studios/registry.ts";
 import { PalettePicker } from "./PalettePicker.tsx";
@@ -13,12 +13,15 @@ type Props = {
   onGenerate: () => void;
   onExportPng: (size: number) => void;
   onExportSvg: (size: number) => void;
+  onExportAnimation: (format: "gif" | "apng" | "webm") => void;
   onFetchFeatures: (isRetry?: boolean) => void;
   onExportJson: () => void;
   onCopyUrl: () => void;
   copiedUrl: boolean;
   isLoading: boolean;
   isFeatureLoading: boolean;
+  isExportingAnimation: boolean;
+  animationProgress: { progress: number; status: string } | null;
   featureInfo: string | null;
   hasFeatures: boolean;
   osmAreaHint?: string | null;
@@ -26,6 +29,22 @@ type Props = {
   allPaletteNames: Record<string, string>;
   onSavePalette: (id: string, name: string, palette: Palette) => void;
   onDeletePalette: (id: string) => void;
+  isAnimating: boolean;
+  onToggleAnimation: () => void;
+};
+
+const MASK_MODE_DESCRIPTIONS: Record<MaskMode, string> = {
+  interrupt: "Breaks terrain lines where this feature is present",
+  amplify: "Makes terrain displacement larger over this feature",
+  flatten: "Damps terrain displacement toward zero over this feature",
+  glow: "Highlights terrain lines over this feature in accent color",
+};
+
+const ANIMATION_MODE_DESCRIPTIONS: Record<AnimationMode, string> = {
+  none: "Static artwork",
+  drift: "Noise field scrolls over time — organic breathing motion",
+  draw: "Lines draw themselves in stroke by stroke, then loop",
+  parallax: "Depth layers separate and drift at different speeds",
 };
 
 function Slider({
@@ -35,6 +54,7 @@ function Slider({
   max,
   step,
   onChange,
+  tooltip,
 }: {
   label: string;
   value: number;
@@ -42,13 +62,17 @@ function Slider({
   max: number;
   step: number;
   onChange: (v: number) => void;
+  tooltip?: string;
 }) {
   return (
     <label className="flex flex-col gap-1.5 text-sm text-white/80">
-      <span className="flex justify-between">
-        {label}
+      <span className="flex justify-between items-center">
+        <span className="flex items-center gap-1">
+          {label}
+          {tooltip && <InfoDot text={tooltip} />}
+        </span>
         <span className="text-white/50 tabular-nums" aria-live="polite">
-          {value.toFixed(2)}
+          {value.toFixed(step < 1 ? 2 : 0)}
         </span>
       </span>
       <input
@@ -64,18 +88,36 @@ function Slider({
   );
 }
 
+function InfoDot({ text }: { text: string }) {
+  return (
+    <span className="relative group inline-flex">
+      <span className="w-3.5 h-3.5 rounded-full bg-white/10 text-white/40 text-[9px] flex items-center justify-center cursor-help select-none">
+        ?
+      </span>
+      <span className="absolute left-5 top-0 z-50 hidden group-hover:block bg-black border border-white/20 rounded px-2 py-1.5 text-[10px] text-white/70 leading-snug w-48 shadow-lg">
+        {text}
+      </span>
+    </span>
+  );
+}
+
 function ModeSelector({
   label,
   value,
   onChange,
+  tooltip,
 }: {
   label: string;
   value: MaskMode;
   onChange: (v: MaskMode) => void;
+  tooltip?: string;
 }) {
   return (
     <label className="flex flex-col gap-1.5 text-sm text-white/80">
-      {label}
+      <span className="flex items-center gap-1">
+        {label}
+        {tooltip && <InfoDot text={tooltip} />}
+      </span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as MaskMode)}
@@ -90,6 +132,51 @@ function ModeSelector({
   );
 }
 
+function Section({
+  title,
+  children,
+  defaultOpen = true,
+  badge,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  badge?: string;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  // Sync with defaultOpen when it changes (e.g., when OSM features load or animation mode changes)
+  useEffect(() => {
+    setOpen(defaultOpen);
+  }, [defaultOpen]);
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex items-center justify-between text-xs font-medium uppercase tracking-wider text-white/40 hover:text-white/60 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          {title}
+          {badge && <span className="text-[9px] text-green-400/60 normal-case tracking-normal">{badge}</span>}
+        </span>
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className={`transition-transform ${open ? "rotate-180" : ""}`}
+        >
+          <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && <div className="flex flex-col gap-3">{children}</div>}
+    </div>
+  );
+}
+
 export function ControlsPanel({
   params,
   styleId,
@@ -99,12 +186,15 @@ export function ControlsPanel({
   onGenerate,
   onExportPng,
   onExportSvg,
+  onExportAnimation,
   onFetchFeatures,
   onExportJson,
   onCopyUrl,
   copiedUrl,
   isLoading,
   isFeatureLoading,
+  isExportingAnimation,
+  animationProgress,
   featureInfo,
   hasFeatures,
   osmAreaHint,
@@ -112,8 +202,11 @@ export function ControlsPanel({
   allPaletteNames,
   onSavePalette,
   onDeletePalette,
+  isAnimating,
+  onToggleAnimation,
 }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [showPerTypeWater, setShowPerTypeWater] = useState(false);
   const update = (patch: Partial<StyleParams>) => {
     onChange({ ...params, ...patch });
   };
@@ -124,8 +217,11 @@ export function ControlsPanel({
     "amplitude", "spacing", "lineWidth", "noise", "detail", "compression",
     "occlusion", "grain", "rotation", "label", "aspectRatio", "seed", "palette",
     "buildingInfluence", "roadInfluence", "waterInfluence",
+    "oceanInfluence", "lakeInfluence", "riverInfluence",
   ]);
-  const hasFeatureControls = controls.has("buildingInfluence") || controls.has("roadInfluence") || controls.has("waterInfluence");
+  const hasFeatureControls =
+    controls.has("buildingInfluence") || controls.has("roadInfluence") || controls.has("waterInfluence") ||
+    controls.has("oceanInfluence") || controls.has("lakeInfluence") || controls.has("riverInfluence");
   const hasAnySlider = ["amplitude", "spacing", "lineWidth", "noise", "detail", "compression", "occlusion"].some((k) => controls.has(k as ControlKey));
 
   return (
@@ -145,8 +241,9 @@ export function ControlsPanel({
         id="controls-panel"
         className={`${
           mobileOpen ? "flex" : "hidden lg:flex"
-        } flex-col gap-5 p-5 w-full max-w-xs border-r border-white/10 bg-black/40 h-full overflow-y-auto`}
+        } flex-col gap-4 p-5 w-full max-w-xs border-r border-white/10 bg-black/40 h-full overflow-y-auto`}
       >
+        {/* Header */}
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Strata Studio</h1>
           <p className="text-xs text-white/50 mt-1">
@@ -159,6 +256,7 @@ export function ControlsPanel({
           </p>
         </div>
 
+        {/* Style & Presets */}
         <div className="flex flex-col gap-2">
           <div className="grid grid-cols-2 gap-1 p-1 bg-white/5 rounded-lg" role="tablist" aria-label="Studio">
             {(["classic", "experimental"] as Studio[]).map((s) => (
@@ -201,6 +299,7 @@ export function ControlsPanel({
           <p className="text-[11px] text-white/40 leading-snug">{activeStyle.description}</p>
         </div>
 
+        {/* Presets */}
         <div className="flex flex-col gap-2">
           <span className="text-xs font-medium uppercase tracking-wider text-white/40">
             Presets
@@ -221,8 +320,9 @@ export function ControlsPanel({
           </div>
         </div>
 
+        {/* Terrain sliders */}
         {hasAnySlider && (
-        <div className="flex flex-col gap-4">
+        <Section title="Terrain" defaultOpen={true}>
           {controls.has("amplitude") && (
             <Slider
               label="Amplitude"
@@ -231,6 +331,7 @@ export function ControlsPanel({
               max={120}
               step={1}
               onChange={(v) => update({ amplitude: v })}
+              tooltip="How far terrain displaces the lines"
             />
           )}
           {controls.has("spacing") && (
@@ -241,6 +342,7 @@ export function ControlsPanel({
               max={30}
               step={0.5}
               onChange={(v) => update({ spacing: v })}
+              tooltip="Distance between terrain lines"
             />
           )}
           {controls.has("lineWidth") && (
@@ -261,6 +363,7 @@ export function ControlsPanel({
               max={1}
               step={0.01}
               onChange={(v) => update({ noise: v })}
+              tooltip="Random perturbation strength"
             />
           )}
           {controls.has("detail") && (
@@ -271,6 +374,7 @@ export function ControlsPanel({
               max={1}
               step={0.05}
               onChange={(v) => update({ detail: v })}
+              tooltip="Sampling resolution — higher = more detail"
             />
           )}
           {controls.has("compression") && (
@@ -291,15 +395,18 @@ export function ControlsPanel({
               max={1}
               step={0.05}
               onChange={(v) => update({ occlusion: v })}
+              tooltip="Fills below lines for a solid-layered look"
             />
           )}
-        </div>
+        </Section>
         )}
 
-        <div className="flex flex-col gap-3">
-          <span className="text-xs font-medium uppercase tracking-wider text-white/40">
-            {hasFeatureControls ? "Feature influence" : "Map features"}
-          </span>
+        {/* Map Features / Feature Influence */}
+        <Section
+          title={hasFeatureControls ? "Feature influence" : "Map features"}
+          defaultOpen={hasFeatures}
+          badge={hasFeatures ? "OSM loaded" : undefined}
+        >
           <button
             type="button"
             onClick={() => onFetchFeatures(false)}
@@ -321,6 +428,7 @@ export function ControlsPanel({
 
           {hasFeatureControls && (
           <div className="flex flex-col gap-3 pl-2 border-l border-white/10">
+            {/* Buildings */}
             {controls.has("buildingInfluence") && (
               <>
                 <Slider
@@ -330,14 +438,17 @@ export function ControlsPanel({
                   max={100}
                   step={1}
                   onChange={(v) => update({ buildingInfluence: v })}
+                  tooltip="How much building footprints affect the terrain"
                 />
                 <ModeSelector
                   label="Building mode"
                   value={params.buildingMode}
                   onChange={(v) => update({ buildingMode: v })}
+                  tooltip={MASK_MODE_DESCRIPTIONS[params.buildingMode]}
                 />
               </>
             )}
+            {/* Roads */}
             {controls.has("roadInfluence") && (
               <>
                 <Slider
@@ -347,40 +458,162 @@ export function ControlsPanel({
                   max={100}
                   step={1}
                   onChange={(v) => update({ roadInfluence: v })}
+                  tooltip="How much roads affect the terrain"
                 />
                 <ModeSelector
                   label="Road mode"
                   value={params.roadMode}
                   onChange={(v) => update({ roadMode: v })}
+                  tooltip={MASK_MODE_DESCRIPTIONS[params.roadMode]}
                 />
               </>
             )}
+            {/* Water — combined */}
             {controls.has("waterInfluence") && (
               <>
                 <Slider
-                  label="Water influence"
+                  label="Water influence (all)"
                   value={params.waterInfluence}
                   min={0}
                   max={100}
                   step={1}
                   onChange={(v) => update({ waterInfluence: v })}
+                  tooltip="Affects all water types. Expand below for per-type control."
                 />
                 <ModeSelector
                   label="Water mode"
                   value={params.waterMode}
                   onChange={(v) => update({ waterMode: v })}
+                  tooltip={MASK_MODE_DESCRIPTIONS[params.waterMode]}
                 />
+              </>
+            )}
+            {/* Per-type water toggle */}
+            {(controls.has("oceanInfluence") || controls.has("lakeInfluence") || controls.has("riverInfluence")) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowPerTypeWater(!showPerTypeWater)}
+                  className="text-[10px] text-white/40 hover:text-white/60 transition-colors text-left"
+                >
+                  {showPerTypeWater ? "− Hide per-type water" : "+ Per-type water (ocean / lake / river)"}
+                </button>
+                {showPerTypeWater && (
+                  <div className="flex flex-col gap-3 pl-2 border-l border-white/10">
+                    {controls.has("oceanInfluence") && (
+                      <>
+                        <Slider
+                          label="Ocean influence"
+                          value={params.oceanInfluence}
+                          min={0}
+                          max={100}
+                          step={1}
+                          onChange={(v) => update({ oceanInfluence: v })}
+                          tooltip="Affects coastline / ocean areas only"
+                        />
+                        <ModeSelector
+                          label="Ocean mode"
+                          value={params.oceanMode}
+                          onChange={(v) => update({ oceanMode: v })}
+                          tooltip={MASK_MODE_DESCRIPTIONS[params.oceanMode]}
+                        />
+                      </>
+                    )}
+                    {controls.has("lakeInfluence") && (
+                      <>
+                        <Slider
+                          label="Lake influence"
+                          value={params.lakeInfluence}
+                          min={0}
+                          max={100}
+                          step={1}
+                          onChange={(v) => update({ lakeInfluence: v })}
+                          tooltip="Affects lake areas only"
+                        />
+                        <ModeSelector
+                          label="Lake mode"
+                          value={params.lakeMode}
+                          onChange={(v) => update({ lakeMode: v })}
+                          tooltip={MASK_MODE_DESCRIPTIONS[params.lakeMode]}
+                        />
+                      </>
+                    )}
+                    {controls.has("riverInfluence") && (
+                      <>
+                        <Slider
+                          label="River influence"
+                          value={params.riverInfluence}
+                          min={0}
+                          max={100}
+                          step={1}
+                          onChange={(v) => update({ riverInfluence: v })}
+                          tooltip="Affects river / stream areas only"
+                        />
+                        <ModeSelector
+                          label="River mode"
+                          value={params.riverMode}
+                          onChange={(v) => update({ riverMode: v })}
+                          tooltip={MASK_MODE_DESCRIPTIONS[params.riverMode]}
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
           )}
-        </div>
+        </Section>
 
-        <div className="flex flex-col gap-3">
-          <span className="text-xs font-medium uppercase tracking-wider text-white/40">
-            Composition
-          </span>
+        {/* Animation */}
+        <Section title="Animation" defaultOpen={params.animationMode !== "none"}>
+          <label className="flex flex-col gap-1.5 text-sm text-white/80">
+            <span className="flex items-center gap-1">
+              Animation style
+              <InfoDot text="Add motion to your artwork. Drift breathes, draw reveals lines stroke by stroke, parallax separates depth layers." />
+            </span>
+            <select
+              value={params.animationMode}
+              onChange={(e) => update({ animationMode: e.target.value as AnimationMode })}
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm outline-none focus:border-white/30"
+            >
+              <option value="none" className="bg-neutral-900">None (static)</option>
+              <option value="drift" className="bg-neutral-900">Drift — organic breathing</option>
+              <option value="draw" className="bg-neutral-900">Draw-in — stroke reveal</option>
+              <option value="parallax" className="bg-neutral-900">Parallax — depth layers</option>
+            </select>
+          </label>
+          {params.animationMode !== "none" && (
+            <>
+              <p className="text-[10px] text-white/40 leading-snug">
+                {ANIMATION_MODE_DESCRIPTIONS[params.animationMode]}
+              </p>
+              <Slider
+                label="Animation speed"
+                value={params.animationSpeed}
+                min={0.05}
+                max={1}
+                step={0.05}
+                onChange={(v) => update({ animationSpeed: v })}
+                tooltip="Loops per second for the live preview"
+              />
+              <button
+                type="button"
+                onClick={onToggleAnimation}
+                className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
+                  isAnimating
+                    ? "bg-white/20 text-white border border-white/30"
+                    : "bg-white text-black hover:bg-white/90"
+                }`}
+              >
+                {isAnimating ? "⏸ Pause preview" : "▶ Play preview"}
+              </button>
+            </>
+          )}
+        </Section>
 
+        {/* Composition */}
+        <Section title="Composition" defaultOpen={false}>
           {controls.has("grain") && (
             <Slider
               label="Grain"
@@ -389,9 +622,9 @@ export function ControlsPanel({
               max={1}
               step={0.01}
               onChange={(v) => update({ grain: v })}
+              tooltip="Adds a film-grain texture overlay"
             />
           )}
-
           {controls.has("rotation") && (
             <Slider
               label="Rotation"
@@ -402,7 +635,6 @@ export function ControlsPanel({
               onChange={(v) => update({ rotation: v })}
             />
           )}
-
           {controls.has("label") && (
             <label className="flex flex-col gap-1.5 text-sm text-white/80">
               Label
@@ -415,7 +647,6 @@ export function ControlsPanel({
               />
             </label>
           )}
-
           {controls.has("aspectRatio") && (
             <label className="flex flex-col gap-1.5 text-sm text-white/80">
               Aspect ratio
@@ -431,9 +662,10 @@ export function ControlsPanel({
               </select>
             </label>
           )}
-        </div>
+        </Section>
 
-        <div className="flex flex-col gap-3">
+        {/* Seed & Palette */}
+        <Section title="Seed & Palette" defaultOpen={false}>
           <label className="flex flex-col gap-1.5 text-sm text-white/80">
             Seed
             <div className="flex gap-2">
@@ -467,13 +699,14 @@ export function ControlsPanel({
             onSavePalette={onSavePalette}
             onDeletePalette={onDeletePalette}
           />
-        </div>
+        </Section>
 
+        {/* Export */}
         <div className="flex flex-col gap-2 mt-auto">
           <button
             type="button"
             onClick={onGenerate}
-            disabled={isLoading}
+            disabled={isLoading || isExportingAnimation}
             aria-busy={isLoading}
             className="w-full py-2.5 min-h-[44px] bg-white text-black rounded font-medium text-sm hover:bg-white/90 disabled:opacity-50 transition-colors"
           >
@@ -484,7 +717,7 @@ export function ControlsPanel({
             <button
               type="button"
               onClick={onExportJson}
-              disabled={isLoading}
+              disabled={isExportingAnimation}
               className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
             >
               Export JSON
@@ -492,7 +725,7 @@ export function ControlsPanel({
             <button
               type="button"
               onClick={onCopyUrl}
-              disabled={isLoading}
+              disabled={isExportingAnimation}
               className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
             >
               {copiedUrl ? "Copied!" : "Copy URL"}
@@ -530,6 +763,51 @@ export function ControlsPanel({
                   {size}²
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Animation export */}
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-white/40 flex items-center gap-1">
+              Export animation
+              <InfoDot text="Renders all frames and encodes a looping animation. GIF is universal, APNG has better quality + transparency, WebM is smallest for video." />
+            </span>
+            {isExportingAnimation && animationProgress && (
+              <div className="flex flex-col gap-1">
+                <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-white rounded-full transition-all"
+                    style={{ width: `${Math.round(animationProgress.progress * 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] text-white/50">{animationProgress.status}</span>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => onExportAnimation("gif")}
+                disabled={isLoading || isExportingAnimation || params.animationMode === "none"}
+                className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
+              >
+                GIF
+              </button>
+              <button
+                type="button"
+                onClick={() => onExportAnimation("apng")}
+                disabled={isLoading || isExportingAnimation || params.animationMode === "none"}
+                className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
+              >
+                APNG
+              </button>
+              <button
+                type="button"
+                onClick={() => onExportAnimation("webm")}
+                disabled={isLoading || isExportingAnimation || params.animationMode === "none"}
+                className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
+              >
+                WebM
+              </button>
             </div>
           </div>
         </div>

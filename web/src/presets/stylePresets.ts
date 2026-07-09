@@ -12,14 +12,24 @@ export const defaultStyleParams: StyleParams = {
   buildingInfluence: 0,
   roadInfluence: 0,
   waterInfluence: 0,
+  oceanInfluence: 0,
+  lakeInfluence: 0,
+  riverInfluence: 0,
   buildingMode: "interrupt",
   roadMode: "amplify",
   waterMode: "flatten",
+  oceanMode: "flatten",
+  lakeMode: "flatten",
+  riverMode: "amplify",
   grain: 0,
   rotation: 0,
   label: "",
   aspectRatio: "square",
   occlusion: 1,
+  phase: 0,
+  animationMode: "none",
+  animationSpeed: 0.15,
+  transparent: false,
 };
 
 export type Preset = {
@@ -150,7 +160,7 @@ export const presets: Preset[] = [
     id: "survey",
     name: "Survey",
     styleId: "flow",
-    params: { amplitude: 40, spacing: 10, lineWidth: 0.9, noise: 0.2, detail: 0.8, seed: "survey", palette: "blueprint" },
+    params: { amplitude: 40, spacing: 10, lineWidth: 0.9, noise: 0.2, seed: "survey", palette: "blueprint" },
   },
 ];
 

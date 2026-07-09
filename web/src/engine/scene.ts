@@ -1,4 +1,4 @@
-import type { Palette, StyleParams } from "./types.ts";
+import type { Palette, StyleParams, FeatureMasks } from "./types.ts";
 import { hashSeed } from "./noise.ts";
 
 export type ScenePoint = { x: number; y: number };
@@ -55,6 +55,105 @@ function strokeColor(stroke: Stroke, palette: Palette): string {
   }
 }
 
+function hexToRgb(hex: string): [number, number, number] {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return [r, g, b];
+}
+
+/**
+ * Draws the water mask as a colored underlay so water areas are visually
+ * distinct from land in all styles — including terrain-only styles that
+ * don't render water feature lines.
+ */
+function drawWaterUnderlay(
+  ctx: CanvasRenderingContext2D,
+  masks: FeatureMasks,
+  palette: Palette,
+  width: number,
+  height: number,
+): void {
+  const { width: maskW, height: maskH, ocean, lake, river } = masks;
+  const canvas = document.createElement("canvas");
+  canvas.width = maskW;
+  canvas.height = maskH;
+  const tempCtx = canvas.getContext("2d");
+  if (!tempCtx) return;
+
+  const oceanRgb = hexToRgb(palette.ocean ?? palette.water ?? palette.accent);
+  const lakeRgb = hexToRgb(palette.lake ?? palette.water ?? palette.accent);
+  const riverRgb = hexToRgb(palette.river ?? palette.water ?? palette.accent);
+
+  const imageData = tempCtx.createImageData(maskW, maskH);
+  const data = imageData.data;
+
+  for (let i = 0; i < maskW * maskH; i++) {
+    const ov = ocean[i];
+    const lv = lake[i];
+    const rv = river[i];
+    const maxVal = Math.max(ov, lv, rv);
+    if (maxVal > 0.01) {
+      // Pick the dominant water type's color
+      let rgb: [number, number, number];
+      if (ov >= lv && ov >= rv) rgb = oceanRgb;
+      else if (lv >= rv) rgb = lakeRgb;
+      else rgb = riverRgb;
+      data[i * 4] = rgb[0];
+      data[i * 4 + 1] = rgb[1];
+      data[i * 4 + 2] = rgb[2];
+      data[i * 4 + 3] = Math.round(maxVal * 255);
+    }
+  }
+
+  tempCtx.putImageData(imageData, 0, 0);
+  ctx.drawImage(canvas, 0, 0, width, height);
+}
+
+/**
+ * Encodes the water mask as a base64 PNG string for embedding in SVG output.
+ * Returns an empty string if no water is present.
+ */
+function waterMaskToPng(masks: FeatureMasks, palette: Palette): string {
+  const { width: maskW, height: maskH, ocean, lake, river } = masks;
+  const canvas = document.createElement("canvas");
+  canvas.width = maskW;
+  canvas.height = maskH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+
+  const oceanRgb = hexToRgb(palette.ocean ?? palette.water ?? palette.accent);
+  const lakeRgb = hexToRgb(palette.lake ?? palette.water ?? palette.accent);
+  const riverRgb = hexToRgb(palette.river ?? palette.water ?? palette.accent);
+
+  const imageData = ctx.createImageData(maskW, maskH);
+  const data = imageData.data;
+  let hasWater = false;
+
+  for (let i = 0; i < maskW * maskH; i++) {
+    const ov = ocean[i];
+    const lv = lake[i];
+    const rv = river[i];
+    const maxVal = Math.max(ov, lv, rv);
+    if (maxVal > 0.01) {
+      hasWater = true;
+      let rgb: [number, number, number];
+      if (ov >= lv && ov >= rv) rgb = oceanRgb;
+      else if (lv >= rv) rgb = lakeRgb;
+      else rgb = riverRgb;
+      data[i * 4] = rgb[0];
+      data[i * 4 + 1] = rgb[1];
+      data[i * 4 + 2] = rgb[2];
+      data[i * 4 + 3] = Math.round(maxVal * 255);
+    }
+  }
+
+  if (!hasWater) return "";
+  ctx.putImageData(imageData, 0, 0);
+  const dataUrl = canvas.toDataURL("image/png");
+  return dataUrl.slice(dataUrl.indexOf(",") + 1);
+}
+
 export function renderSceneCanvas(
   ctx: CanvasRenderingContext2D,
   scene: Scene,
@@ -62,6 +161,8 @@ export function renderSceneCanvas(
   palette: Palette,
   width: number,
   height: number,
+  transparent = false,
+  masks?: FeatureMasks,
 ): void {
   // Background is drawn before any rotation so corners are always filled.
   ctx.save();
@@ -69,8 +170,18 @@ export function renderSceneCanvas(
   const scaleX = ctx.canvas.width / width;
   const scaleY = ctx.canvas.height / height;
   ctx.scale(scaleX, scaleY);
-  ctx.fillStyle = palette.background;
-  ctx.fillRect(0, 0, width, height);
+  if (!transparent) {
+    ctx.fillStyle = palette.background;
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    ctx.clearRect(0, 0, width, height);
+  }
+
+  // Water underlay: fill water areas with the palette's water color so they're
+  // visually distinct from land in all styles.
+  if (masks) {
+    drawWaterUnderlay(ctx, masks, palette, width, height);
+  }
 
   ctx.save();
   if (params.rotation !== 0) {
@@ -177,6 +288,8 @@ export function sceneToSvg(
   palette: Palette,
   width: number,
   height: number,
+  transparent = false,
+  masks?: FeatureMasks,
 ): string {
   const hasGlow = scene.strokes.some((s) => s.glow);
   const paths = scene.strokes
@@ -218,8 +331,21 @@ export function sceneToSvg(
     ? `\n  <rect width="${width}" height="${height}" filter="url(#grain)" opacity="0.5"/>`
     : "";
 
+  const bgRect = transparent
+    ? ""
+    : `\n  <rect width="${width}" height="${height}" fill="${palette.background}"/>`;
+
+  // Water underlay as an embedded PNG image
+  let waterImg = "";
+  if (masks) {
+    const waterPng = waterMaskToPng(masks, palette);
+    if (waterPng) {
+      waterImg = `\n  <image width="${width}" height="${height}" href="data:image/png;base64,${waterPng}"/>`;
+    }
+  }
+
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  ${defsXml}<rect width="${width}" height="${height}" fill="${palette.background}"/>
+  ${defsXml}${bgRect}${waterImg}
   <g${rotation}>
     ${paths}
   </g>${label}${grainRect}

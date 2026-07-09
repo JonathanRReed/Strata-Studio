@@ -39,3 +39,26 @@ export function createNoise(seed: string, octaves: number, persistence = 0.5) {
     return value / max;
   };
 }
+
+/**
+ * Creates a noise function that scrolls over time by offsetting the y coordinate.
+ * The phase parameter (0–1) shifts the noise field vertically, creating organic drift.
+ * Phase defaults to 0, making this compatible with createNoise's 2-arg signature.
+ */
+export function createAnimatedNoise(seed: string, octaves: number, persistence = 0.5) {
+  const base = createSeededNoise(seed);
+  return function (x: number, y: number, phase = 0): number {
+    const yOff = phase * 10;
+    let value = 0;
+    let amplitude = 1;
+    let frequency = 1;
+    let max = 0;
+    for (let i = 0; i < octaves; i++) {
+      value += base(x * frequency, (y + yOff) * frequency) * amplitude;
+      max += amplitude;
+      amplitude *= persistence;
+      frequency *= 2;
+    }
+    return value / max;
+  };
+}

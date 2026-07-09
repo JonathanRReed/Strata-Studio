@@ -12,9 +12,30 @@ const TERRAIN_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
 const TILE_SIZE = 256;
 const MAX_ZOOM = 15;
 const LOAD_TIMEOUT_MS = 15000;
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 300;
+const MAX_CONCURRENCY = 6;
 
 function decodeElevation(r: number, g: number, b: number): number {
   return r * 256 + g + b / 256 - 32768;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Aborted"));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(new Error("Aborted"));
+      },
+      { once: true },
+    );
+  });
 }
 
 function loadImage(url: string, signal?: AbortSignal): Promise<HTMLImageElement> {
@@ -49,6 +70,31 @@ function loadImage(url: string, signal?: AbortSignal): Promise<HTMLImageElement>
   });
 }
 
+/** Load a tile image with exponential backoff retry. */
+async function loadImageWithRetry(
+  url: string,
+  signal?: AbortSignal,
+  maxRetries = MAX_RETRIES,
+): Promise<HTMLImageElement> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) throw new Error("Aborted");
+    try {
+      return await loadImage(url, signal);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // Don't retry on abort
+      if (lastError.message === "Aborted") throw lastError;
+      // Don't retry on the last attempt
+      if (attempt < maxRetries) {
+        const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt);
+        await sleep(backoff, signal);
+      }
+    }
+  }
+  throw lastError ?? new Error(`Failed to load tile: ${url}`);
+}
+
 async function getTileData(
   z: number,
   x: number,
@@ -59,7 +105,7 @@ async function getTileData(
   if (cached) return cached;
 
   const url = `${TERRAIN_URL}/${z}/${x}/${y}.png`;
-  const img = await loadImage(url, signal);
+  const img = await loadImageWithRetry(url, signal);
   const canvas = document.createElement("canvas");
   canvas.width = TILE_SIZE;
   canvas.height = TILE_SIZE;
@@ -76,6 +122,24 @@ async function getTileData(
   }
   await setTile(z, x, y, data);
   return data;
+}
+
+/** Run async tasks with a concurrency cap. */
+async function runWithConcurrency<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number,
+): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let nextIndex = 0;
+  async function runNext(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex++;
+      results[index] = await tasks[index]();
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => runNext());
+  await Promise.all(workers);
+  return results;
 }
 
 function selectZoom(bounds: GeoBounds, gridSize: number): number {
@@ -145,13 +209,20 @@ export async function fetchTerrain(
   const maxTy = tileYForPixel(maxY, zoom);
 
   const tileCache = new Map<string, Float32Array>();
-  const tilePromises: Promise<void>[] = [];
+  const tileKeys: { key: string; tx: number; ty: number }[] = [];
   let failedCount = 0;
+  let totalTiles = 0;
 
   for (let ty = minTy; ty <= maxTy; ty++) {
     for (let tx = minTx; tx <= maxTx; tx++) {
-      const key = `${zoom}/${tx}/${ty}`;
-      tilePromises.push(
+      tileKeys.push({ key: `${zoom}/${tx}/${ty}`, tx, ty });
+      totalTiles++;
+    }
+  }
+
+  const tileTasks = tileKeys.map(
+    ({ key, tx, ty }) =>
+      () =>
         getTileData(zoom, tx, ty, signal)
           .then((data) => {
             tileCache.set(key, data);
@@ -161,13 +232,11 @@ export async function fetchTerrain(
             const fallback = new Float32Array(TILE_SIZE * TILE_SIZE);
             tileCache.set(key, fallback);
           }),
-      );
-    }
-  }
+  );
 
-  await Promise.all(tilePromises);
+  await runWithConcurrency(tileTasks, MAX_CONCURRENCY);
 
-  if (failedCount > 0 && failedCount === tilePromises.length) {
+  if (failedCount > 0 && failedCount === totalTiles) {
     throw new Error("All terrain tiles failed to load");
   }
 

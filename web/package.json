@@ -13,10 +13,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "gifenc": "^1.0.3",
     "maplibre-gl": "^5.24.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "simplex-noise": "^4.0.3"
+    "simplex-noise": "^4.0.3",
+    "upng-js": "^2.1.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",

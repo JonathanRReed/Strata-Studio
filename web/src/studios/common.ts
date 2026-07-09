@@ -78,6 +78,7 @@ export function applyFeatureInfluence(
   v: number,
   masks: FeatureMasks | undefined,
   params: StyleParams,
+  strataType?: "building" | "road" | "water",
 ): FeatureInfluenceResult {
   if (!masks) return { displacement, glow: false, break_: false };
 
@@ -90,7 +91,8 @@ export function applyFeatureInfluence(
     const strength = (influence / 100) * val;
     switch (mode) {
       case "interrupt":
-        if (val > 0.3) break_ = true;
+        // Threshold scales with influence: higher influence = wider gaps.
+        if (val > 1 - influence / 150) break_ = true;
         break;
       case "amplify":
         d += d * strength * 0.75;
@@ -99,14 +101,27 @@ export function applyFeatureInfluence(
         d *= 1 - Math.abs(strength);
         break;
       case "glow":
-        glow = true;
+        // Glow intensity scales with influence.
+        if (influence > 0) glow = true;
         break;
     }
   };
 
-  apply(sampleMask(masks.building, masks.width, masks.height, u, v), params.buildingInfluence, params.buildingMode);
-  apply(sampleMask(masks.road, masks.width, masks.height, u, v), params.roadInfluence, params.roadMode);
-  apply(sampleMask(masks.water, masks.width, masks.height, u, v), params.waterInfluence, params.waterMode);
+  // When strataType is specified (feature-line styles), only apply the mask(s)
+  // relevant to that feature type. When undefined (terrain-based styles),
+  // apply all masks so the terrain responds to all features.
+  if (!strataType || strataType === "building") {
+    apply(sampleMask(masks.building, masks.width, masks.height, u, v), params.buildingInfluence, params.buildingMode);
+  }
+  if (!strataType || strataType === "road") {
+    apply(sampleMask(masks.road, masks.width, masks.height, u, v), params.roadInfluence, params.roadMode);
+  }
+  if (!strataType || strataType === "water") {
+    apply(sampleMask(masks.ocean, masks.width, masks.height, u, v), params.oceanInfluence, params.oceanMode);
+    apply(sampleMask(masks.lake, masks.width, masks.height, u, v), params.lakeInfluence, params.lakeMode);
+    apply(sampleMask(masks.river, masks.width, masks.height, u, v), params.riverInfluence, params.riverMode);
+    apply(sampleMask(masks.water, masks.width, masks.height, u, v), params.waterInfluence, params.waterMode);
+  }
 
   return { displacement: d, glow, break_ };
 }
@@ -127,6 +142,63 @@ export function glowRuns(
   }
   if (current.length > 0) runs.push(current);
   return runs.filter((r) => r.length > 1);
+}
+
+/**
+ * Processes a polyline through feature influence, splitting it at interrupt
+ * points and marking glow segments. Returns an array of strokes (one per
+ * contiguous segment). Uses displacement=1 so amplify/flatten modes produce
+ * a modulate factor that can scale width/opacity.
+ */
+export function applyInfluenceToLine(
+  points: ScenePoint[],
+  width: number,
+  height: number,
+  masks: FeatureMasks | undefined,
+  params: StyleParams,
+  baseWidth: number,
+  baseOpacity: number,
+  role: StrokeRole,
+  closed = false,
+  strataType?: "building" | "road" | "water",
+): Stroke[] {
+  if (!masks) return [{ points, width: baseWidth, opacity: baseOpacity, role, closed: closed || undefined }];
+
+  const strokes: Stroke[] = [];
+  let current: ScenePoint[] = [];
+  let currentGlow = false;
+  let hadBreak = false;
+
+  const flush = () => {
+    if (current.length > 1) {
+      strokes.push({
+        points: current,
+        role: currentGlow ? "accent" : role,
+        width: baseWidth,
+        opacity: baseOpacity,
+        glow: currentGlow || undefined,
+        closed: !hadBreak && closed ? true : undefined,
+      });
+    }
+    current = [];
+    currentGlow = false;
+  };
+
+  for (const p of points) {
+    const u = p.x / (width - 1 || 1);
+    const v = p.y / (height - 1 || 1);
+    // Only apply masks relevant to this line's feature type
+    const res = applyFeatureInfluence(1, u, v, masks, params, strataType);
+    if (res.break_) {
+      hadBreak = true;
+      flush();
+      continue;
+    }
+    if (res.glow) currentGlow = true;
+    current.push(p);
+  }
+  flush();
+  return strokes;
 }
 
 function geometryToLines(

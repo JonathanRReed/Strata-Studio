@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Palette } from "../engine/types.ts";
 import { isCustomPaletteId } from "../presets/customPalettes.ts";
 import { defaultPalette } from "../presets/palettes.ts";
@@ -180,12 +180,28 @@ export function PalettePicker({
 }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const editingIdRef = useRef<string | null>(null);
 
   const selectedPalette = allPalettes[selectedId] ?? allPalettes[defaultPalette];
   const selectedName = allPaletteNames[selectedId] ?? selectedId;
   const isEditingCustom = isCustomPaletteId(selectedId);
   const baseId = isEditingCustom ? selectedId : null;
   const baseName = isEditingCustom ? selectedName : `${selectedName} (custom)`;
+
+  // Track which custom palette id the editor is currently editing.
+  if (isOpen && baseId) {
+    editingIdRef.current = baseId;
+  } else if (!isOpen) {
+    editingIdRef.current = null;
+  }
+
+  // Close the editor if the custom palette it was editing is deleted.
+  useEffect(() => {
+    if (isOpen && editingIdRef.current && !allPalettes[editingIdRef.current]) {
+      setIsOpen(false);
+      editingIdRef.current = null;
+    }
+  }, [isOpen, allPalettes]);
 
   return (
     <div className="flex flex-col gap-3">

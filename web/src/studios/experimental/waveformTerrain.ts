@@ -1,6 +1,6 @@
 import type { ArtStyle, ArtworkInput, StyleParams, ControlKey } from "../../engine/types.ts";
 import type { Scene, Stroke } from "../../engine/scene.ts";
-import { createNoise } from "../../engine/noise.ts";
+import { createAnimatedNoise } from "../../engine/noise.ts";
 import { clamp } from "../../engine/grid.ts";
 import {
   elevationSampler,
@@ -21,7 +21,9 @@ export function generateRows(input: ArtworkInput, params: StyleParams): Waveform
   const { width, height, masks } = input;
   const sample = elevationSampler(input);
 
-  const noise = createNoise(params.seed, 4, 0.5);
+  // Use animated noise (phase defaults to 0, making it equivalent to createNoise)
+  const phase = params.phase ?? 0;
+  const noise = createAnimatedNoise(params.seed, 4, 0.5);
   const noiseStrength = params.noise * params.amplitude;
 
   const rowStep = params.spacing / clamp(params.compression, 0.5, 5);
@@ -38,7 +40,9 @@ export function generateRows(input: ArtworkInput, params: StyleParams): Waveform
     for (let x = 0; x < width; x += xStep) {
       const u = x / (width - 1 || 1);
       const elevation = sample(u, v);
-      const n = noise(u * NOISE_SCALE, v * NOISE_SCALE);
+      const n = phase > 0
+        ? noise(u * NOISE_SCALE, v * NOISE_SCALE, phase)
+        : noise(u * NOISE_SCALE, v * NOISE_SCALE);
       const displacement = -params.amplitude * elevation + noiseStrength * n;
       const result = applyFeatureInfluence(displacement, u, v, masks, params);
 
@@ -106,6 +110,7 @@ export const waveformTerrain: ArtStyle = {
     "amplitude", "spacing", "lineWidth", "noise", "detail", "compression",
     "occlusion", "grain", "rotation", "label", "aspectRatio", "seed", "palette",
     "buildingInfluence", "roadInfluence", "waterInfluence",
+    "oceanInfluence", "lakeInfluence", "riverInfluence",
   ] as ControlKey[],
   generate: (input, params) => rowsToScene(generateRows(input, params), params, input.height),
 };
