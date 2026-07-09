@@ -457,11 +457,19 @@ export default function App() {
       if (controller.signal.aborted) return;
       setFeatures(collected);
       const counts = { building: 0, road: 0, water: 0 };
+      const waterCounts = { ocean: 0, lake: 0, river: 0 };
       for (const f of collected.features) {
         counts[f.properties.strataType]++;
+        if (f.properties.strataType === "water") {
+          waterCounts[f.properties.waterType ?? "lake"]++;
+        }
       }
+      const waterDetail =
+        counts.water > 0
+          ? ` (${waterCounts.lake} lakes, ${waterCounts.river} rivers${waterCounts.ocean > 0 ? `, ${waterCounts.ocean} coastlines` : ""})`
+          : "";
       setFeatureInfo(
-        `Loaded ${counts.building} buildings, ${counts.road} roads, ${counts.water} water features`,
+        `Loaded ${counts.building} buildings, ${counts.road} roads, ${counts.water} water features${waterDetail}`,
       );
 
       setWarning(

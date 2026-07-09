@@ -10,6 +10,7 @@ import { hashSeed, createSeededNoise, createNoise } from "./noise.ts";
 import {
   buildOverpassQuery,
   classifyFeature,
+  classifyWaterType,
   overpassToGeoJSON,
   bboxAreaKm2,
   isBboxSmallEnough,
@@ -91,6 +92,21 @@ describe("buildOverpassQuery", () => {
     expect(query).toContain("building");
     expect(query).toContain("highway");
     expect(query).toContain("water");
+    expect(query).toContain('way["natural"="coastline"]');
+    expect(query).toContain('relation["natural"="water"]');
+    expect(query).toContain('relation["waterway"]');
+  });
+});
+
+describe("classifyWaterType", () => {
+  it("classifies ocean, river, and lake water", () => {
+    expect(classifyWaterType({ natural: "coastline" })).toBe("ocean");
+    expect(classifyWaterType({ natural: "water", water: "river" })).toBe("river");
+    expect(classifyWaterType({ waterway: "stream" })).toBe("river");
+    expect(classifyWaterType({ waterway: "riverbank" })).toBe("river");
+    expect(classifyWaterType({ natural: "water", water: "lake" })).toBe("lake");
+    expect(classifyWaterType({ natural: "water" })).toBe("lake");
+    expect(classifyWaterType({ building: "yes" })).toBeUndefined();
   });
 });
 
@@ -120,6 +136,57 @@ describe("overpassToGeoJSON", () => {
     expect(result.features.length).toBe(1);
     expect(result.features[0].properties.strataType).toBe("road");
     expect(result.features[0].geometry.type).toBe("LineString");
+  });
+
+  it("assembles water multipolygon relations from open member ways", () => {
+    const result = overpassToGeoJSON({
+      elements: [
+        { type: "node", id: 1, lat: 0, lon: 0 },
+        { type: "node", id: 2, lat: 0, lon: 1 },
+        { type: "node", id: 3, lat: 1, lon: 1 },
+        { type: "node", id: 4, lat: 1, lon: 0 },
+        { type: "way", id: 10, nodes: [1, 2, 3] },
+        { type: "way", id: 11, nodes: [3, 4, 1] },
+        {
+          type: "relation",
+          id: 100,
+          members: [
+            { type: "way", ref: 10, role: "outer" },
+            { type: "way", ref: 11, role: "outer" },
+          ],
+          tags: { type: "multipolygon", natural: "water", water: "lake" },
+        },
+      ],
+    });
+
+    expect(result.features.length).toBe(1);
+    const feature = result.features[0];
+    expect(feature.geometry.type).toBe("Polygon");
+    expect(feature.properties.strataType).toBe("water");
+    expect(feature.properties.waterType).toBe("lake");
+    if (feature.geometry.type === "Polygon") {
+      expect(feature.geometry.coordinates[0].length).toBe(5);
+    }
+  });
+
+  it("chains coastline ways into a single merged linestring tagged as ocean", () => {
+    const result = overpassToGeoJSON({
+      elements: [
+        { type: "node", id: 1, lat: 0, lon: 0 },
+        { type: "node", id: 2, lat: 0.5, lon: 0.5 },
+        { type: "node", id: 3, lat: 1, lon: 1 },
+        { type: "way", id: 20, nodes: [1, 2], tags: { natural: "coastline" } },
+        { type: "way", id: 21, nodes: [2, 3], tags: { natural: "coastline" } },
+      ],
+    });
+
+    expect(result.features.length).toBe(1);
+    const feature = result.features[0];
+    expect(feature.geometry.type).toBe("LineString");
+    expect(feature.properties.waterType).toBe("ocean");
+    if (feature.geometry.type === "LineString") {
+      expect(feature.geometry.coordinates.length).toBe(3);
+    }
   });
 });
 
@@ -241,6 +308,9 @@ describe("waveformTerrain", () => {
       building: new Float32Array(16),
       road: new Float32Array(16).fill(1),
       water: new Float32Array(16),
+      ocean: new Float32Array(16),
+      lake: new Float32Array(16),
+      river: new Float32Array(16),
     };
     const base = {
       ...defaultStyleParams,

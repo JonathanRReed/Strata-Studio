@@ -3,9 +3,18 @@ import { hashSeed } from "./noise.ts";
 
 export type ScenePoint = { x: number; y: number };
 
+export type StrokeRole =
+  | "foreground"
+  | "accent"
+  | "background"
+  | "water"
+  | "ocean"
+  | "lake"
+  | "river";
+
 export type Stroke = {
   points: ScenePoint[];
-  role?: "foreground" | "accent" | "background";
+  role?: StrokeRole;
   width?: number;
   glow?: boolean;
   closed?: boolean;
@@ -27,9 +36,23 @@ function mulberry32(seed: number) {
 }
 
 function strokeColor(stroke: Stroke, palette: Palette): string {
-  if (stroke.role === "accent") return palette.accent;
-  if (stroke.role === "background") return palette.background;
-  return palette.foreground;
+  const waterFallback = palette.water ?? palette.accent;
+  switch (stroke.role) {
+    case "accent":
+      return palette.accent;
+    case "background":
+      return palette.background;
+    case "water":
+      return waterFallback;
+    case "ocean":
+      return palette.ocean ?? waterFallback;
+    case "lake":
+      return palette.lake ?? waterFallback;
+    case "river":
+      return palette.river ?? waterFallback;
+    default:
+      return palette.foreground;
+  }
 }
 
 export function renderSceneCanvas(

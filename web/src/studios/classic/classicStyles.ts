@@ -1,5 +1,5 @@
 import type { ArtStyle, ArtworkInput, StyleParams, ControlKey } from "../../engine/types.ts";
-import type { ScenePoint, Stroke } from "../../engine/scene.ts";
+import type { ScenePoint, Stroke, StrokeRole } from "../../engine/scene.ts";
 import { createNoise } from "../../engine/noise.ts";
 import { clamp } from "../../engine/grid.ts";
 import { marchingSquares, smoothLine } from "../../engine/contours.ts";
@@ -7,6 +7,7 @@ import {
   elevationSampler,
   elevationGradient,
   featureLines,
+  waterRole,
   densify,
   createRng,
 } from "../common.ts";
@@ -126,7 +127,7 @@ export const flow: ArtStyle = {
       if (line.strataType === "building") continue;
       strokes.push({
         points: densify(line.points, 6),
-        role: line.strataType === "water" ? "accent" : "foreground",
+        role: line.strataType === "water" ? waterRole(line) : "foreground",
         width: params.lineWidth * 1.5,
       });
     }
@@ -176,6 +177,8 @@ export const blueprint: ArtStyle = {
     for (const line of featureLines(input.features, input.bounds, width, height)) {
       if (line.strataType === "building") {
         strokes.push({ points: line.points, role: "accent", width: 0.7, closed: line.closed, opacity: 0.9 });
+      } else if (line.strataType === "water") {
+        strokes.push({ points: line.points, role: waterRole(line), width: params.lineWidth, opacity: 0.85, closed: line.closed });
       } else {
         strokes.push({ points: line.points, role: "foreground", width: params.lineWidth, opacity: 0.8 });
       }
@@ -271,14 +274,14 @@ export const drift: ArtStyle = {
     const echoes = Math.round(clamp(params.amplitude / 8, 2, 8));
 
     const lines = featureLines(input.features, input.bounds, width, height);
-    const source: { points: ScenePoint[]; role: "foreground" | "accent" }[] = [];
+    const source: { points: ScenePoint[]; role: StrokeRole }[] = [];
 
     if (lines.length > 0) {
       for (const line of lines) {
         if (line.strataType === "building") continue;
         source.push({
           points: densify(line.points, 8),
-          role: line.strataType === "water" ? "accent" : "foreground",
+          role: line.strataType === "water" ? waterRole(line) : "foreground",
         });
       }
     }
@@ -341,7 +344,7 @@ export const signal: ArtStyle = {
         if (line.strataType === "building") {
           strokes.push({ points: line.points, role: "foreground", width: 0.6, closed: line.closed, opacity: 0.45 });
         } else if (line.strataType === "water") {
-          strokes.push({ points: line.points, role: "accent", width: params.lineWidth, opacity: 0.6, closed: line.closed });
+          strokes.push({ points: line.points, role: waterRole(line), width: params.lineWidth, opacity: 0.6, closed: line.closed });
         }
       }
     } else {

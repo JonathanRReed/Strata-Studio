@@ -16,7 +16,14 @@ export type Palette = {
   background: string;
   foreground: string;
   accent: string;
+  /** Generic water color; falls back to accent when missing. */
+  water?: string;
+  ocean?: string;
+  lake?: string;
+  river?: string;
 };
+
+export type WaterType = "ocean" | "lake" | "river";
 
 export type MaskMode = "interrupt" | "amplify" | "flatten" | "glow";
 
@@ -49,13 +56,21 @@ export type FeatureMasks = {
   height: number;
   building: Float32Array;
   road: Float32Array;
+  /** Combined water mask (max of ocean/lake/river). */
   water: Float32Array;
+  ocean: Float32Array;
+  lake: Float32Array;
+  river: Float32Array;
 };
 
 export type GeoFeature = {
   type: "Feature";
   geometry: GeoGeometry;
-  properties: { strataType: "building" | "road" | "water"; [k: string]: unknown };
+  properties: {
+    strataType: "building" | "road" | "water";
+    waterType?: WaterType;
+    [k: string]: unknown;
+  };
 };
 
 export type GeoFeatureCollection = {

@@ -6,8 +6,9 @@ import type {
   GeoFeatureCollection,
   GeoBounds,
   GeoGeometry,
+  WaterType,
 } from "../engine/types.ts";
-import type { ScenePoint, Stroke } from "../engine/scene.ts";
+import type { ScenePoint, Stroke, StrokeRole } from "../engine/scene.ts";
 import { sampleMask, normalizeGrid, clamp } from "../engine/grid.ts";
 import { projectGeoPoint } from "../engine/grid.ts";
 import { hashSeed } from "../engine/noise.ts";
@@ -155,7 +156,13 @@ export type FeatureLine = {
   points: ScenePoint[];
   closed: boolean;
   strataType: "building" | "road" | "water";
+  waterType?: WaterType;
 };
+
+/** Scene stroke role for a water feature line: per-type when known. */
+export function waterRole(line: FeatureLine): StrokeRole {
+  return line.waterType ?? "water";
+}
 
 /** Projects OSM features into canvas-space polylines. */
 export function featureLines(
@@ -169,7 +176,11 @@ export function featureLines(
   for (const f of features.features) {
     for (const line of geometryToLines(f.geometry, bounds, width, height)) {
       if (line.points.length > 1) {
-        out.push({ ...line, strataType: f.properties.strataType });
+        out.push({
+          ...line,
+          strataType: f.properties.strataType,
+          waterType: f.properties.waterType,
+        });
       }
     }
   }
