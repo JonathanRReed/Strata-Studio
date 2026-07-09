@@ -8,9 +8,10 @@ import { buildFeatureMasks } from "./engine/maskRasterizer.ts";
 import { createOffscreenCanvas, downloadPngWithAttribution, downloadSvgWithAttribution } from "./engine/export.ts";
 import { createNoise } from "./engine/noise.ts";
 import { cropGridToAspect } from "./engine/grid.ts";
-import type { GeoBounds, StyleParams, GeoFeatureCollection, ElevationGrid, AspectRatio } from "./engine/types.ts";
+import type { GeoBounds, StyleParams, GeoFeatureCollection, ElevationGrid, AspectRatio, Palette } from "./engine/types.ts";
 import { applyPreset, defaultStyleParams, presets, type Preset } from "./presets/stylePresets.ts";
-import { palettes } from "./presets/palettes.ts";
+import { palettes, paletteNames, defaultPalette } from "./presets/palettes.ts";
+import { loadCustomPalettes, saveCustomPalettes } from "./presets/customPalettes.ts";
 
 const MapSelector = lazy(() => import("./components/MapSelector.tsx"));
 
@@ -77,7 +78,12 @@ function parseUrlParams(): UrlState {
   }
   if (style && stylesById[style]) result.styleId = style;
   if (seed) result.seed = seed;
-  if (palette && palettes[palette]) result.palette = palette;
+  if (palette) {
+    const customPalettes = loadCustomPalettes();
+    if (palettes[palette] || customPalettes[palette]) {
+      result.palette = palette;
+    }
+  }
   return result;
 }
 
@@ -171,6 +177,25 @@ export default function App() {
   const [mapZoom, setMapZoom] = useState(urlParams.current.z ?? 11);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [terrainInfo, setTerrainInfo] = useState<string | null>(null);
+  const [customPalettes, setCustomPalettes] = useState<Record<string, { name: string; palette: Palette }>>(
+    () => loadCustomPalettes(),
+  );
+
+  const allPalettes = useMemo<Record<string, Palette>>(
+    () => ({
+      ...palettes,
+      ...Object.fromEntries(Object.entries(customPalettes).map(([id, v]) => [id, v.palette])),
+    }),
+    [customPalettes],
+  );
+
+  const allPaletteNames = useMemo<Record<string, string>>(
+    () => ({
+      ...paletteNames,
+      ...Object.fromEntries(Object.entries(customPalettes).map(([id, v]) => [id, v.name])),
+    }),
+    [customPalettes],
+  );
 
   const masks = useMemo(() => {
     if (!features || !grid) return undefined;
@@ -204,9 +229,10 @@ export default function App() {
           seed: params.seed,
         },
         params,
+        allPalettes,
       );
     },
-    [grid, features, masks, params, styleId],
+    [grid, features, masks, params, styleId, allPalettes],
   );
 
   // Debounced live preview when params/style/features change
@@ -265,6 +291,28 @@ export default function App() {
     setParams(applyPreset(preset, getStyle(preset.styleId).defaultParams));
   }, []);
 
+  const handleSavePalette = useCallback((id: string, name: string, palette: Palette) => {
+    setCustomPalettes((prev) => {
+      const next = { ...prev, [id]: { name, palette } };
+      saveCustomPalettes(next);
+      return next;
+    });
+    if (params.palette !== id) {
+      setParams((prev) => ({ ...prev, palette: id }));
+    }
+  }, [params.palette]);
+
+  const handleDeletePalette = useCallback((id: string) => {
+    setCustomPalettes((prev) => {
+      const { [id]: _, ...next } = prev;
+      saveCustomPalettes(next);
+      return next;
+    });
+    if (params.palette === id) {
+      setParams((prev) => ({ ...prev, palette: defaultPalette }));
+    }
+  }, [params.palette]);
+
   const handleGenerate = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -288,6 +336,7 @@ export default function App() {
           seed: params.seed,
         },
         params,
+        allPalettes,
       );
     }
 
@@ -323,6 +372,7 @@ export default function App() {
             seed: params.seed,
           },
           params,
+          allPalettes,
         );
       }
       setHasGenerated(true);
@@ -372,7 +422,7 @@ export default function App() {
     return { width: Math.round((size * ratio.w) / ratio.h), height: size };
   };
 
-  const backgroundColor = (palettes[params.palette] || palettes.monochrome).background;
+  const backgroundColor = (allPalettes[params.palette] ?? allPalettes[defaultPalette]).background;
 
   const prepareExportInput = async (width: number, height: number, signal?: AbortSignal) => {
     const squareGrid = await fetchTerrain(bounds, Math.max(width, height), signal);
@@ -401,7 +451,7 @@ export default function App() {
       const { width, height } = getExportDimensions(size);
       const input = await prepareExportInput(width, height);
       const { canvas, ctx } = createOffscreenCanvas(width, height);
-      renderStyleCanvas(styleId, ctx, input, params);
+      renderStyleCanvas(styleId, ctx, input, params, allPalettes);
       const attribution = `Map data © ${OSM_ATTRIBUTION} | ${TERRAIN_ATTRIBUTION}`;
       downloadPngWithAttribution(
         canvas,
@@ -422,7 +472,7 @@ export default function App() {
     try {
       const { width, height } = getExportDimensions(size);
       const input = await prepareExportInput(width, height);
-      const svg = renderStyleSvg(styleId, input, params);
+      const svg = renderStyleSvg(styleId, input, params, allPalettes);
       const attribution = `Map data © ${OSM_ATTRIBUTION} | ${TERRAIN_ATTRIBUTION}`;
       downloadSvgWithAttribution(
         svg,
@@ -532,6 +582,10 @@ export default function App() {
         featureInfo={featureInfo}
         hasFeatures={!!features}
         osmAreaHint={!isBboxSmallEnough(bounds) ? `Area is ${bboxAreaKm2(bounds).toFixed(1)} km² — zoom in to under 25 km² to fetch OSM features` : null}
+        allPalettes={allPalettes}
+        allPaletteNames={allPaletteNames}
+        onSavePalette={handleSavePalette}
+        onDeletePalette={handleDeletePalette}
       />
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-4 p-4">

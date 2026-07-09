@@ -1,4 +1,4 @@
-import type { ArtStyle, ArtworkInput, StyleParams, Studio } from "../engine/types.ts";
+import type { ArtStyle, ArtworkInput, Palette, StyleParams, Studio } from "../engine/types.ts";
 import { renderSceneCanvas, sceneToSvg } from "../engine/scene.ts";
 import { palettes } from "../presets/palettes.ts";
 import { classicStyles } from "./classic/classicStyles.ts";
@@ -48,10 +48,11 @@ export function renderStyleCanvas(
   ctx: CanvasRenderingContext2D,
   input: ArtworkInput,
   params: StyleParams,
+  paletteMap: Record<string, Palette> = palettes,
 ): void {
   const style = getStyle(styleId);
   const scene = style.generate(input, params);
-  const palette = palettes[params.palette] || palettes.monochrome;
+  const palette = paletteMap[params.palette] ?? palettes.monochrome;
   renderSceneCanvas(ctx, scene, params, palette, input.width, input.height);
 }
 
@@ -59,10 +60,11 @@ export function renderStyleSvg(
   styleId: string,
   input: ArtworkInput,
   params: StyleParams,
+  paletteMap: Record<string, Palette> = palettes,
 ): string {
   const style = getStyle(styleId);
   const scene = style.generate(input, params);
-  const palette = palettes[params.palette] || palettes.monochrome;
+  const palette = paletteMap[params.palette] ?? palettes.monochrome;
   return sceneToSvg(scene, params, palette, input.width, input.height);
 }
 

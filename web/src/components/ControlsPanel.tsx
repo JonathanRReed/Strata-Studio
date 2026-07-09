@@ -1,8 +1,8 @@
 import { useState } from "react";
-import type { StyleParams, MaskMode, AspectRatio, Studio, ControlKey } from "../engine/types.ts";
+import type { Palette, StyleParams, MaskMode, AspectRatio, Studio, ControlKey } from "../engine/types.ts";
 import { presets, type Preset } from "../presets/stylePresets.ts";
-import { palettes, paletteNames } from "../presets/palettes.ts";
 import { stylesByStudio, getStyle } from "../studios/registry.ts";
+import { PalettePicker } from "./PalettePicker.tsx";
 
 type Props = {
   params: StyleParams;
@@ -22,6 +22,10 @@ type Props = {
   featureInfo: string | null;
   hasFeatures: boolean;
   osmAreaHint?: string | null;
+  allPalettes: Record<string, Palette>;
+  allPaletteNames: Record<string, string>;
+  onSavePalette: (id: string, name: string, palette: Palette) => void;
+  onDeletePalette: (id: string) => void;
 };
 
 function Slider({
@@ -104,6 +108,10 @@ export function ControlsPanel({
   featureInfo,
   hasFeatures,
   osmAreaHint,
+  allPalettes,
+  allPaletteNames,
+  onSavePalette,
+  onDeletePalette,
 }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const update = (patch: Partial<StyleParams>) => {
@@ -288,10 +296,9 @@ export function ControlsPanel({
         </div>
         )}
 
-        {hasFeatureControls && (
         <div className="flex flex-col gap-3">
           <span className="text-xs font-medium uppercase tracking-wider text-white/40">
-            Feature influence
+            {hasFeatureControls ? "Feature influence" : "Map features"}
           </span>
           <button
             type="button"
@@ -312,6 +319,7 @@ export function ControlsPanel({
             <p className="text-xs text-yellow-400/60">{osmAreaHint}</p>
           )}
 
+          {hasFeatureControls && (
           <div className="flex flex-col gap-3 pl-2 border-l border-white/10">
             {controls.has("buildingInfluence") && (
               <>
@@ -365,8 +373,8 @@ export function ControlsPanel({
               </>
             )}
           </div>
+          )}
         </div>
-        )}
 
         <div className="flex flex-col gap-3">
           <span className="text-xs font-medium uppercase tracking-wider text-white/40">
@@ -451,20 +459,14 @@ export function ControlsPanel({
             </div>
           </label>
 
-          <label className="flex flex-col gap-1.5 text-sm text-white/80">
-            Palette
-            <select
-              value={params.palette}
-              onChange={(e) => update({ palette: e.target.value })}
-              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm outline-none focus:border-white/30"
-            >
-              {Object.keys(palettes).map((key) => (
-                <option key={key} value={key} className="bg-neutral-900">
-                  {paletteNames[key] ?? key}
-                </option>
-              ))}
-            </select>
-          </label>
+          <PalettePicker
+            selectedId={params.palette}
+            allPalettes={allPalettes}
+            allPaletteNames={allPaletteNames}
+            onSelect={(palette) => update({ palette })}
+            onSavePalette={onSavePalette}
+            onDeletePalette={onDeletePalette}
+          />
         </div>
 
         <div className="flex flex-col gap-2 mt-auto">
