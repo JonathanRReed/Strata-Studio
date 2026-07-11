@@ -13,8 +13,9 @@ import {
   applyFeatureInfluence,
   applyInfluenceToLine,
   glowRuns,
+  rowsToScene,
 } from "../common.ts";
-import { generateRows, rowsToScene } from "../experimental/waveformTerrain.ts";
+import { generateRows } from "../experimental/waveformTerrain.ts";
 
 function contourLines(
   input: ArtworkInput,
@@ -240,7 +241,7 @@ export const woodcut: ArtStyle = {
     for (let baseY = 0; baseY < height; baseY += rowStep) {
       flip = !flip;
       const v = baseY / (height - 1 || 1);
-      let segment: { x: number; y: number; glow: boolean }[] = [];
+      let segment: { x: number; y: number; glow: boolean; glowStrength: number }[] = [];
       let segElev = 0;
       const flush = () => {
         if (segment.length > 1) {
@@ -250,7 +251,7 @@ export const woodcut: ArtStyle = {
             width: params.lineWidth * (0.5 + segElev * 1.2),
           });
           for (const run of glowRuns(segment)) {
-            strokes.push({ points: run, role: "accent", glow: true });
+            strokes.push({ points: run.points, role: "accent", glow: true, opacity: run.strength });
           }
         }
         segment = [];
@@ -273,7 +274,7 @@ export const woodcut: ArtStyle = {
           flush();
           continue;
         }
-        segment.push({ x, y: baseY + res.displacement, glow: res.glow });
+        segment.push({ x, y: baseY + res.displacement, glow: res.glow, glowStrength: res.glowStrength });
         segElev = Math.max(segElev, elev);
       }
       flush();

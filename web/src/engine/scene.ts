@@ -1,4 +1,4 @@
-import type { Palette, StyleParams, FeatureMasks } from "./types.ts";
+import type { ArtworkMeta, Palette, StyleParams, FeatureMasks } from "./types.ts";
 import { hashSeed } from "./noise.ts";
 
 export type ScenePoint = { x: number; y: number };
@@ -74,6 +74,7 @@ function drawWaterUnderlay(
   width: number,
   height: number,
 ): void {
+  if (typeof document === "undefined") return; // DOM-less tests
   const { width: maskW, height: maskH, ocean, lake, river } = masks;
   const canvas = document.createElement("canvas");
   canvas.width = maskW;
@@ -115,6 +116,7 @@ function drawWaterUnderlay(
  * Returns an empty string if no water is present.
  */
 function waterMaskToPng(masks: FeatureMasks, palette: Palette): string {
+  if (typeof document === "undefined") return ""; // DOM-less tests
   const { width: maskW, height: maskH, ocean, lake, river } = masks;
   const canvas = document.createElement("canvas");
   canvas.width = maskW;
@@ -154,6 +156,156 @@ function waterMaskToPng(masks: FeatureMasks, palette: Palette): string {
   return dataUrl.slice(dataUrl.indexOf(",") + 1);
 }
 
+/**
+ * Poster title block layout, in logical (preview) pixels. Both the canvas
+ * and SVG renderers derive their geometry from this single function so the
+ * two outputs stay in parity, and because everything is expressed in logical
+ * units the block scales perfectly with the export transform/viewBox.
+ *
+ * Stack, bottom-up from the artwork's bottom edge:
+ *   line 3 — coordinates + elevation range (small caps-style meta line)
+ *   line 2 — a thin centered rule
+ *   line 1 — the label in letterspaced uppercase
+ */
+export type PosterLayout = {
+  /** Horizontal center of the artwork. */
+  cx: number;
+  titleSize: number;
+  subSize: number;
+  /** Extra advance between title glyphs (px, logical). */
+  titleTracking: number;
+  /** Extra advance between meta-line glyphs (px, logical). */
+  subTracking: number;
+  titleBaseline: number;
+  ruleY: number;
+  subBaseline: number;
+  /** Half the rule's length. */
+  ruleHalf: number;
+  ruleThickness: number;
+};
+
+export function posterLayout(width: number, height: number): PosterLayout {
+  const titleSize = Math.max(13, width * 0.042);
+  const subSize = Math.max(9, width * 0.023);
+  const subBaseline = height - height * 0.058;
+  const ruleY = subBaseline - subSize * 1.9;
+  const titleBaseline = ruleY - titleSize * 0.9;
+  return {
+    cx: width / 2,
+    titleSize,
+    subSize,
+    titleTracking: titleSize * 0.28,
+    subTracking: subSize * 0.12,
+    titleBaseline,
+    ruleY,
+    subBaseline,
+    ruleHalf: width * 0.055,
+    ruleThickness: Math.max(0.6, width * 0.0014),
+  };
+}
+
+const POSTER_TITLE_OPACITY = 0.92;
+const POSTER_RULE_OPACITY = 0.5;
+const POSTER_META_OPACITY = 0.62;
+const POSTER_TITLE_FONT_WEIGHT = 600;
+
+/** Minus sign (U+2212) reads better than a hyphen in the elevation figures. */
+const MINUS = "−";
+
+/**
+ * "37.77°N 122.42°W · ELEV −110–282 M" — center coordinates of the artwork
+ * bounds plus the elevation range of the rendered grid.
+ */
+export function posterMetaLine(meta: ArtworkMeta): string {
+  const lat = (meta.bounds.north + meta.bounds.south) / 2;
+  const lng = (meta.bounds.east + meta.bounds.west) / 2;
+  const latStr = `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"}`;
+  const lngStr = `${Math.abs(lng).toFixed(2)}°${lng >= 0 ? "E" : "W"}`;
+  const fmt = (m: number) => {
+    const r = Math.round(m);
+    return r < 0 ? `${MINUS}${Math.abs(r)}` : `${r}`;
+  };
+  return `${latStr} ${lngStr} · ELEV ${fmt(meta.elevation.min)}–${fmt(meta.elevation.max)} M`;
+}
+
+/**
+ * Draws `text` centered at `cx` with per-glyph tracking. Prefers the native
+ * ctx.letterSpacing (tracking then applies in the same logical space as the
+ * font size, and the canvas transform scales both); falls back to manual
+ * per-character advances via measureText where unsupported. The native path
+ * offsets by tracking/2 because CSS letter-spacing trails the last glyph,
+ * which would otherwise pull the centered text left by half a track.
+ */
+function fillTextTracked(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  cx: number,
+  y: number,
+  tracking: number,
+): void {
+  // Runtime feature detection (letterSpacing shipped in Chrome 99 / Safari
+  // 17.4); typed as optional so older engines fall through to the manual path.
+  const spaced = ctx as CanvasRenderingContext2D & { letterSpacing?: string };
+  if (typeof spaced.letterSpacing === "string") {
+    const prev = spaced.letterSpacing;
+    spaced.letterSpacing = `${tracking}px`;
+    ctx.textAlign = "center";
+    ctx.fillText(text, cx + tracking / 2, y);
+    spaced.letterSpacing = prev;
+    return;
+  }
+  const chars = [...text];
+  const widths = chars.map((ch) => ctx.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0) + tracking * (chars.length - 1);
+  ctx.textAlign = "left";
+  let x = cx - total / 2;
+  for (let i = 0; i < chars.length; i++) {
+    ctx.fillText(chars[i], x, y);
+    x += widths[i] + tracking;
+  }
+}
+
+/**
+ * The poster title block: letterspaced-caps label, a thin rule, and the
+ * coordinates/elevation meta line (when ArtworkMeta is available). Drawn in
+ * logical coordinates under the render transform, so exports scale it
+ * exactly like the artwork.
+ */
+function drawPosterTitleBlock(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  palette: Palette,
+  width: number,
+  height: number,
+  meta?: ArtworkMeta,
+): void {
+  const L = posterLayout(width, height);
+  ctx.fillStyle = palette.foreground;
+
+  ctx.globalAlpha = POSTER_TITLE_OPACITY;
+  ctx.font = `${POSTER_TITLE_FONT_WEIGHT} ${L.titleSize}px sans-serif`;
+  fillTextTracked(ctx, label.toUpperCase(), L.cx, L.titleBaseline, L.titleTracking);
+
+  ctx.globalAlpha = POSTER_RULE_OPACITY;
+  ctx.fillRect(L.cx - L.ruleHalf, L.ruleY - L.ruleThickness / 2, L.ruleHalf * 2, L.ruleThickness);
+
+  if (meta) {
+    ctx.globalAlpha = POSTER_META_OPACITY;
+    ctx.font = `${L.subSize}px sans-serif`;
+    fillTextTracked(ctx, posterMetaLine(meta), L.cx, L.subBaseline, L.subTracking);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Renders a scene onto a canvas of any pixel size. The scene is ALWAYS
+ * generated in logical coordinates (`width`×`height`, preview-sized); the
+ * canvas transform maps logical space onto the full canvas bitmap, so the
+ * same scene renders identically at preview DPR or at poster export sizes —
+ * just sharper. Effects that live in device-pixel space (glow shadowBlur,
+ * grain tile resolution) are multiplied by the derived scale factor so their
+ * logical appearance is resolution-independent.
+ */
 export function renderSceneCanvas(
   ctx: CanvasRenderingContext2D,
   scene: Scene,
@@ -169,6 +321,8 @@ export function renderSceneCanvas(
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const scaleX = ctx.canvas.width / width;
   const scaleY = ctx.canvas.height / height;
+  // Device pixels per logical pixel (axes may differ by rounding; average).
+  const renderScale = (scaleX + scaleY) / 2;
   ctx.scale(scaleX, scaleY);
   if (!transparent) {
     ctx.fillStyle = palette.background;
@@ -177,17 +331,18 @@ export function renderSceneCanvas(
     ctx.clearRect(0, 0, width, height);
   }
 
-  // Water underlay: fill water areas with the palette's water color so they're
-  // visually distinct from land in all styles.
-  if (masks) {
-    drawWaterUnderlay(ctx, masks, palette, width, height);
-  }
-
   ctx.save();
   if (params.rotation !== 0) {
     ctx.translate(width / 2, height / 2);
     ctx.rotate((params.rotation * Math.PI) / 180);
     ctx.translate(-width / 2, -height / 2);
+  }
+
+  // Water underlay: fill water areas with the palette's water color so they're
+  // visually distinct from land in all styles. Drawn inside the rotation
+  // transform so water stays aligned with the rotated strokes.
+  if (masks) {
+    drawWaterUnderlay(ctx, masks, palette, width, height);
   }
 
   ctx.lineJoin = "round";
@@ -205,10 +360,16 @@ export function renderSceneCanvas(
     const color = strokeColor(stroke, palette);
     if (stroke.glow) {
       ctx.shadowColor = color;
-      ctx.shadowBlur = 8;
+      // shadowBlur is not affected by the canvas transform: scale it manually.
+      ctx.shadowBlur = 8 * renderScale;
     } else {
       ctx.shadowBlur = 0;
     }
+    // Background-role strokes are occlusion shapes (they hide strokes behind
+    // them). On a transparent export, painting them in the palette background
+    // would leave opaque blobs — erase to transparency instead.
+    const erase = transparent && stroke.role === "background";
+    if (erase) ctx.globalCompositeOperation = "destination-out";
     if (stroke.fill) {
       ctx.fillStyle = color;
       ctx.fill();
@@ -217,36 +378,51 @@ export function renderSceneCanvas(
       ctx.lineWidth = stroke.width ?? params.lineWidth;
       ctx.stroke();
     }
+    if (erase) ctx.globalCompositeOperation = "source-over";
   }
   ctx.shadowBlur = 0;
   ctx.globalAlpha = 1;
   ctx.restore(); // undo rotation; label stays unrotated
 
   if (params.label) {
-    ctx.font = `${Math.max(12, Math.round(width / 36))}px sans-serif`;
-    ctx.fillStyle = palette.foreground;
-    ctx.globalAlpha = 0.6;
-    ctx.textAlign = "left";
-    ctx.fillText(params.label, 16, height - 16);
-    ctx.globalAlpha = 1;
+    if (params.labelStyle === "poster") {
+      drawPosterTitleBlock(ctx, params.label, palette, width, height, masks?.meta);
+    } else {
+      ctx.font = `${Math.max(12, Math.round(width / 36))}px sans-serif`;
+      ctx.fillStyle = palette.foreground;
+      ctx.globalAlpha = 0.6;
+      ctx.textAlign = "left";
+      ctx.fillText(params.label, 16, height - 16);
+      ctx.globalAlpha = 1;
+    }
   }
 
   if (params.grain > 0) {
-    applyGrain(ctx, params, width, height);
+    applyGrain(ctx, params, width, height, renderScale);
   }
 
   ctx.restore();
 }
 
-function applyGrain(ctx: CanvasRenderingContext2D, params: StyleParams, width: number, height: number): void {
+function applyGrain(
+  ctx: CanvasRenderingContext2D,
+  params: StyleParams,
+  width: number,
+  height: number,
+  scale = 1,
+): void {
   const rng = mulberry32(hashSeed(params.seed + ":grain"));
+  // Tile layout stays in logical pixels (same tiling as the preview), but the
+  // noise is generated at device resolution so exports get per-pixel grain
+  // instead of an upscaled, blurry 128px tile.
   const tileSize = 128;
+  const deviceTile = Math.max(1, Math.round(tileSize * scale));
   const noiseCanvas = document.createElement("canvas");
-  noiseCanvas.width = tileSize;
-  noiseCanvas.height = tileSize;
+  noiseCanvas.width = deviceTile;
+  noiseCanvas.height = deviceTile;
   const noiseCtx = noiseCanvas.getContext("2d");
   if (!noiseCtx) return;
-  const imageData = noiseCtx.createImageData(tileSize, tileSize);
+  const imageData = noiseCtx.createImageData(deviceTile, deviceTile);
   const data = imageData.data;
   for (let i = 0; i < data.length; i += 4) {
     const n = (rng() - 0.5) * params.grain * 60;
@@ -258,7 +434,7 @@ function applyGrain(ctx: CanvasRenderingContext2D, params: StyleParams, width: n
   ctx.globalCompositeOperation = "overlay";
   for (let y = 0; y < height; y += tileSize) {
     for (let x = 0; x < width; x += tileSize) {
-      ctx.drawImage(noiseCanvas, x, y);
+      ctx.drawImage(noiseCanvas, x, y, tileSize, tileSize);
     }
   }
   ctx.globalCompositeOperation = prev;
@@ -282,6 +458,46 @@ function strokeToPath(stroke: Stroke): string {
   return d;
 }
 
+/**
+ * SVG twin of drawPosterTitleBlock: identical layout math (posterLayout),
+ * letter-spacing attributes for the tracking, and the same trailing-space
+ * centering compensation (+tracking/2 with text-anchor="middle").
+ */
+function posterTitleSvg(
+  label: string,
+  palette: Palette,
+  width: number,
+  height: number,
+  meta?: ArtworkMeta,
+): string {
+  const L = posterLayout(width, height);
+  const fg = palette.foreground;
+  const n = (v: number) => +v.toFixed(2);
+  const parts = [
+    `<text x="${n(L.cx + L.titleTracking / 2)}" y="${n(L.titleBaseline)}" text-anchor="middle" font-family="sans-serif" font-weight="${POSTER_TITLE_FONT_WEIGHT}" font-size="${n(L.titleSize)}" letter-spacing="${n(L.titleTracking)}" fill="${fg}" opacity="${POSTER_TITLE_OPACITY}">${escapeXml(label.toUpperCase())}</text>`,
+    `<rect x="${n(L.cx - L.ruleHalf)}" y="${n(L.ruleY - L.ruleThickness / 2)}" width="${n(L.ruleHalf * 2)}" height="${n(L.ruleThickness)}" fill="${fg}" opacity="${POSTER_RULE_OPACITY}"/>`,
+  ];
+  if (meta) {
+    parts.push(
+      `<text x="${n(L.cx + L.subTracking / 2)}" y="${n(L.subBaseline)}" text-anchor="middle" font-family="sans-serif" font-size="${n(L.subSize)}" letter-spacing="${n(L.subTracking)}" fill="${fg}" opacity="${POSTER_META_OPACITY}">${escapeXml(posterMetaLine(meta))}</text>`,
+    );
+  }
+  return `\n  ${parts.join("\n  ")}`;
+}
+
+/**
+ * Serializes a scene to SVG. Geometry is always emitted in logical (preview)
+ * coordinates via the viewBox; pass `exportSize` to set the rendered pixel
+ * size — the vector content scales cleanly, so a 3000px SVG export is the
+ * preview composition exactly, just sharper. Because filter effects (glow,
+ * grain turbulence) are defined in viewBox user units, they scale with the
+ * artwork automatically and need no per-scale correction.
+ *
+ * In transparent mode, background-role occlusion shapes are OMITTED: SVG has
+ * no equivalent of canvas `destination-out` without per-stroke nested masks,
+ * so strokes that the canvas export would erase remain visible here. This is
+ * a documented vector-export limitation.
+ */
 export function sceneToSvg(
   scene: Scene,
   params: StyleParams,
@@ -290,10 +506,12 @@ export function sceneToSvg(
   height: number,
   transparent = false,
   masks?: FeatureMasks,
+  exportSize?: { width: number; height: number },
 ): string {
   const hasGlow = scene.strokes.some((s) => s.glow);
   const paths = scene.strokes
     .filter((s) => s.points.length > 0)
+    .filter((s) => !(transparent && s.role === "background"))
     .map((stroke) => {
       const color = strokeColor(stroke, palette);
       const d = strokeToPath(stroke);
@@ -324,7 +542,9 @@ export function sceneToSvg(
 
   const fontSize = Math.max(12, Math.round(width / 36));
   const label = params.label
-    ? `\n  <text x="16" y="${height - 16}" font-size="${fontSize}" font-family="sans-serif" fill="${palette.foreground}" opacity="0.6">${escapeXml(params.label)}</text>`
+    ? params.labelStyle === "poster"
+      ? posterTitleSvg(params.label, palette, width, height, masks?.meta)
+      : `\n  <text x="16" y="${height - 16}" font-size="${fontSize}" font-family="sans-serif" fill="${palette.foreground}" opacity="0.6">${escapeXml(params.label)}</text>`
     : "";
 
   const grainRect = params.grain > 0
@@ -335,18 +555,25 @@ export function sceneToSvg(
     ? ""
     : `\n  <rect width="${width}" height="${height}" fill="${palette.background}"/>`;
 
-  // Water underlay as an embedded PNG image
+  // Water underlay as an embedded PNG image; lives inside the rotated group
+  // so water stays aligned with the rotated strokes.
   let waterImg = "";
   if (masks) {
     const waterPng = waterMaskToPng(masks, palette);
     if (waterPng) {
-      waterImg = `\n  <image width="${width}" height="${height}" href="data:image/png;base64,${waterPng}"/>`;
+      waterImg = `\n    <image width="${width}" height="${height}" href="data:image/png;base64,${waterPng}"/>`;
     }
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  ${defsXml}${bgRect}${waterImg}
-  <g${rotation}>
+  const outW = exportSize?.width ?? width;
+  const outH = exportSize?.height ?? height;
+  // Export dims are rounded independently per axis, so allow the hairline
+  // non-uniform stretch instead of letterboxing (matches the canvas path).
+  const preserve = exportSize ? ' preserveAspectRatio="none"' : "";
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${width} ${height}"${preserve}>
+  ${defsXml}${bgRect}
+  <g${rotation}>${waterImg}
     ${paths}
   </g>${label}${grainRect}
 </svg>`;

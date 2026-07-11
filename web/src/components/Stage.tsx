@@ -1,0 +1,261 @@
+import { lazy, Suspense, type RefObject } from "react";
+import { Artboard } from "./Artboard.tsx";
+import type { AspectRatio, GeoBounds } from "../engine/types.ts";
+import type { CuratedPlace } from "../data/places.ts";
+import type { FlyToRequest } from "./MapSelector.tsx";
+
+const MapSelector = lazy(() => import("./MapSelector.tsx"));
+
+type Props = {
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+  aspectRatio: AspectRatio;
+  /** Accessible description of the artwork for the canvas role=img. */
+  artworkLabel: string;
+  /** Active palette background; tints the museum wall at ~6% over ground. */
+  wallColor: string;
+  hasArtwork: boolean;
+  isGenerating: boolean;
+  /** Loading pill text while generating ("Loading tiles", "Rendering", retry notes). */
+  statusText: string | null;
+  boundsDirty: boolean;
+  onRegenerate: () => void;
+  seed: string;
+  /** Poster label (auto-filled place name or user text); leads the caption. */
+  label: string;
+  /** Opens the variations overlay (desktop ghost button by the caption). */
+  onOpenVariations: () => void;
+  terrainInfo: string | null;
+  warning: string | null;
+  errorMessage: string | null;
+  onDismissError: () => void;
+  showTerrainRetry: boolean;
+  terrainRetryCount: number;
+  onRetryTerrain: () => void;
+  onCanvasResized: () => void;
+  // Viewfinder wiring
+  bounds: GeoBounds;
+  mapZoom: number;
+  onBoundsChange: (bounds: GeoBounds, zoom: number) => void;
+  initialCenter: [number, number];
+  initialZoom: number;
+  initialBounds: GeoBounds | null;
+  /** Last curated place chosen (chip strip / Surprise Me); highlights its chip. */
+  activePlaceId: string | null;
+  onSelectPlace: (place: CuratedPlace) => void;
+  /** Viewfinder overlay state — owned by App so the mobile sheet can open it. */
+  mapExpanded: boolean;
+  onToggleMapExpand: () => void;
+  /** Imperative fly-to channel (mobile sheet place picks); null = none requested. */
+  mapFlyTo: FlyToRequest | null;
+};
+
+/** Typographic minus for the instrument voice. */
+function minus(value: string): string {
+  return value.replace(/-/g, "−");
+}
+
+/**
+ * Caption plate line: "AMSTERDAM · 52.3700°N 4.9000°E · ELEV −2–18 M · SEED
+ * MONOLITH". The place name (auto-filled or user label) leads when present;
+ * elevation is parsed out of the preformatted terrainInfo string (the
+ * useTerrain hook owns that format); when unavailable the segment is omitted.
+ */
+function formatCaption(
+  bounds: GeoBounds,
+  terrainInfo: string | null,
+  seed: string,
+  label: string,
+): string {
+  const lat = (bounds.north + bounds.south) / 2;
+  const lng = (bounds.east + bounds.west) / 2;
+  const coords = `${Math.abs(lat).toFixed(4)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lng).toFixed(4)}°${lng >= 0 ? "E" : "W"}`;
+  const match = terrainInfo?.match(/Elevation (-?\d+)m – (-?\d+)m/);
+  const elev = match ? `ELEV ${minus(match[1])}–${minus(match[2])} M` : null;
+  return [label.trim() || null, coords, elev, `SEED ${seed}`].filter(Boolean).join(" · ");
+}
+
+const retryButtonClass =
+  "instrument-label flex h-9 items-center rounded-sm border border-alarm/40 px-3 text-alarm transition-colors hover:bg-alarm/10";
+
+/**
+ * The main stage: artwork presented museum-style on a palette-tinted wall,
+ * with the status pill rail top-center, the caption plate under the frame,
+ * and the picture-in-picture map viewfinder (floating on desktop, a static
+ * block above the artboard below lg).
+ */
+export function Stage({
+  canvasRef,
+  aspectRatio,
+  artworkLabel,
+  wallColor,
+  hasArtwork,
+  isGenerating,
+  statusText,
+  boundsDirty,
+  onRegenerate,
+  seed,
+  label,
+  onOpenVariations,
+  terrainInfo,
+  warning,
+  errorMessage,
+  onDismissError,
+  showTerrainRetry,
+  terrainRetryCount,
+  onRetryTerrain,
+  onCanvasResized,
+  bounds,
+  mapZoom,
+  onBoundsChange,
+  initialCenter,
+  initialZoom,
+  initialBounds,
+  activePlaceId,
+  onSelectPlace,
+  mapExpanded,
+  onToggleMapExpand,
+  mapFlyTo,
+}: Props) {
+  const artworkVisible = hasArtwork || isGenerating;
+  // Auto-regeneration owns the happy path (isGenerating covers pending
+  // debounce + fetch), so the stale banner is only the fallback surface —
+  // shown when regeneration failed (error banner owns the message then) or
+  // was suppressed (animation export in progress).
+  const showStale = boundsDirty && hasArtwork && !isGenerating && !errorMessage;
+  const caption = formatCaption(bounds, terrainInfo, seed, label);
+
+  return (
+    <main
+      className="relative flex min-w-0 flex-1 flex-col"
+      style={{ backgroundColor: `color-mix(in srgb, ${wallColor} 6%, var(--color-ground))` }}
+    >
+      {/* Viewfinder — floating PiP at every size: ~120px locator bottom-left on
+          mobile (tap to expand to the fullscreen overlay), 240px instrument at lg. */}
+      <div
+        className={
+          mapExpanded
+            ? "fixed inset-0 z-40 flex bg-ground/60 p-4 sm:p-8 lg:absolute lg:p-[7%]"
+            : "absolute bottom-3 left-3 z-20 h-[120px] w-[120px] border border-hairline-2 bg-surface shadow-[0_12px_32px_rgba(0,0,0,0.5)] max-lg:overflow-hidden max-lg:rounded-sm lg:bottom-6 lg:left-6 lg:h-[240px] lg:w-[240px] lg:shadow-[0_16px_48px_rgba(0,0,0,0.5)] 2xl:h-[300px] 2xl:w-[300px]"
+        }
+        onClick={(e) => {
+          if (mapExpanded && e.target === e.currentTarget) onToggleMapExpand();
+        }}
+      >
+        <div
+          className={
+            mapExpanded
+              ? "h-full w-full border border-hairline-2 bg-surface shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+              : "h-full w-full"
+          }
+        >
+          <Suspense fallback={<div className="h-full w-full bg-surface" />}>
+            <MapSelector
+              onChange={onBoundsChange}
+              initialCenter={initialCenter}
+              initialZoom={initialZoom}
+              initialBounds={initialBounds}
+              bounds={bounds}
+              zoom={mapZoom}
+              expanded={mapExpanded}
+              onToggleExpand={onToggleMapExpand}
+              activePlaceId={activePlaceId}
+              onSelectPlace={onSelectPlace}
+              flyTo={mapFlyTo}
+            />
+          </Suspense>
+        </div>
+      </div>
+
+      {/* Artwork wall. Below lg it fills the stage (viewport minus the sheet's
+          collapsed chrome) so the artwork owns the screen. At lg–2xl the wall
+          reserves a left column for the floating viewfinder so it never
+          occludes the frame or caption; at 2xl+ the artwork is fully centered
+          museum-style and the (larger) viewfinder floats clear of the caption. */}
+      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-[144px] pt-12 lg:h-auto lg:min-h-0 lg:flex-1 lg:pb-8 lg:pl-[296px] lg:pr-10 lg:pt-14 2xl:pl-10">
+        {/* Status pill rail — top-center of the artwork area, so it never
+            covers the stacked viewfinder or the caption plate. */}
+        <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex flex-col items-center gap-2 px-4 lg:top-6">
+          {isGenerating && statusText && (
+            <div className="pointer-events-auto flex min-h-9 items-center rounded-sm border border-hairline bg-surface px-4">
+              <span className="instrument-label status-live text-ink" role="status">
+                {statusText}
+              </span>
+            </div>
+          )}
+          {showStale && (
+            <div className="hatched pointer-events-auto flex items-center gap-3 rounded-sm border border-amber/40 bg-surface p-1.5 pl-4">
+              <span className="instrument-label text-amber">Selection moved — artwork stale</span>
+              <button
+                type="button"
+                onClick={onRegenerate}
+                className="instrument-label flex h-8 items-center rounded-sm bg-amber px-3 text-ground transition-opacity hover:opacity-85"
+              >
+                Regenerate
+              </button>
+            </div>
+          )}
+          {errorMessage && (
+            <div
+              role="alert"
+              className="pointer-events-auto flex w-full max-w-xl flex-col gap-2.5 rounded-sm border border-alarm/40 bg-surface p-3"
+            >
+              <p className="text-[12px] leading-snug text-alarm">{errorMessage}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {showTerrainRetry && (
+                  <button type="button" onClick={onRetryTerrain} className={retryButtonClass}>
+                    Retry{terrainRetryCount > 0 ? ` (${terrainRetryCount})` : ""}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onDismissError}
+                  className="instrument-label flex h-9 items-center rounded-sm border border-hairline-2 px-3 text-ink-muted transition-colors hover:bg-surface-2"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+          {warning && (
+            <div
+              role="status"
+              className="hatched pointer-events-auto flex min-h-9 max-w-xl items-center rounded-sm border border-amber/40 bg-surface px-4 py-1.5"
+            >
+              <span className="text-[12px] leading-snug text-amber">{warning}</span>
+            </div>
+          )}
+        </div>
+        {!artworkVisible && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center">
+            <p className="display text-3xl tracking-[0.06em] text-ink sm:text-4xl">Strata Studio</p>
+            <p className="text-sm text-ink-muted">Real places, rendered like sound.</p>
+          </div>
+        )}
+        <Artboard
+          ref={canvasRef}
+          aspectRatio={aspectRatio}
+          visible={artworkVisible}
+          ariaLabel={artworkLabel}
+          onCanvasResized={onCanvasResized}
+        />
+        <div
+          className={`mt-4 flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 ${
+            artworkVisible ? "" : "invisible"
+          }`}
+        >
+          <p className="instrument-label text-center text-ink-faint">{caption}</p>
+          {/* Variations ghost button — desktop only; the mobile STYLE tab has its own. */}
+          {hasArtwork && (
+            <button
+              type="button"
+              onClick={onOpenVariations}
+              className="instrument-label hidden h-7 items-center rounded-sm border border-hairline px-2.5 text-ink-muted transition-colors hover:border-hairline-2 hover:text-ink lg:flex"
+            >
+              Variations
+            </button>
+          )}
+        </div>
+      </div>
+    </main>
+  );
+}

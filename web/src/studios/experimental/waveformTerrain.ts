@@ -1,21 +1,16 @@
 import type { ArtStyle, ArtworkInput, StyleParams, ControlKey } from "../../engine/types.ts";
-import type { Scene, Stroke } from "../../engine/scene.ts";
 import { createAnimatedNoise } from "../../engine/noise.ts";
-import { clamp } from "../../engine/grid.ts";
 import {
   elevationSampler,
   applyFeatureInfluence,
-  glowRuns,
-  occlusionFill,
+  generateRowSegments,
+  rowsToScene,
+  type WaveformRow,
 } from "../common.ts";
 
 const NOISE_SCALE = 4.0;
-const MAX_ROWS = 500;
 
-export type WaveformRow = {
-  baseY: number;
-  segments: { x: number; y: number; glow: boolean }[][];
-};
+export type { WaveformRow };
 
 export function generateRows(input: ArtworkInput, params: StyleParams): WaveformRow[] {
   const { width, height, masks } = input;
@@ -26,72 +21,20 @@ export function generateRows(input: ArtworkInput, params: StyleParams): Waveform
   const noise = createAnimatedNoise(params.seed, 4, 0.5);
   const noiseStrength = params.noise * params.amplitude;
 
-  const rowStep = params.spacing / clamp(params.compression, 0.5, 5);
-  const xStep = Math.max(1, Math.round((1.1 - clamp(params.detail, 0.1, 1)) * 10));
-
-  const rows: WaveformRow[] = [];
-  let rowCount = 0;
-
-  for (let baseY = 0; baseY < height && rowCount < MAX_ROWS; baseY += rowStep, rowCount++) {
-    const v = baseY / (height - 1 || 1);
-    const segments: { x: number; y: number; glow: boolean }[][] = [];
-    let currentSegment: { x: number; y: number; glow: boolean }[] = [];
-
-    for (let x = 0; x < width; x += xStep) {
-      const u = x / (width - 1 || 1);
-      const elevation = sample(u, v);
-      const n = phase > 0
-        ? noise(u * NOISE_SCALE, v * NOISE_SCALE, phase)
-        : noise(u * NOISE_SCALE, v * NOISE_SCALE);
-      const displacement = -params.amplitude * elevation + noiseStrength * n;
-      const result = applyFeatureInfluence(displacement, u, v, masks, params);
-
-      if (result.break_) {
-        if (currentSegment.length > 0) {
-          segments.push(currentSegment);
-          currentSegment = [];
-        }
-        continue;
-      }
-
-      currentSegment.push({ x, y: baseY + result.displacement, glow: result.glow });
-    }
-
-    if (currentSegment.length > 0) {
-      segments.push(currentSegment);
-    }
-
-    rows.push({ baseY, segments });
-  }
-
-  return rows;
-}
-
-export function rowsToScene(
-  rows: WaveformRow[],
-  params: StyleParams,
-  height: number,
-): Scene {
-  const strokes: Stroke[] = [];
-  const occlude = params.occlusion > 0;
-
-  for (const row of rows) {
-    for (const segment of row.segments) {
-      if (segment.length < 2) continue;
-      if (occlude) {
-        strokes.push({
-          ...occlusionFill(segment, height),
-          opacity: clamp(params.occlusion, 0, 1),
-        });
-      }
-      strokes.push({ points: segment, role: "foreground" });
-      for (const run of glowRuns(segment)) {
-        strokes.push({ points: run, role: "accent", glow: true });
-      }
-    }
-  }
-
-  return { strokes };
+  return generateRowSegments(width, height, params, (u, v, _x, baseY) => {
+    const elevation = sample(u, v);
+    const n = phase > 0
+      ? noise(u * NOISE_SCALE, v * NOISE_SCALE, phase)
+      : noise(u * NOISE_SCALE, v * NOISE_SCALE);
+    const displacement = -params.amplitude * elevation + noiseStrength * n;
+    const result = applyFeatureInfluence(displacement, u, v, masks, params);
+    return {
+      y: baseY + result.displacement,
+      glow: result.glow,
+      glowStrength: result.glowStrength,
+      break_: result.break_,
+    };
+  });
 }
 
 export const waveformTerrain: ArtStyle = {

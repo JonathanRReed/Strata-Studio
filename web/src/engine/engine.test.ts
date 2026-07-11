@@ -21,12 +21,26 @@ import {
   waveformTerrain,
   generateRows,
 } from "../studios/experimental/waveformTerrain.ts";
-import { allStyles, stylesByStudio, renderStyleSvg } from "../studios/registry.ts";
-import { defaultStyleParams } from "../presets/stylePresets.ts";
+import { allStyles, stylesByStudio, renderStyleSvg, validatePresetStyleIds } from "../studios/registry.ts";
+import { defaultStyleParams, presets } from "../presets/stylePresets.ts";
 import { marchingSquares } from "./contours.ts";
 import { animateScene, sceneWithDrawProgress, sceneWithParallax, framePhase, needsRegeneration, needsPostProcess } from "./animation.ts";
-import { applyFeatureInfluence } from "../studios/common.ts";
+import { applyFeatureInfluence, applyInfluenceToLine } from "../studios/common.ts";
 import type { FeatureMasks, StyleParams } from "./types.ts";
+
+function makeMasks(w: number, h: number, fill: Partial<Record<keyof FeatureMasks, number>>): FeatureMasks {
+  const make = (v: number | undefined) => new Float32Array(w * h).fill(v ?? 0);
+  return {
+    width: w,
+    height: h,
+    building: make(fill.building),
+    road: make(fill.road),
+    water: make(fill.water),
+    ocean: make(fill.ocean),
+    lake: make(fill.lake),
+    river: make(fill.river),
+  };
+}
 
 function decodeElevation(r: number, g: number, b: number): number {
   return r * 256 + g + b / 256 - 32768;
@@ -585,6 +599,64 @@ describe("style registry", () => {
     }, "water");
     expect(waterResult.break_).toBe(true);
   });
+
+  it("gravity-well honors the occlusion parameter", () => {
+    const style = allStyles.find((s) => s.id === "gravity-well")!;
+    const params = { ...defaultStyleParams, ...style.defaultParams };
+    const without = style.generate(input, { ...params, occlusion: 0 });
+    const withOcclusion = style.generate(input, { ...params, occlusion: 1 });
+    expect(without.strokes.some((s) => s.fill)).toBe(false);
+    expect(withOcclusion.strokes.some((s) => s.fill && s.role === "background")).toBe(true);
+  });
+
+  it("magnetic-field responds to flatten influence (streamlines stall)", () => {
+    const style = allStyles.find((s) => s.id === "magnetic-field")!;
+    const masks = makeMasks(120, 120, { road: 1 });
+    const params = { ...defaultStyleParams, ...style.defaultParams };
+    const inputWithMasks = { ...input, masks };
+    const totalLength = (scene: ReturnType<typeof style.generate>) =>
+      scene.strokes.reduce((sum, s) => {
+        let len = 0;
+        for (let i = 1; i < s.points.length; i++) {
+          len += Math.hypot(s.points[i].x - s.points[i - 1].x, s.points[i].y - s.points[i - 1].y);
+        }
+        return sum + len;
+      }, 0);
+    const plain = totalLength(style.generate(inputWithMasks, params));
+    const flattened = totalLength(style.generate(inputWithMasks, {
+      ...params,
+      roadInfluence: 100,
+      roadMode: "flatten" as const,
+    }));
+    expect(plain).toBeGreaterThan(0);
+    // Full-strength flatten zeroes the step length: streamlines cannot move
+    // (up to Float32 mask-sampling dust).
+    expect(flattened).toBeLessThan(1e-9);
+  });
+
+  it("terrain-sonogram responds to amplify and flatten influence", () => {
+    const style = allStyles.find((s) => s.id === "terrain-sonogram")!;
+    const masks = makeMasks(120, 120, { road: 1 });
+    const params = { ...defaultStyleParams, ...style.defaultParams };
+    const inputWithMasks = { ...input, masks };
+    const countPoints = (scene: ReturnType<typeof style.generate>) =>
+      scene.strokes.reduce((sum, s) => sum + s.points.length, 0);
+    const plain = countPoints(style.generate(inputWithMasks, params));
+    const amplified = countPoints(style.generate(inputWithMasks, {
+      ...params,
+      roadInfluence: 100,
+      roadMode: "amplify" as const,
+    }));
+    const flattened = style.generate(inputWithMasks, {
+      ...params,
+      roadInfluence: 100,
+      roadMode: "flatten" as const,
+    });
+    // Amplify boosts bar intensity above the cutoff → more visible bars.
+    expect(amplified).toBeGreaterThan(plain);
+    // Full-strength flatten damps every bar below the cutoff.
+    expect(flattened.strokes.length).toBe(0);
+  });
 });
 
 describe("marching squares", () => {
@@ -643,17 +715,36 @@ describe("animated noise", () => {
     expect(a).not.toBe(b);
   });
 
-  it("matches createNoise when phase is 0", () => {
-    const animated = createAnimatedNoise("match-test", 4, 0.5);
-    const regular = createNoise("match-test", 4, 0.5);
-    expect(animated(0.3, 0.7, 0)).toBeCloseTo(regular(0.3, 0.7), 10);
-  });
-
   it("phase 0 matches default (no phase argument)", () => {
     const noise = createAnimatedNoise("loop-test", 4, 0.5);
     const a = noise(0.5, 0.5, 0);
     const b = noise(0.5, 0.5);
     expect(a).toBe(b);
+  });
+
+  it("loops exactly: phase 1 equals phase 0 bit-for-bit", () => {
+    const noise = createAnimatedNoise("loop-exact", 4, 0.5);
+    for (const [x, y] of [[0.5, 0.5], [0.1, 0.9], [3.2, -1.7]]) {
+      expect(noise(x, y, 1)).toBe(noise(x, y, 0));
+      expect(noise(x, y, 2)).toBe(noise(x, y, 0));
+    }
+  });
+
+  it("wraps fractional phases: 1.25 equals 0.25 (continuous preview phase previews the loop)", () => {
+    const noise = createAnimatedNoise("loop-wrap", 4, 0.5);
+    expect(noise(0.5, 0.5, 1.25)).toBe(noise(0.5, 0.5, 0.25));
+    expect(noise(0.5, 0.5, 3.75)).toBe(noise(0.5, 0.5, 0.75));
+  });
+
+  it("stays within [-1, 1] and is deterministic per seed", () => {
+    const a = createAnimatedNoise("det-test", 4, 0.5);
+    const b = createAnimatedNoise("det-test", 4, 0.5);
+    for (const phase of [0, 0.3, 0.6, 0.9]) {
+      const v = a(0.4, 0.8, phase);
+      expect(v).toBe(b(0.4, 0.8, phase));
+      expect(v).toBeGreaterThanOrEqual(-1);
+      expect(v).toBeLessThanOrEqual(1);
+    }
   });
 });
 
@@ -714,20 +805,6 @@ describe("animation engine", () => {
 });
 
 describe("per-type water influence", () => {
-  function makeMasks(w: number, h: number, fill: Partial<Record<keyof FeatureMasks, number>>): FeatureMasks {
-    const make = (v: number | undefined) => new Float32Array(w * h).fill(v ?? 0);
-    return {
-      width: w,
-      height: h,
-      building: make(fill.building),
-      road: make(fill.road),
-      water: make(fill.water),
-      ocean: make(fill.ocean),
-      lake: make(fill.lake),
-      river: make(fill.river),
-    };
-  }
-
   it("ocean influence with flatten mode damps displacement", () => {
     const masks = makeMasks(4, 4, { ocean: 0.8 });
     const params: StyleParams = {
@@ -784,6 +861,55 @@ describe("per-type water influence", () => {
     expect(Math.abs(result.displacement)).toBeLessThan(10);
   });
 
+  it("ocean pixels with both ocean and water influence apply only the ocean influence", () => {
+    // water = max(ocean, lake, river), so an ocean pixel is also a water pixel.
+    const masks = makeMasks(4, 4, { ocean: 1, water: 1 });
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      oceanInfluence: 100,
+      oceanMode: "amplify",
+      waterInfluence: 100,
+      waterMode: "amplify",
+      lakeInfluence: 0,
+      riverInfluence: 0,
+    };
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    // One amplify at strength 1: 10 + 10 * 0.75 = 17.5.
+    // Double application would compound to 30.625.
+    expect(result.displacement).toBeCloseTo(17.5, 10);
+  });
+
+  it("water influence alone covers ocean pixels", () => {
+    const masks = makeMasks(4, 4, { ocean: 1, water: 1 });
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      waterInfluence: 100,
+      waterMode: "amplify",
+      oceanInfluence: 0,
+      lakeInfluence: 0,
+      riverInfluence: 0,
+    };
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    expect(result.displacement).toBeCloseTo(17.5, 10);
+  });
+
+  it("water influence still applies where the active per-type mask is absent", () => {
+    // Ocean influence is set, but this pixel is lake-only: the combined
+    // water influence must still cover it.
+    const masks = makeMasks(4, 4, { lake: 1, water: 1 });
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      oceanInfluence: 100,
+      oceanMode: "flatten",
+      waterInfluence: 100,
+      waterMode: "amplify",
+      lakeInfluence: 0,
+      riverInfluence: 0,
+    };
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    expect(result.displacement).toBeCloseTo(17.5, 10);
+  });
+
   it("zero influence on all types does not modify displacement", () => {
     const masks = makeMasks(4, 4, { ocean: 0.8, lake: 0.8, river: 0.8, water: 0.8 });
     const params: StyleParams = {
@@ -797,6 +923,172 @@ describe("per-type water influence", () => {
     expect(result.displacement).toBe(10);
     expect(result.break_).toBe(false);
     expect(result.glow).toBe(false);
+  });
+});
+
+describe("glow proportionality", () => {
+  it("glow strength scales with influence", () => {
+    const masks = makeMasks(4, 4, { road: 1 });
+    const half = applyFeatureInfluence(10, 0.5, 0.5, masks, {
+      ...defaultStyleParams,
+      roadInfluence: 50,
+      roadMode: "glow",
+    });
+    expect(half.glow).toBe(true);
+    expect(half.glowStrength).toBeCloseTo(0.5, 10);
+    const full = applyFeatureInfluence(10, 0.5, 0.5, masks, {
+      ...defaultStyleParams,
+      roadInfluence: 100,
+      roadMode: "glow",
+    });
+    expect(full.glowStrength).toBeCloseTo(1, 10);
+  });
+
+  it("glow strength scales with mask coverage", () => {
+    const masks = makeMasks(4, 4, { road: 0.4 });
+    const result = applyFeatureInfluence(10, 0.5, 0.5, masks, {
+      ...defaultStyleParams,
+      roadInfluence: 100,
+      roadMode: "glow",
+    });
+    expect(result.glowStrength).toBeCloseTo(0.4, 6);
+  });
+
+  it("applyInfluenceToLine emits accent runs only over glowing sub-segments", () => {
+    // Building mask covering the right half of a 100x100 canvas.
+    const maskW = 100, maskH = 100;
+    const building = new Float32Array(maskW * maskH);
+    for (let y = 0; y < maskH; y++) {
+      for (let x = 50; x < maskW; x++) {
+        building[y * maskW + x] = 1;
+      }
+    }
+    const masks: FeatureMasks = {
+      ...makeMasks(maskW, maskH, {}),
+      building,
+    };
+    const points = Array.from({ length: 100 }, (_, i) => ({ x: i, y: 50 }));
+    const strokes = applyInfluenceToLine(points, 100, 100, masks, {
+      ...defaultStyleParams,
+      buildingInfluence: 60,
+      buildingMode: "glow",
+    }, 1, 1, "foreground");
+
+    const base = strokes.filter((s) => !s.glow);
+    const glows = strokes.filter((s) => s.glow);
+    // The base stroke keeps its role and spans the full line.
+    expect(base.length).toBe(1);
+    expect(base[0].role).toBe("foreground");
+    expect(base[0].points.length).toBe(100);
+    // Exactly one accent run over the masked half, alpha scaled by strength.
+    expect(glows.length).toBe(1);
+    expect(glows[0].role).toBe("accent");
+    expect(glows[0].points.every((p) => p.x >= 49)).toBe(true);
+    expect(glows[0].points.length).toBeLessThan(60);
+    expect(glows[0].opacity).toBeCloseTo(0.6, 10);
+  });
+});
+
+describe("outline and invert modes", () => {
+  it("outline glows at the mask boundary and leaves interior and displacement alone", () => {
+    // Building mask filling the left half of a 20x20 mask.
+    const maskW = 20, maskH = 20;
+    const building = new Float32Array(maskW * maskH);
+    for (let y = 0; y < maskH; y++) {
+      for (let x = 0; x < 10; x++) {
+        building[y * maskW + x] = 1;
+      }
+    }
+    const masks: FeatureMasks = { ...makeMasks(maskW, maskH, {}), building };
+    const params: StyleParams = {
+      ...defaultStyleParams,
+      buildingInfluence: 100,
+      buildingMode: "outline",
+    };
+
+    const boundary = applyFeatureInfluence(10, 0.5, 0.5, masks, params);
+    expect(boundary.glow).toBe(true);
+    expect(boundary.glowStrength).toBeGreaterThan(0.5);
+    expect(boundary.displacement).toBe(10);
+
+    const interior = applyFeatureInfluence(10, 0.25, 0.5, masks, params);
+    expect(interior.glow).toBe(false);
+    expect(interior.displacement).toBe(10);
+
+    const outside = applyFeatureInfluence(10, 0.9, 0.5, masks, params);
+    expect(outside.glow).toBe(false);
+    expect(outside.displacement).toBe(10);
+  });
+
+  it("invert negates displacement at full influence and interpolates below", () => {
+    const masks = makeMasks(4, 4, { building: 1 });
+    const full = applyFeatureInfluence(10, 0.5, 0.5, masks, {
+      ...defaultStyleParams,
+      buildingInfluence: 100,
+      buildingMode: "invert",
+    });
+    expect(full.displacement).toBeCloseTo(-10, 10);
+    const half = applyFeatureInfluence(10, 0.5, 0.5, masks, {
+      ...defaultStyleParams,
+      buildingInfluence: 50,
+      buildingMode: "invert",
+    });
+    expect(half.displacement).toBeCloseTo(0, 10);
+  });
+});
+
+describe("shared row loop", () => {
+  it("waveform-terrain rows match the direct displacement formula", () => {
+    // 2x2 grid with identical rows [0, 1]: normalized elevation(u, v) = u,
+    // so with noise 0 each row is y = baseY - amplitude * (x / (width - 1)).
+    const grid = {
+      width: 2,
+      height: 2,
+      bounds: { west: 0, east: 1, north: 1, south: 0 },
+      data: new Float32Array([0, 1, 0, 1]),
+    };
+    const input = {
+      bounds: grid.bounds,
+      elevationGrid: grid,
+      width: 100,
+      height: 100,
+      seed: "rowloop",
+    };
+    const params = { ...defaultStyleParams, ...waveformTerrain.defaultParams, noise: 0 };
+    const rows = generateRows(input, params);
+
+    // rowStep = spacing / compression = 6 → baseY 0, 6, ..., 96 → 17 rows.
+    expect(rows.length).toBe(17);
+    for (const row of rows) {
+      // No masks → a single unbroken segment sampled at every x (detail 1).
+      expect(row.segments.length).toBe(1);
+      expect(row.segments[0].length).toBe(100);
+      for (const p of row.segments[0]) {
+        expect(p.y).toBeCloseTo(row.baseY - params.amplitude * (p.x / 99), 6);
+        expect(p.glow).toBe(false);
+      }
+    }
+  });
+});
+
+describe("preset validation", () => {
+  it("every preset references a registered style", () => {
+    expect(() => validatePresetStyleIds()).not.toThrow();
+  });
+
+  it("throws for a preset with an unknown style id", () => {
+    expect(() =>
+      validatePresetStyleIds([
+        { id: "bogus", name: "Bogus", styleId: "not-a-style", params: {} },
+      ]),
+    ).toThrow(/not-a-style/);
+  });
+
+  it("includes the Topo Signal preset on waveform-terrain", () => {
+    const topo = presets.find((p) => p.id === "topo-signal");
+    expect(topo).toBeDefined();
+    expect(topo!.name).toBe("Topo Signal");
+    expect(topo!.styleId).toBe("waveform-terrain");
   });
 });
 

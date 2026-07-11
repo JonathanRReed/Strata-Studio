@@ -4,7 +4,35 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Strata Studio</title>
+    <meta name="theme-color" content="#0b0b0d" />
+    <title>Strata Studio — turn real places into generative art</title>
+    <meta
+      name="description"
+      content="Turn any place on Earth into poster art. Real terrain and street data rendered as waveforms, contours, and ridgelines — free, in your browser, no account."
+    />
+
+    <!-- Social cards. og.png is a real render exported from the app. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Strata Studio" />
+    <meta property="og:title" content="Strata Studio — turn real places into generative art" />
+    <meta
+      property="og:description"
+      content="Real terrain and street data rendered as waveforms, contours, and ridgelines. Free, in your browser."
+    />
+    <meta property="og:image" content="/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Strata Studio — turn real places into generative art" />
+    <meta
+      name="twitter:description"
+      content="Real terrain and street data rendered as waveforms, contours, and ridgelines. Free, in your browser."
+    />
+    <meta name="twitter:image" content="/og.png" />
+
+    <!-- Warm up the two connections every session needs. -->
+    <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin />
+    <link rel="preconnect" href="https://s3.amazonaws.com" crossorigin />
+    <link rel="dns-prefetch" href="https://overpass-api.de" />
+    <link rel="dns-prefetch" href="https://nominatim.openstreetmap.org" />
   </head>
   <body>
     <div id="root"></div>

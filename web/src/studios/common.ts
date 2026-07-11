@@ -8,7 +8,7 @@ import type {
   GeoGeometry,
   WaterType,
 } from "../engine/types.ts";
-import type { ScenePoint, Stroke, StrokeRole } from "../engine/scene.ts";
+import type { Scene, ScenePoint, Stroke, StrokeRole } from "../engine/scene.ts";
 import { sampleMask, normalizeGrid, clamp } from "../engine/grid.ts";
 import { projectGeoPoint } from "../engine/grid.ts";
 import { hashSeed } from "../engine/noise.ts";
@@ -68,6 +68,13 @@ export function findPeak(input: ArtworkInput): { u: number; v: number } {
 export type FeatureInfluenceResult = {
   displacement: number;
   glow: boolean;
+  /**
+   * Glow intensity in [0, 1]: (influence / 100) * mask value at this point
+   * (for outline mode: (influence / 100) * mask edge magnitude). `glow` is
+   * true whenever this is > 0, so full influence over a solid mask behaves
+   * exactly like the old boolean glow.
+   */
+  glowStrength: number;
   break_: boolean;
 };
 
@@ -80,13 +87,30 @@ export function applyFeatureInfluence(
   params: StyleParams,
   strataType?: "building" | "road" | "water",
 ): FeatureInfluenceResult {
-  if (!masks) return { displacement, glow: false, break_: false };
+  if (!masks) return { displacement, glow: false, glowStrength: 0, break_: false };
 
   let d = displacement;
-  let glow = false;
+  let glowStrength = 0;
   let break_ = false;
 
-  const apply = (val: number, influence: number, mode: MaskMode) => {
+  const sampleAt = (mask: Float32Array) =>
+    sampleMask(mask, masks.width, masks.height, u, v);
+
+  // Mask edge magnitude at (u, v): finite differences over one mask texel,
+  // so a hard 0-to-1 boundary reads as ~1 and mask interiors read as 0.
+  const edgeAt = (mask: Float32Array) => {
+    const eu = 1 / (masks.width - 1 || 1);
+    const ev = 1 / (masks.height - 1 || 1);
+    const gx =
+      sampleMask(mask, masks.width, masks.height, clamp(u + eu, 0, 1), v) -
+      sampleMask(mask, masks.width, masks.height, clamp(u - eu, 0, 1), v);
+    const gy =
+      sampleMask(mask, masks.width, masks.height, u, clamp(v + ev, 0, 1)) -
+      sampleMask(mask, masks.width, masks.height, u, clamp(v - ev, 0, 1));
+    return clamp(Math.hypot(gx, gy), 0, 1);
+  };
+
+  const apply = (mask: Float32Array, val: number, influence: number, mode: MaskMode) => {
     if (influence === 0 || val < 0.01) return;
     const strength = (influence / 100) * val;
     switch (mode) {
@@ -101,8 +125,20 @@ export function applyFeatureInfluence(
         d *= 1 - Math.abs(strength);
         break;
       case "glow":
-        // Glow intensity scales with influence.
-        if (influence > 0) glow = true;
+        // Glow intensity scales with influence and mask coverage.
+        glowStrength = Math.max(glowStrength, clamp(Math.abs(strength), 0, 1));
+        break;
+      case "outline":
+        // Accent the feature boundary: glow where the mask gradient is high.
+        glowStrength = Math.max(
+          glowStrength,
+          clamp(Math.abs(influence / 100) * edgeAt(mask), 0, 1),
+        );
+        break;
+      case "invert":
+        // Negate displacement where the mask is active; partial influence
+        // interpolates through zero (0.5 flattens, 1 fully mirrors).
+        d *= 1 - 2 * clamp(Math.abs(strength), 0, 1);
         break;
     }
   };
@@ -111,44 +147,71 @@ export function applyFeatureInfluence(
   // relevant to that feature type. When undefined (terrain-based styles),
   // apply all masks so the terrain responds to all features.
   if (!strataType || strataType === "building") {
-    apply(sampleMask(masks.building, masks.width, masks.height, u, v), params.buildingInfluence, params.buildingMode);
+    apply(masks.building, sampleAt(masks.building), params.buildingInfluence, params.buildingMode);
   }
   if (!strataType || strataType === "road") {
-    apply(sampleMask(masks.road, masks.width, masks.height, u, v), params.roadInfluence, params.roadMode);
+    apply(masks.road, sampleAt(masks.road), params.roadInfluence, params.roadMode);
   }
   if (!strataType || strataType === "water") {
-    apply(sampleMask(masks.ocean, masks.width, masks.height, u, v), params.oceanInfluence, params.oceanMode);
-    apply(sampleMask(masks.lake, masks.width, masks.height, u, v), params.lakeInfluence, params.lakeMode);
-    apply(sampleMask(masks.river, masks.width, masks.height, u, v), params.riverInfluence, params.riverMode);
-    apply(sampleMask(masks.water, masks.width, masks.height, u, v), params.waterInfluence, params.waterMode);
+    // Per-type influences take precedence. The combined water mask is
+    // max(ocean, lake, river), so applying it on top of an active per-type
+    // influence would double-apply on the same pixel; the combined water
+    // influence only covers pixels no active per-type influence handles.
+    const oceanVal = sampleAt(masks.ocean);
+    const lakeVal = sampleAt(masks.lake);
+    const riverVal = sampleAt(masks.river);
+    const oceanActive = params.oceanInfluence !== 0 && oceanVal >= 0.01;
+    const lakeActive = params.lakeInfluence !== 0 && lakeVal >= 0.01;
+    const riverActive = params.riverInfluence !== 0 && riverVal >= 0.01;
+    if (oceanActive) apply(masks.ocean, oceanVal, params.oceanInfluence, params.oceanMode);
+    if (lakeActive) apply(masks.lake, lakeVal, params.lakeInfluence, params.lakeMode);
+    if (riverActive) apply(masks.river, riverVal, params.riverInfluence, params.riverMode);
+    if (!oceanActive && !lakeActive && !riverActive) {
+      apply(masks.water, sampleAt(masks.water), params.waterInfluence, params.waterMode);
+    }
   }
 
-  return { displacement: d, glow, break_ };
+  return { displacement: d, glow: glowStrength > 0, glowStrength, break_ };
 }
 
-/** Splits a polyline of points-with-glow into contiguous glow runs. */
+export type GlowRun = { points: ScenePoint[]; strength: number };
+
+/**
+ * Splits a polyline of points-with-glow into contiguous glow runs. Each run
+ * carries the maximum glow strength of its points (defaulting to 1 for
+ * callers without per-point strength) so accent strokes can scale their
+ * alpha proportionally.
+ */
 export function glowRuns(
-  points: { x: number; y: number; glow: boolean }[],
-): ScenePoint[][] {
-  const runs: ScenePoint[][] = [];
+  points: { x: number; y: number; glow: boolean; glowStrength?: number }[],
+): GlowRun[] {
+  const runs: GlowRun[] = [];
   let current: ScenePoint[] = [];
+  let strength = 0;
+  const flush = () => {
+    if (current.length > 1) runs.push({ points: current, strength });
+    current = [];
+    strength = 0;
+  };
   for (const p of points) {
     if (p.glow) {
       current.push({ x: p.x, y: p.y });
-    } else if (current.length > 0) {
-      runs.push(current);
-      current = [];
+      strength = Math.max(strength, p.glowStrength ?? 1);
+    } else {
+      flush();
     }
   }
-  if (current.length > 0) runs.push(current);
-  return runs.filter((r) => r.length > 1);
+  flush();
+  return runs;
 }
 
 /**
  * Processes a polyline through feature influence, splitting it at interrupt
  * points and marking glow segments. Returns an array of strokes (one per
  * contiguous segment). Uses displacement=1 so amplify/flatten modes produce
- * a modulate factor that can scale width/opacity.
+ * a modulate factor that can scale width/opacity. Glow is applied per
+ * sub-segment: the base stroke keeps its role, and each contiguous glow run
+ * is overlaid as an accent stroke whose alpha scales with glow strength.
  */
 export function applyInfluenceToLine(
   points: ScenePoint[],
@@ -165,23 +228,29 @@ export function applyInfluenceToLine(
   if (!masks) return [{ points, width: baseWidth, opacity: baseOpacity, role, closed: closed || undefined }];
 
   const strokes: Stroke[] = [];
-  let current: ScenePoint[] = [];
-  let currentGlow = false;
+  let current: { x: number; y: number; glow: boolean; glowStrength: number }[] = [];
   let hadBreak = false;
 
   const flush = () => {
     if (current.length > 1) {
       strokes.push({
-        points: current,
-        role: currentGlow ? "accent" : role,
+        points: current.map((p) => ({ x: p.x, y: p.y })),
+        role,
         width: baseWidth,
         opacity: baseOpacity,
-        glow: currentGlow || undefined,
         closed: !hadBreak && closed ? true : undefined,
       });
+      for (const run of glowRuns(current)) {
+        strokes.push({
+          points: run.points,
+          role: "accent",
+          width: baseWidth,
+          opacity: baseOpacity * run.strength,
+          glow: true,
+        });
+      }
     }
     current = [];
-    currentGlow = false;
   };
 
   for (const p of points) {
@@ -194,8 +263,7 @@ export function applyInfluenceToLine(
       flush();
       continue;
     }
-    if (res.glow) currentGlow = true;
-    current.push(p);
+    current.push({ x: p.x, y: p.y, glow: res.glow, glowStrength: res.glowStrength });
   }
   flush();
   return strokes;
@@ -286,6 +354,103 @@ export function occlusionFill(
   points.push({ x: last.x, y: height + 4 });
   points.push({ x: first.x, y: height + 4 });
   return { points, role: "background", fill: true, closed: true };
+}
+
+/** Cap on generated waveform rows, shared by every row-based style. */
+export const MAX_ROWS = 500;
+
+export type RowPoint = { x: number; y: number; glow: boolean; glowStrength: number };
+
+export type WaveformRow = {
+  baseY: number;
+  segments: RowPoint[][];
+};
+
+export type RowPointResult = {
+  /** Optional horizontal offset; defaults to the sample x when omitted. */
+  x?: number;
+  y: number;
+  glow: boolean;
+  glowStrength: number;
+  break_: boolean;
+};
+
+/**
+ * Shared row iterator for horizontal-line styles: walks rows top to bottom
+ * (spacing/compression apart, capped at MAX_ROWS), samples points via
+ * pointFn, and splits row segments wherever pointFn reports a break.
+ */
+export function generateRowSegments(
+  width: number,
+  height: number,
+  params: StyleParams,
+  pointFn: (u: number, v: number, x: number, baseY: number) => RowPointResult,
+): WaveformRow[] {
+  const rowStep = params.spacing / clamp(params.compression, 0.5, 5);
+  const xStep = Math.max(1, Math.round((1.1 - clamp(params.detail, 0.1, 1)) * 10));
+
+  const rows: WaveformRow[] = [];
+  let rowCount = 0;
+
+  for (let baseY = 0; baseY < height && rowCount < MAX_ROWS; baseY += rowStep, rowCount++) {
+    const v = baseY / (height - 1 || 1);
+    const segments: RowPoint[][] = [];
+    let currentSegment: RowPoint[] = [];
+
+    for (let x = 0; x < width; x += xStep) {
+      const u = x / (width - 1 || 1);
+      const r = pointFn(u, v, x, baseY);
+      if (r.break_) {
+        if (currentSegment.length > 0) {
+          segments.push(currentSegment);
+          currentSegment = [];
+        }
+        continue;
+      }
+      currentSegment.push({ x: r.x ?? x, y: r.y, glow: r.glow, glowStrength: r.glowStrength });
+    }
+
+    if (currentSegment.length > 0) {
+      segments.push(currentSegment);
+    }
+
+    rows.push({ baseY, segments });
+  }
+
+  return rows;
+}
+
+/**
+ * Converts waveform rows into scene strokes: an occlusion fill per segment
+ * (when enabled and params.occlusion > 0), the foreground line, and accent
+ * glow runs with alpha scaled by glow strength.
+ */
+export function rowsToScene(
+  rows: WaveformRow[],
+  params: StyleParams,
+  height: number,
+  occlusion = true,
+): Scene {
+  const strokes: Stroke[] = [];
+  const occlude = occlusion && params.occlusion > 0;
+
+  for (const row of rows) {
+    for (const segment of row.segments) {
+      if (segment.length < 2) continue;
+      if (occlude) {
+        strokes.push({
+          ...occlusionFill(segment, height),
+          opacity: clamp(params.occlusion, 0, 1),
+        });
+      }
+      strokes.push({ points: segment, role: "foreground" });
+      for (const run of glowRuns(segment)) {
+        strokes.push({ points: run.points, role: "accent", glow: true, opacity: run.strength });
+      }
+    }
+  }
+
+  return { strokes };
 }
 
 export { clamp };

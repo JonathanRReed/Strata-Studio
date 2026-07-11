@@ -40,7 +40,7 @@ export function isBboxSmallEnough(bounds: GeoBounds): boolean {
 
 export function buildOverpassQuery(bounds: GeoBounds): string {
   const bbox = `(${bounds.south},${bounds.west},${bounds.north},${bounds.east})`;
-  return `[out:json][timeout:25];
+  return `[out:json][timeout:25][maxsize:33554432];
 (
   way["building"]${bbox};
   way["highway"]${bbox};
@@ -52,7 +52,7 @@ export function buildOverpassQuery(bounds: GeoBounds): string {
 );
 out body;
 >;
-out body;`;
+out skel qt;`;
 }
 
 export function classifyFeature(
@@ -215,7 +215,12 @@ export function overpassToGeoJSON(
     if (el.type === "node" && el.lat !== undefined && el.lon !== undefined) {
       nodes.set(el.id, [el.lon, el.lat]);
     } else if (el.type === "way") {
-      waysById.set(el.id, el);
+      // The recursion output (`out skel qt`) re-emits relation-member ways
+      // without tags; never let an untagged duplicate replace a tagged way.
+      const existing = waysById.get(el.id);
+      if (existing === undefined || existing.tags === undefined) {
+        waysById.set(el.id, el);
+      }
     } else if (el.type === "relation") {
       relations.push(el);
     }
@@ -335,12 +340,87 @@ export function overpassToGeoJSON(
   return { type: "FeatureCollection", features };
 }
 
+/** Grid steps (degrees) tried in order when snapping the bbox outward. */
+const SNAP_STEPS_DEG = [0.01, 0.005, 0.0025];
+
+/** Snapped query bboxes may exceed MAX_BBOX_KM2 slightly, but never this. */
+const SNAPPED_MAX_BBOX_KM2 = 35;
+
+function snapBoundsToGrid(bounds: GeoBounds, step: number): GeoBounds {
+  // The epsilon keeps edges already sitting on a grid line from expanding a
+  // full extra step due to floating-point noise.
+  const epsilon = 1e-9;
+  return {
+    south: Math.floor(bounds.south / step + epsilon) * step,
+    west: Math.floor(bounds.west / step + epsilon) * step,
+    north: Math.ceil(bounds.north / step - epsilon) * step,
+    east: Math.ceil(bounds.east / step - epsilon) * step,
+  };
+}
+
+/**
+ * Snaps the requested bbox outward to a quantized grid so nearby selections
+ * collapse onto one Overpass query and one cache entry. Falls back to finer
+ * grids (and finally the original bbox) when snapping would inflate the
+ * query area past SNAPPED_MAX_BBOX_KM2.
+ */
+export function snapBoundsForQuery(bounds: GeoBounds): GeoBounds {
+  for (const step of SNAP_STEPS_DEG) {
+    const snapped = snapBoundsToGrid(bounds, step);
+    if (bboxAreaKm2(snapped) <= SNAPPED_MAX_BBOX_KM2) return snapped;
+  }
+  return bounds;
+}
+
 function boundsCacheKey(bounds: GeoBounds): string {
-  // v2: invalidates pre-relation/pre-waterType cached responses.
-  return `v2:${bounds.south.toFixed(4)},${bounds.west.toFixed(4)},${bounds.north.toFixed(4)},${bounds.east.toFixed(4)}`;
+  // v3: keys are the snapped query bbox; invalidates unsnapped v2 entries.
+  return `v3:${bounds.south.toFixed(4)},${bounds.west.toFixed(4)},${bounds.north.toFixed(4)},${bounds.east.toFixed(4)}`;
+}
+
+/** Overpass API instances, tried in order when the previous one is busy. */
+export const OVERPASS_MIRRORS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+];
+
+export type OverpassEndpoint = {
+  url: string;
+  /**
+   * The strata-proxy Worker takes GET /overpass?q=<base64url QL> so the
+   * edge cache can key the query; public instances take the standard
+   * form-encoded POST.
+   */
+  kind: "proxy" | "direct";
+};
+
+/**
+ * Endpoints in try-order: the caching proxy first when configured
+ * (VITE_OVERPASS_URL, see workers/proxy/README.md), public mirrors after it
+ * so a proxy outage degrades to direct fetches instead of breaking.
+ */
+export function overpassEndpoints(
+  proxyUrl: string | undefined = import.meta.env.VITE_OVERPASS_URL as string | undefined,
+): OverpassEndpoint[] {
+  const mirrors: OverpassEndpoint[] = OVERPASS_MIRRORS.map((url) => ({ url, kind: "direct" }));
+  if (!proxyUrl) return mirrors;
+  // The env var holds the full route (…workers.dev/overpass) per the README.
+  return [{ url: proxyUrl.replace(/\/+$/, ""), kind: "proxy" }, ...mirrors];
+}
+
+/** base64url without padding — matches the proxy Worker's decoder. */
+export function encodeOverpassQuery(query: string): string {
+  const bytes = new TextEncoder().encode(query);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 const OSM_MAX_RETRIES = 2;
+/** Cap attempts per mirror so total attempts stay bounded across failover. */
+const OSM_ATTEMPTS_PER_MIRROR = OSM_MAX_RETRIES;
 const OSM_BASE_BACKOFF_MS = 1500;
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -378,77 +458,82 @@ export async function fetchOsmFeatures(
     );
   }
 
-  const cacheKey = boundsCacheKey(bounds);
+  const snapped = snapBoundsForQuery(bounds);
+  const cacheKey = boundsCacheKey(snapped);
   const cached = await getOsm(cacheKey);
   if (cached) return cached;
 
-  const query = buildOverpassQuery(bounds);
+  const query = buildOverpassQuery(snapped);
 
   let lastError: Error | null = null;
 
-  for (let attempt = 0; attempt <= OSM_MAX_RETRIES; attempt++) {
-    if (signal?.aborted) throw new Error("OSM fetch was cancelled.");
+  for (const endpoint of overpassEndpoints()) {
+    for (let attempt = 0; attempt < OSM_ATTEMPTS_PER_MIRROR; attempt++) {
+      if (signal?.aborted) throw new Error("OSM fetch was cancelled.");
 
-    let response: Response;
-    try {
-      response = await fetch("https://overpass-api.de/api/interpreter", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `data=${encodeURIComponent(query)}`,
-        signal,
-      });
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        throw new Error("OSM fetch was cancelled.");
-      }
-      // Network error — retryable
-      lastError = new Error(
-        `Network error while fetching OSM features: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      if (attempt < OSM_MAX_RETRIES) {
-        const backoff = OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
-        await sleep(backoff, signal);
+      let response: Response;
+      try {
+        response =
+          endpoint.kind === "proxy"
+            ? await fetch(`${endpoint.url}?q=${encodeOverpassQuery(query)}`, { signal })
+            : await fetch(endpoint.url, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: `data=${encodeURIComponent(query)}`,
+                signal,
+              });
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          throw new Error("OSM fetch was cancelled.");
+        }
+        // Network error — retry this mirror, then fail over to the next.
+        lastError = new Error(
+          `Network error while fetching OSM features: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        if (attempt < OSM_ATTEMPTS_PER_MIRROR - 1) {
+          const backoff = OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
+          await sleep(backoff, signal);
+        }
         continue;
       }
-      throw lastError;
-    }
 
-    if (!response.ok) {
-      const text = await response.text();
-      if (isRetryableOsmError(response.status, text)) {
-        // Honor Retry-After header if present
-        const retryAfter = response.headers.get("Retry-After");
-        const backoff = retryAfter
-          ? Math.min(parseInt(retryAfter, 10) * 1000, 30000)
-          : OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
-        lastError = new Error(
-          response.status === 429
-            ? "Overpass API rate limit reached. Please wait a minute before trying again."
-            : "Overpass API is too busy right now. This is a public server with rate limits. Please wait a few seconds and try again.",
-        );
-        if (attempt < OSM_MAX_RETRIES) {
-          await sleep(backoff, signal);
+      if (!response.ok) {
+        const text = await response.text();
+        if (isRetryableOsmError(response.status, text)) {
+          // Honor Retry-After header if present
+          const retryAfter = response.headers.get("Retry-After");
+          const backoff = retryAfter
+            ? Math.min(parseInt(retryAfter, 10) * 1000, 30000)
+            : OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
+          lastError = new Error(
+            response.status === 429
+              ? "Overpass API rate limit reached. Please wait a minute before trying again."
+              : "Overpass API is too busy right now. This is a public server with rate limits. Please wait a few seconds and try again.",
+          );
+          if (attempt < OSM_ATTEMPTS_PER_MIRROR - 1) {
+            await sleep(backoff, signal);
+          }
           continue;
         }
-        throw lastError;
+        // Non-retryable status — the request itself is bad; no mirror will help.
+        throw new Error(
+          `Overpass API returned ${response.status}: ${text.slice(0, 120).replace(/\s+/g, " ")}`,
+        );
       }
-      throw new Error(
-        `Overpass API returned ${response.status}: ${text.slice(0, 120).replace(/\s+/g, " ")}`,
-      );
-    }
 
-    let data: { elements: OverpassElement[] };
-    try {
-      data = await response.json();
-    } catch (err) {
-      throw new Error(
-        `Failed to parse Overpass API response: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+      let data: { elements: OverpassElement[] };
+      try {
+        data = await response.json();
+      } catch (err) {
+        throw new Error(
+          `Failed to parse Overpass API response: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
 
-    const result = overpassToGeoJSON(data);
-    await setOsm(cacheKey, result);
-    return result;
+      const result = overpassToGeoJSON(data);
+      await setOsm(cacheKey, result);
+      return result;
+    }
   }
 
   throw lastError ?? new Error("OSM fetch failed after retries.");
