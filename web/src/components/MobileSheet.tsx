@@ -97,6 +97,7 @@ export function MobileSheet({
   isExportingAnimation,
   isFeatureLoading,
   featureInfo,
+  featureError,
   hasFeatures,
   osmAreaHint,
   terrainGrid,
@@ -461,6 +462,7 @@ export function MobileSheet({
                 onFetchFeatures={onFetchFeatures}
                 isFeatureLoading={isFeatureLoading}
                 featureInfo={featureInfo}
+                featureError={featureError}
                 hasFeatures={hasFeatures}
                 osmAreaHint={osmAreaHint}
               />

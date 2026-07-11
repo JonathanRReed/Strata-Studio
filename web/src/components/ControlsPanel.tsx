@@ -29,6 +29,7 @@ export type ControlsPanelProps = {
   isExportingAnimation: boolean;
   isFeatureLoading: boolean;
   featureInfo: string | null;
+  featureError?: string | null;
   hasFeatures: boolean;
   osmAreaHint?: string | null;
   /** Real elevation grid (when generated) so thumbnails render the user's terrain. */
@@ -60,6 +61,7 @@ export function ControlsPanel({
   isExportingAnimation,
   isFeatureLoading,
   featureInfo,
+  featureError,
   hasFeatures,
   osmAreaHint,
   terrainGrid,
@@ -106,6 +108,7 @@ export function ControlsPanel({
           onFetchFeatures={onFetchFeatures}
           isFeatureLoading={isFeatureLoading}
           featureInfo={featureInfo}
+          featureError={featureError}
           hasFeatures={hasFeatures}
           osmAreaHint={osmAreaHint}
         />

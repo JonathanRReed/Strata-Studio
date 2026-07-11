@@ -153,8 +153,52 @@ async function loadTileData(
   }
 }
 
-/** In-flight tile loads keyed z/x/y so concurrent fetches share one request. */
-const inflightTiles = new Map<string, Promise<Float32Array>>();
+/**
+ * In-flight tile loads keyed z/x/y so concurrent fetches share one request.
+ * The underlying fetch runs on its OWN controller: each caller gets a
+ * subscriber view that rejects on that caller's abort, and the shared fetch
+ * is aborted only when its last live subscriber has gone. Without this, a
+ * preview fetch aborted by a map move would poison an overlapping export
+ * that had innocently joined the same tile promise.
+ */
+export type SharedLoad<T> = {
+  promise: Promise<T>;
+  controller: AbortController;
+  subscribers: number;
+};
+
+/** Caller-scoped view of a shared load (exported for tests). */
+export function attachSubscriber<T>(
+  shared: SharedLoad<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  shared.subscribers++;
+  if (!signal) return shared.promise;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      shared.subscribers--;
+      if (shared.subscribers <= 0) shared.controller.abort();
+      reject(new Error("Aborted"));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    shared.promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}
+
+const inflightTiles = new Map<string, SharedLoad<Float32Array>>();
 
 function getTileData(
   z: number,
@@ -163,13 +207,20 @@ function getTileData(
   signal?: AbortSignal,
 ): Promise<Float32Array> {
   const key = `${z}/${x}/${y}`;
-  const inflight = inflightTiles.get(key);
-  if (inflight) return inflight;
-  const promise = loadTileData(z, x, y, signal).finally(() => {
-    inflightTiles.delete(key);
-  });
-  inflightTiles.set(key, promise);
-  return promise;
+  let shared = inflightTiles.get(key);
+  if (!shared) {
+    const controller = new AbortController();
+    const load: SharedLoad<Float32Array> = {
+      controller,
+      subscribers: 0,
+      promise: loadTileData(z, x, y, controller.signal).finally(() => {
+        inflightTiles.delete(key);
+      }),
+    };
+    inflightTiles.set(key, load);
+    shared = load;
+  }
+  return attachSubscriber(shared, signal);
 }
 
 /** Run async tasks with a concurrency cap. */

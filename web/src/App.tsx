@@ -360,6 +360,7 @@ export default function App() {
     isExportingAnimation,
     isFeatureLoading: osm.status.phase === "fetching",
     featureInfo: osm.featureInfo,
+    featureError: osm.status.phase === "error" ? osm.status.error.message : null,
     hasFeatures: !!osm.features,
     osmAreaHint: !isBboxSmallEnough(bounds) ? `Area is ${bboxAreaKm2(bounds).toFixed(1)} km² — zoom in to under 25 km² to fetch OSM features` : null,
     terrainGrid: terrain.grid,

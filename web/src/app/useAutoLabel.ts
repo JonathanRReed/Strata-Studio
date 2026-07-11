@@ -47,14 +47,20 @@ export function useAutoLabel({
    * Curated place picked (chip strip / Surprise Me / sheet): adopt its
    * display name instantly and let the generate it triggers skip the
    * geocode round-trip.
+   *
+   * The adopt is FORCED, bypassing shouldAutoFill: the caller applies the
+   * place's preset in the same event, which resets params.label — but that
+   * setParams hasn't flushed yet, so the gate would compare against the
+   * stale pre-reset label and refuse, leaving the poster blank (any typed
+   * label is already gone via the preset reset either way; the place name
+   * is strictly better than empty). The label update below is queued after
+   * the preset's own setParams, so it lands last in the same batch.
    */
-  const applyCuratedName = useCallback(
-    (name: string) => {
-      pendingCuratedRef.current = name;
-      apply(name);
-    },
-    [apply],
-  );
+  const applyCuratedName = useCallback((name: string) => {
+    pendingCuratedRef.current = name;
+    lastAutoRef.current = name;
+    onAutoLabelRef.current(name);
+  }, []);
 
   useEffect(() => {
     if (!grid) return;

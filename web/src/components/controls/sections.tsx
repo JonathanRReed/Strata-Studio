@@ -292,6 +292,7 @@ export function FeaturesSection({
   onFetchFeatures,
   isFeatureLoading,
   featureInfo,
+  featureError,
   hasFeatures,
   osmAreaHint,
 }: {
@@ -301,6 +302,7 @@ export function FeaturesSection({
   onFetchFeatures: (isRetry?: boolean) => void;
   isFeatureLoading: boolean;
   featureInfo: string | null;
+  featureError?: string | null;
   hasFeatures: boolean;
   osmAreaHint?: string | null;
 }) {
@@ -313,6 +315,8 @@ export function FeaturesSection({
   const buildingCount = featureInfo?.match(/Loaded (\d+) buildings/)?.[1];
   const featureChip = isFeatureLoading ? (
     <span className="status-live text-ink-muted">Fetching features</span>
+  ) : featureError ? (
+    <span className="text-alarm">Feature fetch failed</span>
   ) : osmAreaHint ? (
     <span className="text-ink-faint">Area too large — zoom in</span>
   ) : hasFeatures ? (
@@ -333,17 +337,22 @@ export function FeaturesSection({
       <p role="status" className="instrument-label" title={featureInfo ?? osmAreaHint ?? undefined}>
         {featureChip}
       </p>
+      {featureError && !isFeatureLoading && (
+        <p className="text-[12px] leading-snug text-alarm/80">{featureError}</p>
+      )}
       <button
         type="button"
-        onClick={() => onFetchFeatures(false)}
+        onClick={() => onFetchFeatures(!!featureError)}
         disabled={isFeatureLoading}
         className={secondaryButtonClass}
       >
         {isFeatureLoading
           ? "Fetching OSM data…"
-          : hasFeatures
-            ? "Re-fetch OSM features"
-            : "Fetch OSM features (buildings, roads, water)"}
+          : featureError
+            ? "Retry OSM fetch"
+            : hasFeatures
+              ? "Re-fetch OSM features"
+              : "Fetch OSM features (buildings, roads, water)"}
       </button>
 
       {hasFeatureControls && (

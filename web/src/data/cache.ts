@@ -2,9 +2,11 @@ import type { GeoFeatureCollection } from "../engine/types.ts";
 
 const DB_NAME = "strata-cache";
 // v2: timestamped records, Int16-packed tiles, ts index for eviction.
-// The upgrade handler clears both stores, purging v1-era Float32 tiles and
-// pre-v3 OSM keys in one stroke (refetching is cheap; stale formats are not).
-const DB_VERSION = 2;
+// v3: per-record packing scale — v2 packed at a fixed quarter-meter scale,
+// silently clamping elevations beyond ±8191.75 m (Everest summit tiles,
+// hadal bathymetry). The upgrade handler clears both stores so any clamped
+// records are purged (refetching is cheap; corrupted terrain is not).
+const DB_VERSION = 3;
 const TILES_STORE = "tiles";
 const OSM_STORE = "osm";
 const TS_INDEX = "ts";
@@ -19,13 +21,15 @@ const MAX_OSM_ENTRIES = 60;
 // Only check the entry cap on ~1 of every N writes to keep writes cheap.
 const EVICTION_SAMPLE_RATE = 16;
 
-// Elevations are stored as Int16 quarter-meters: ±8191 m covers all land
-// (clamped below that only in deep-ocean trenches, irrelevant for artwork)
-// at 0.25 m precision — invisible even in flat-terrain contour styles.
-const ELEVATION_SCALE = 4;
+// Elevations are stored as Int16 with a per-record scale chosen from the
+// tile's own range: 4 (0.25 m steps, tiles within ±8191 m — nearly all
+// land), 2 (0.5 m, covers Everest with headroom), or 1 (1 m, covers full
+// terrestrial + hadal range ±32767 m). Even 1 m steps are invisible in
+// artwork; what matters is never clamping real extremes (see DB v3 note).
+const ELEVATION_SCALES = [4, 2, 1] as const;
 const ELEVATION_LIMIT = 32767;
 
-type TileRecord = { key: string; data: Int16Array; ts: number };
+type TileRecord = { key: string; data: Int16Array; scale: number; ts: number };
 type OsmRecord = { key: string; data: GeoFeatureCollection; ts: number };
 
 let dbPromise: Promise<IDBDatabase> | undefined;
@@ -98,19 +102,29 @@ function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
-function packElevations(data: Float32Array): Int16Array {
+export function packElevations(data: Float32Array): { packed: Int16Array; scale: number } {
+  let maxAbs = 0;
+  for (let i = 0; i < data.length; i++) {
+    const abs = Math.abs(data[i]);
+    if (abs > maxAbs) maxAbs = abs;
+  }
+  const scale =
+    ELEVATION_SCALES.find((s) => Math.round(maxAbs * s) <= ELEVATION_LIMIT) ??
+    ELEVATION_SCALES[ELEVATION_SCALES.length - 1];
   const packed = new Int16Array(data.length);
   for (let i = 0; i < data.length; i++) {
-    const scaled = Math.round(data[i] * ELEVATION_SCALE);
+    const scaled = Math.round(data[i] * scale);
+    // Only reachable at scale 1 for values beyond Earth's real range;
+    // kept as a guard against NaN/garbage tiles.
     packed[i] = Math.max(-ELEVATION_LIMIT, Math.min(ELEVATION_LIMIT, scaled));
   }
-  return packed;
+  return { packed, scale };
 }
 
-function unpackElevations(packed: Int16Array): Float32Array {
+export function unpackElevations(packed: Int16Array, scale: number): Float32Array {
   const data = new Float32Array(packed.length);
   for (let i = 0; i < packed.length; i++) {
-    data[i] = packed[i] / ELEVATION_SCALE;
+    data[i] = packed[i] / scale;
   }
   return data;
 }
@@ -166,7 +180,7 @@ export async function getTile(
     const store = openStore(db, TILES_STORE, "readonly");
     const result = await requestToPromise<TileRecord | undefined>(store.get(key));
     if (!result || isExpired(result.ts, TILE_TTL_MS)) return undefined;
-    return unpackElevations(result.data);
+    return unpackElevations(result.data, result.scale);
   } catch {
     return undefined;
   }
@@ -183,7 +197,8 @@ export async function setTile(
   try {
     const db = await openDb();
     const key = `${z}/${x}/${y}`;
-    const record: TileRecord = { key, data: packElevations(data), ts: Date.now() };
+    const { packed, scale } = packElevations(data);
+    const record: TileRecord = { key, data: packed, scale, ts: Date.now() };
     const store = openStore(db, TILES_STORE, "readwrite");
     await requestToPromise(store.put(record));
     maybeEvict(TILES_STORE, MAX_TILE_ENTRIES);

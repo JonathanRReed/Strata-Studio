@@ -384,6 +384,40 @@ export const OVERPASS_MIRRORS = [
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ];
 
+export type OverpassEndpoint = {
+  url: string;
+  /**
+   * The strata-proxy Worker takes GET /overpass?q=<base64url QL> so the
+   * edge cache can key the query; public instances take the standard
+   * form-encoded POST.
+   */
+  kind: "proxy" | "direct";
+};
+
+/**
+ * Endpoints in try-order: the caching proxy first when configured
+ * (VITE_OVERPASS_URL, see workers/proxy/README.md), public mirrors after it
+ * so a proxy outage degrades to direct fetches instead of breaking.
+ */
+export function overpassEndpoints(
+  proxyUrl: string | undefined = import.meta.env.VITE_OVERPASS_URL as string | undefined,
+): OverpassEndpoint[] {
+  const mirrors: OverpassEndpoint[] = OVERPASS_MIRRORS.map((url) => ({ url, kind: "direct" }));
+  if (!proxyUrl) return mirrors;
+  // The env var holds the full route (…workers.dev/overpass) per the README.
+  return [{ url: proxyUrl.replace(/\/+$/, ""), kind: "proxy" }, ...mirrors];
+}
+
+/** base64url without padding — matches the proxy Worker's decoder. */
+export function encodeOverpassQuery(query: string): string {
+  const bytes = new TextEncoder().encode(query);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 const OSM_MAX_RETRIES = 2;
 /** Cap attempts per mirror so total attempts stay bounded across failover. */
 const OSM_ATTEMPTS_PER_MIRROR = OSM_MAX_RETRIES;
@@ -433,18 +467,21 @@ export async function fetchOsmFeatures(
 
   let lastError: Error | null = null;
 
-  for (const mirror of OVERPASS_MIRRORS) {
+  for (const endpoint of overpassEndpoints()) {
     for (let attempt = 0; attempt < OSM_ATTEMPTS_PER_MIRROR; attempt++) {
       if (signal?.aborted) throw new Error("OSM fetch was cancelled.");
 
       let response: Response;
       try {
-        response = await fetch(mirror, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `data=${encodeURIComponent(query)}`,
-          signal,
-        });
+        response =
+          endpoint.kind === "proxy"
+            ? await fetch(`${endpoint.url}?q=${encodeOverpassQuery(query)}`, { signal })
+            : await fetch(endpoint.url, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: `data=${encodeURIComponent(query)}`,
+                signal,
+              });
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") {
           throw new Error("OSM fetch was cancelled.");
