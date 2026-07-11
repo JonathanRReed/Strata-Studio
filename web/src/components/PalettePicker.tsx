@@ -54,19 +54,19 @@ function ColorRow({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm text-white/80">
+    <label className="flex items-center gap-2 text-[13px] text-ink-muted">
       <span className="w-24 shrink-0">{label}</span>
       <input
         type="color"
         value={paletteValue}
         onChange={(e) => onChange(e.target.value)}
-        className="h-8 w-8 shrink-0 cursor-pointer rounded border border-white/10 bg-transparent p-0"
+        className="h-8 w-8 shrink-0 cursor-pointer rounded-sm border border-hairline bg-transparent p-0"
       />
       <input
         type="text"
         value={textValue}
         onChange={(e) => onChange(e.target.value)}
-        className="flex-1 rounded border border-white/10 bg-white/5 px-2 py-1.5 font-mono text-sm outline-none focus:border-white/30"
+        className="min-w-0 flex-1 rounded-sm border border-hairline bg-surface-2 px-2 py-1.5 font-mono text-[12px] text-ink outline-none transition-colors focus:border-signal"
       />
     </label>
   );
@@ -111,15 +111,15 @@ function PaletteEditor({
   };
 
   return (
-    <div className="rounded border border-white/10 bg-white/5 p-3">
+    <div className="rounded-sm border border-hairline bg-surface-2 p-3">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wider text-white/40">
+        <span className="instrument-label text-ink-faint">
           {baseId ? "Edit palette" : "New palette"}
         </span>
         <button
           type="button"
           onClick={onCancel}
-          className="text-xs text-white/50 hover:text-white"
+          className="text-[12px] text-ink-muted transition-colors hover:text-ink"
           aria-label="Close editor"
         >
           Cancel
@@ -127,14 +127,14 @@ function PaletteEditor({
       </div>
 
       <div className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1.5 text-sm text-white/80">
+        <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
           Name
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Custom palette"
-            className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-sm outline-none focus:border-white/30"
+            className="rounded-sm border border-hairline bg-surface px-2 py-1.5 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-signal"
           />
         </label>
 
@@ -153,14 +153,14 @@ function PaletteEditor({
             type="button"
             onClick={handleSave}
             disabled={!name.trim()}
-            className="flex-1 rounded bg-white py-2 text-xs font-medium text-black transition-colors hover:bg-white/90 disabled:opacity-50"
+            className="flex min-h-11 flex-1 items-center justify-center rounded-sm bg-ink text-[12px] font-medium text-ground transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             Save
           </button>
           <button
             type="button"
             onClick={onCancel}
-            className="flex-1 rounded border border-white/20 py-2 text-xs transition-colors hover:bg-white/10"
+            className="flex min-h-11 flex-1 items-center justify-center rounded-sm border border-hairline-2 text-[12px] text-ink transition-colors hover:bg-surface"
           >
             Cancel
           </button>
@@ -206,11 +206,11 @@ export function PalettePicker({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm text-white/80">Palette</span>
+        <span className="text-[13px] text-ink-muted">Palette</span>
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="rounded border border-white/20 px-2 py-1 text-xs transition-colors hover:bg-white/10"
+          className="flex min-h-9 items-center rounded-sm border border-hairline-2 px-2.5 text-[12px] text-ink transition-colors hover:bg-surface-2"
         >
           {isOpen ? "Close" : baseId ? "Edit palette" : "New palette"}
         </button>
@@ -244,39 +244,41 @@ export function PalettePicker({
                   setDeleteConfirmId(null);
                 }}
                 aria-pressed={isSelected}
-                className={`w-full rounded border p-2 text-left transition-colors ${
+                className={`w-full rounded-sm border p-2 text-left transition-colors ${
                   isSelected
-                    ? "border-white/60 bg-white/10"
-                    : "border-white/10 bg-white/5 hover:bg-white/10"
+                    ? "border-signal bg-surface-2"
+                    : "border-hairline bg-surface hover:border-hairline-2 hover:bg-surface-2"
                 }`}
               >
                 <div className="flex items-center gap-1 pr-5">
-                  <span className="truncate text-xs">{name}</span>
+                  <span className={`truncate text-xs ${isSelected ? "text-ink" : "text-ink-muted"}`}>
+                    {name}
+                  </span>
                   {isCustom && (
-                    <span className="shrink-0 rounded bg-white/10 px-1 text-[10px] text-white/50">
+                    <span className="instrument-label shrink-0 rounded-sm bg-surface-2 px-1 text-ink-faint">
                       custom
                     </span>
                   )}
                 </div>
                 <div className="mt-1.5 flex gap-1">
                   <div
-                    className="h-3 w-3 rounded-sm border border-white/10"
+                    className="h-3 w-3 rounded-sm border border-hairline"
                     style={{ backgroundColor: palette.background }}
                     aria-hidden="true"
                   />
                   <div
-                    className="h-3 w-3 rounded-sm border border-white/10"
+                    className="h-3 w-3 rounded-sm border border-hairline"
                     style={{ backgroundColor: palette.foreground }}
                     aria-hidden="true"
                   />
                   <div
-                    className="h-3 w-3 rounded-sm border border-white/10"
+                    className="h-3 w-3 rounded-sm border border-hairline"
                     style={{ backgroundColor: palette.accent }}
                     aria-hidden="true"
                   />
                   {palette.water && (
                     <div
-                      className="h-3 w-3 rounded-sm border border-white/10"
+                      className="h-3 w-3 rounded-sm border border-hairline"
                       style={{ backgroundColor: palette.water }}
                       aria-hidden="true"
                     />
@@ -295,8 +297,10 @@ export function PalettePicker({
                       setDeleteConfirmId(id);
                     }
                   }}
-                  className={`absolute right-1 top-1 flex h-5 items-center justify-center rounded text-[10px] text-white/50 hover:bg-white/10 hover:text-white ${
-                    deleteConfirmId === id ? "w-auto px-1.5" : "w-5"
+                  className={`absolute right-1 top-1 flex h-6 items-center justify-center rounded-sm text-[12px] transition-colors hover:bg-surface-2 ${
+                    deleteConfirmId === id
+                      ? "w-auto px-1.5 text-alarm"
+                      : "w-6 text-ink-faint hover:text-alarm"
                   }`}
                   aria-label={deleteConfirmId === id ? "Confirm delete" : "Delete palette"}
                 >

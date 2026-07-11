@@ -1,0 +1,21 @@
+{
+  "name": "strata-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Caching proxy Worker for Strata Studio (terrain tiles, Overpass API, OG cards)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "workers-og": "^0.0.27"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260710.1",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.110.0"
+  }
+}

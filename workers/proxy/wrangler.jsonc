@@ -1,0 +1,28 @@
+// Strata Studio caching proxy — deliberately a SEPARATE Worker from the
+// static-assets site. Enabling Workers Cache on a Worker meters every request
+// through it, so assets stay on their own (cache-disabled) Worker and only
+// third-party API traffic flows through this one.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "strata-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-06",
+
+  // Workers Cache (GA 2026-07-06, requires Wrangler >= 4.69.0).
+  // Caching is driven purely by the Cache-Control / CDN-Cache-Control headers
+  // this Worker sets on its responses. Works on workers.dev; request
+  // collapsing is automatic. Do NOT use the legacy caches.default API.
+  "cache": {
+    "enabled": true
+  },
+
+  // NOTE: a `limits.cpu_ms` guardrail was considered but omitted — per the
+  // Wrangler configuration docs, `limits` is only supported on the Standard
+  // (paid) usage model. The free plan is hard-capped at 10 ms CPU per
+  // invocation anyway. If this Worker ever moves to a paid plan, add:
+  //   "limits": { "cpu_ms": 50 }
+
+  "observability": {
+    "enabled": true
+  }
+}

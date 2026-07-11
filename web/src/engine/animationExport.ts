@@ -10,7 +10,7 @@
 import { GIFEncoder, quantize, applyPalette } from "gifenc";
 // @ts-expect-error: upng-js has no bundled types
 import UPNG from "upng-js";
-import type { StyleParams, ArtworkInput, Palette } from "./types.ts";
+import type { StyleParams, ArtworkInput, Palette, ArtStyle } from "./types.ts";
 import { renderSceneCanvas } from "./scene.ts";
 import { getStyle } from "../studios/registry.ts";
 import { animateScene, paramsForFrame, DEFAULT_FRAMES, DEFAULT_FPS, needsRegeneration } from "./animation.ts";
@@ -20,32 +20,38 @@ export type AnimationFormat = "gif" | "apng" | "webm";
 
 export type ExportProgress = (progress: number, status: string) => void;
 
-/** Renders a single frame of the animation to the given canvas context. */
-function renderFrame(
-  styleId: string,
-  ctx: CanvasRenderingContext2D,
-  input: ArtworkInput,
-  baseParams: StyleParams,
-  paletteMap: Record<string, Palette>,
-  frame: number,
-  totalFrames: number,
-  transparent: boolean,
-): void {
-  const params = paramsForFrame(baseParams, frame, totalFrames);
-  const style = getStyle(styleId);
+/**
+ * Builds a per-frame renderer for an animation export. Drift regenerates the
+ * scene each frame (its phase changes the geometry); draw-in and parallax
+ * generate the static scene exactly ONCE here and only post-process it per
+ * frame. Exported for tests.
+ */
+export function createFrameRenderer({
+  style,
+  input,
+  params: baseParams,
+  paletteMap,
+  totalFrames,
+  transparent,
+}: {
+  style: ArtStyle;
+  input: ArtworkInput;
+  params: StyleParams;
+  paletteMap: Record<string, Palette>;
+  totalFrames: number;
+  transparent: boolean;
+}): (ctx: CanvasRenderingContext2D, frame: number) => void {
+  const palette = paletteMap[baseParams.palette] ?? paletteMap.monochrome;
+  const regenerate = needsRegeneration(baseParams.animationMode);
+  const staticScene = regenerate ? null : style.generate(input, { ...baseParams, phase: 0 });
 
-  if (needsRegeneration(params.animationMode)) {
-    // Drift: regenerate the scene with the new phase
-    const scene = style.generate(input, params);
-    const palette = paletteMap[params.palette] ?? paletteMap.monochrome;
+  return (ctx, frame) => {
+    const params = paramsForFrame(baseParams, frame, totalFrames);
+    const scene = regenerate
+      ? style.generate(input, params)
+      : animateScene(staticScene!, params, frame, totalFrames, input.width, input.height);
     renderSceneCanvas(ctx, scene, params, palette, input.width, input.height, transparent, input.masks);
-  } else {
-    // Draw-in / parallax: generate once, then post-process per frame
-    const scene = style.generate(input, { ...params, phase: 0 });
-    const animated = animateScene(scene, params, frame, totalFrames, input.width, input.height);
-    const palette = paletteMap[params.palette] ?? paletteMap.monochrome;
-    renderSceneCanvas(ctx, animated, params, palette, input.width, input.height, transparent, input.masks);
-  }
+  };
 }
 
 /** Captures all frames as ImageData arrays. */
@@ -61,9 +67,17 @@ async function captureFrames(
   const { width, height } = input;
   const { ctx } = createOffscreenCanvas(width, height);
   const frames: ImageData[] = [];
+  const renderFrame = createFrameRenderer({
+    style: getStyle(styleId),
+    input,
+    params,
+    paletteMap,
+    totalFrames,
+    transparent,
+  });
 
   for (let f = 0; f < totalFrames; f++) {
-    renderFrame(styleId, ctx, input, params, paletteMap, f, totalFrames, transparent);
+    renderFrame(ctx, f);
     frames.push(ctx.getImageData(0, 0, width, height));
     if (onProgress) {
       onProgress(f / totalFrames, `Rendering frame ${f + 1}/${totalFrames}`);
@@ -73,6 +87,16 @@ async function captureFrames(
   }
 
   return frames;
+}
+
+/**
+ * Finds the palette index that gifenc's quantizer assigned to the fully
+ * transparent color. gifenc does NOT guarantee it lands at index 0, so the
+ * GIF frame's `transparentIndex` must be located after quantization.
+ * Returns -1 when the palette has no transparent entry.
+ */
+export function findTransparentIndex(palette: number[][]): number {
+  return palette.findIndex((color) => color.length >= 4 && color[3] === 0);
 }
 
 /** Exports frames as a GIF using gifenc. */
@@ -107,14 +131,20 @@ async function exportGif(
     clearAlphaThreshold: transparent ? 128 : 0,
   });
 
+  // With oneBitAlpha, quantized colors have alpha 0x00 or 0xFF; locate the
+  // transparent entry (it is not guaranteed to be index 0). If the sampled
+  // frames had no transparent pixels, encode without transparency.
+  const transparentIndex = transparent ? findTransparentIndex(palette) : -1;
+  const useTransparency = transparentIndex >= 0;
+
   const gif = GIFEncoder();
   for (let i = 0; i < frames.length; i++) {
     // frame.data is Uint8ClampedArray (RGBA) — pass directly to applyPalette
     const indexed = applyPalette(frames[i].data, palette, format);
     gif.writeFrame(indexed, width, height, {
       delay,
-      transparent: transparent,
-      transparentIndex: 0,
+      transparent: useTransparency,
+      transparentIndex: useTransparency ? transparentIndex : 0,
       dispose: 2,
       // First frame must include the palette (gifenc requirement)
       palette: i === 0 ? palette : undefined,
@@ -193,11 +223,20 @@ async function exportWebm(
     recorder.onerror = (e) => reject(new Error(`WebM recording failed: ${e}`));
   });
 
+  // WebM doesn't support alpha — fill background even when transparent is requested
+  const renderFrame = createFrameRenderer({
+    style: getStyle(styleId),
+    input,
+    params,
+    paletteMap,
+    totalFrames,
+    transparent: false,
+  });
+
   recorder.start();
 
   for (let f = 0; f < totalFrames; f++) {
-    // WebM doesn't support alpha — fill background when transparent is requested
-    renderFrame(styleId, ctx, input, params, paletteMap, f, totalFrames, false);
+    renderFrame(ctx, f);
     track.requestFrame();
     if (onProgress) {
       onProgress(f / totalFrames, `Recording frame ${f + 1}/${totalFrames}`);

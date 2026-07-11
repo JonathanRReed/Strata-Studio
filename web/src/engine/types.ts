@@ -25,7 +25,13 @@ export type Palette = {
 
 export type WaterType = "ocean" | "lake" | "river";
 
-export type MaskMode = "interrupt" | "amplify" | "flatten" | "glow";
+export type MaskMode =
+  | "interrupt"
+  | "amplify"
+  | "flatten"
+  | "glow"
+  | "outline"
+  | "invert";
 
 export type AspectRatio = "square" | "16:9" | "9:16" | "12:18";
 

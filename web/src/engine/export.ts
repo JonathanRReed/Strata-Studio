@@ -60,11 +60,30 @@ export function isLightColor(hex: string): boolean {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140;
 }
 
+/**
+ * Largest font size ≤ `target` at which `text` fits within `maxWidth` when
+ * measured on `ctx` (sans-serif). Keeps attribution readable at any export
+ * scale without overflowing the artwork.
+ */
+function fitFontSize(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  target: number,
+  maxWidth: number,
+): number {
+  ctx.font = `${target}px sans-serif`;
+  const width = ctx.measureText(text).width;
+  if (width <= maxWidth || width <= 0) return target;
+  return Math.max(1, target * (maxWidth / width));
+}
+
 export function downloadPngWithAttribution(
   canvas: HTMLCanvasElement,
   filename: string,
   attribution: string,
   backgroundColor = "#000000",
+  /** Device pixels per logical pixel, so attribution text scales with exports. */
+  scale = 1,
 ) {
   // Draw onto a copy so the source canvas (e.g. the live preview) is untouched.
   const copy = document.createElement("canvas");
@@ -76,12 +95,13 @@ export function downloadPngWithAttribution(
     return;
   }
   ctx.drawImage(canvas, 0, 0);
-  ctx.font = "10px sans-serif";
+  const fontSize = fitFontSize(ctx, attribution, 10 * scale, copy.width - 16 * scale);
+  ctx.font = `${fontSize}px sans-serif`;
   ctx.fillStyle = isLightColor(backgroundColor)
     ? "rgba(0,0,0,0.45)"
     : "rgba(255,255,255,0.4)";
   ctx.textAlign = "right";
-  ctx.fillText(attribution, copy.width - 8, copy.height - 8);
+  ctx.fillText(attribution, copy.width - 8 * scale, copy.height - 8 * scale);
   downloadPng(copy, filename);
 }
 
@@ -102,17 +122,17 @@ function parseSvgLength(value: string | undefined): number | null {
   return num;
 }
 
+/**
+ * User-space (viewBox) dimensions of an SVG, for placing overlay elements.
+ * The viewBox is preferred over width/height: exported SVGs render at export
+ * pixel size but keep their geometry in logical preview coordinates, and
+ * overlays must be placed (and sized) in that logical space so they scale
+ * with the artwork.
+ */
 function getSvgDimensions(svgString: string): { width: number; height: number } | null {
   const openTag = svgString.match(/<svg([^>]*)>/i);
   if (!openTag) return null;
   const attrString = openTag[1];
-  const widthMatch = attrString.match(/width=(["'])([^"']+)\1/);
-  const heightMatch = attrString.match(/height=(["'])([^"']+)\1/);
-  const width = parseSvgLength(widthMatch?.[2]);
-  const height = parseSvgLength(heightMatch?.[2]);
-  if (width !== null && height !== null) {
-    return { width, height };
-  }
   const viewBoxMatch = attrString.match(/viewBox=(["'])([^"']+)\1/);
   if (viewBoxMatch) {
     const parts = viewBoxMatch[2]
@@ -120,9 +140,16 @@ function getSvgDimensions(svgString: string): { width: number; height: number } 
       .split(/[\s,]+/)
       .filter(Boolean)
       .map(parseFloat);
-    if (parts.length >= 4) {
+    if (parts.length >= 4 && !Number.isNaN(parts[2]) && !Number.isNaN(parts[3])) {
       return { width: parts[2], height: parts[3] };
     }
+  }
+  const widthMatch = attrString.match(/width=(["'])([^"']+)\1/);
+  const heightMatch = attrString.match(/height=(["'])([^"']+)\1/);
+  const width = parseSvgLength(widthMatch?.[2]);
+  const height = parseSvgLength(heightMatch?.[2]);
+  if (width !== null && height !== null) {
+    return { width, height };
   }
   return null;
 }
@@ -146,7 +173,14 @@ export function downloadSvgWithAttribution(
   const attributionFill = isLightColor(backgroundColor)
     ? "rgba(0,0,0,0.45)"
     : "rgba(255,255,255,0.4)";
-  const textEl = `<text x="${width - 8}" y="${height - 8}" text-anchor="end" font-size="10" fill="${attributionFill}">${escaped}</text>`;
+  // Text is placed in viewBox (logical) units, so it scales with the export;
+  // shrink from the 10-unit target if the attribution is wider than the art.
+  let fontSize = 10;
+  const measureCtx = document.createElement("canvas").getContext("2d");
+  if (measureCtx && width > 16) {
+    fontSize = fitFontSize(measureCtx, attribution, 10, width - 16);
+  }
+  const textEl = `<text x="${width - 8}" y="${height - 8}" text-anchor="end" font-size="${fontSize.toFixed(2)}" font-family="sans-serif" fill="${attributionFill}">${escaped}</text>`;
   const closeIndex = modified.toLowerCase().lastIndexOf("</svg>");
   if (closeIndex >= 0) {
     modified = `${modified.slice(0, closeIndex)}${textEl}${modified.slice(closeIndex)}`;

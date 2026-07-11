@@ -154,6 +154,15 @@ function waterMaskToPng(masks: FeatureMasks, palette: Palette): string {
   return dataUrl.slice(dataUrl.indexOf(",") + 1);
 }
 
+/**
+ * Renders a scene onto a canvas of any pixel size. The scene is ALWAYS
+ * generated in logical coordinates (`width`×`height`, preview-sized); the
+ * canvas transform maps logical space onto the full canvas bitmap, so the
+ * same scene renders identically at preview DPR or at poster export sizes —
+ * just sharper. Effects that live in device-pixel space (glow shadowBlur,
+ * grain tile resolution) are multiplied by the derived scale factor so their
+ * logical appearance is resolution-independent.
+ */
 export function renderSceneCanvas(
   ctx: CanvasRenderingContext2D,
   scene: Scene,
@@ -169,6 +178,8 @@ export function renderSceneCanvas(
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const scaleX = ctx.canvas.width / width;
   const scaleY = ctx.canvas.height / height;
+  // Device pixels per logical pixel (axes may differ by rounding; average).
+  const renderScale = (scaleX + scaleY) / 2;
   ctx.scale(scaleX, scaleY);
   if (!transparent) {
     ctx.fillStyle = palette.background;
@@ -177,17 +188,18 @@ export function renderSceneCanvas(
     ctx.clearRect(0, 0, width, height);
   }
 
-  // Water underlay: fill water areas with the palette's water color so they're
-  // visually distinct from land in all styles.
-  if (masks) {
-    drawWaterUnderlay(ctx, masks, palette, width, height);
-  }
-
   ctx.save();
   if (params.rotation !== 0) {
     ctx.translate(width / 2, height / 2);
     ctx.rotate((params.rotation * Math.PI) / 180);
     ctx.translate(-width / 2, -height / 2);
+  }
+
+  // Water underlay: fill water areas with the palette's water color so they're
+  // visually distinct from land in all styles. Drawn inside the rotation
+  // transform so water stays aligned with the rotated strokes.
+  if (masks) {
+    drawWaterUnderlay(ctx, masks, palette, width, height);
   }
 
   ctx.lineJoin = "round";
@@ -205,10 +217,16 @@ export function renderSceneCanvas(
     const color = strokeColor(stroke, palette);
     if (stroke.glow) {
       ctx.shadowColor = color;
-      ctx.shadowBlur = 8;
+      // shadowBlur is not affected by the canvas transform: scale it manually.
+      ctx.shadowBlur = 8 * renderScale;
     } else {
       ctx.shadowBlur = 0;
     }
+    // Background-role strokes are occlusion shapes (they hide strokes behind
+    // them). On a transparent export, painting them in the palette background
+    // would leave opaque blobs — erase to transparency instead.
+    const erase = transparent && stroke.role === "background";
+    if (erase) ctx.globalCompositeOperation = "destination-out";
     if (stroke.fill) {
       ctx.fillStyle = color;
       ctx.fill();
@@ -217,6 +235,7 @@ export function renderSceneCanvas(
       ctx.lineWidth = stroke.width ?? params.lineWidth;
       ctx.stroke();
     }
+    if (erase) ctx.globalCompositeOperation = "source-over";
   }
   ctx.shadowBlur = 0;
   ctx.globalAlpha = 1;
@@ -232,21 +251,31 @@ export function renderSceneCanvas(
   }
 
   if (params.grain > 0) {
-    applyGrain(ctx, params, width, height);
+    applyGrain(ctx, params, width, height, renderScale);
   }
 
   ctx.restore();
 }
 
-function applyGrain(ctx: CanvasRenderingContext2D, params: StyleParams, width: number, height: number): void {
+function applyGrain(
+  ctx: CanvasRenderingContext2D,
+  params: StyleParams,
+  width: number,
+  height: number,
+  scale = 1,
+): void {
   const rng = mulberry32(hashSeed(params.seed + ":grain"));
+  // Tile layout stays in logical pixels (same tiling as the preview), but the
+  // noise is generated at device resolution so exports get per-pixel grain
+  // instead of an upscaled, blurry 128px tile.
   const tileSize = 128;
+  const deviceTile = Math.max(1, Math.round(tileSize * scale));
   const noiseCanvas = document.createElement("canvas");
-  noiseCanvas.width = tileSize;
-  noiseCanvas.height = tileSize;
+  noiseCanvas.width = deviceTile;
+  noiseCanvas.height = deviceTile;
   const noiseCtx = noiseCanvas.getContext("2d");
   if (!noiseCtx) return;
-  const imageData = noiseCtx.createImageData(tileSize, tileSize);
+  const imageData = noiseCtx.createImageData(deviceTile, deviceTile);
   const data = imageData.data;
   for (let i = 0; i < data.length; i += 4) {
     const n = (rng() - 0.5) * params.grain * 60;
@@ -258,7 +287,7 @@ function applyGrain(ctx: CanvasRenderingContext2D, params: StyleParams, width: n
   ctx.globalCompositeOperation = "overlay";
   for (let y = 0; y < height; y += tileSize) {
     for (let x = 0; x < width; x += tileSize) {
-      ctx.drawImage(noiseCanvas, x, y);
+      ctx.drawImage(noiseCanvas, x, y, tileSize, tileSize);
     }
   }
   ctx.globalCompositeOperation = prev;
@@ -282,6 +311,19 @@ function strokeToPath(stroke: Stroke): string {
   return d;
 }
 
+/**
+ * Serializes a scene to SVG. Geometry is always emitted in logical (preview)
+ * coordinates via the viewBox; pass `exportSize` to set the rendered pixel
+ * size — the vector content scales cleanly, so a 3000px SVG export is the
+ * preview composition exactly, just sharper. Because filter effects (glow,
+ * grain turbulence) are defined in viewBox user units, they scale with the
+ * artwork automatically and need no per-scale correction.
+ *
+ * In transparent mode, background-role occlusion shapes are OMITTED: SVG has
+ * no equivalent of canvas `destination-out` without per-stroke nested masks,
+ * so strokes that the canvas export would erase remain visible here. This is
+ * a documented vector-export limitation.
+ */
 export function sceneToSvg(
   scene: Scene,
   params: StyleParams,
@@ -290,10 +332,12 @@ export function sceneToSvg(
   height: number,
   transparent = false,
   masks?: FeatureMasks,
+  exportSize?: { width: number; height: number },
 ): string {
   const hasGlow = scene.strokes.some((s) => s.glow);
   const paths = scene.strokes
     .filter((s) => s.points.length > 0)
+    .filter((s) => !(transparent && s.role === "background"))
     .map((stroke) => {
       const color = strokeColor(stroke, palette);
       const d = strokeToPath(stroke);
@@ -335,18 +379,25 @@ export function sceneToSvg(
     ? ""
     : `\n  <rect width="${width}" height="${height}" fill="${palette.background}"/>`;
 
-  // Water underlay as an embedded PNG image
+  // Water underlay as an embedded PNG image; lives inside the rotated group
+  // so water stays aligned with the rotated strokes.
   let waterImg = "";
   if (masks) {
     const waterPng = waterMaskToPng(masks, palette);
     if (waterPng) {
-      waterImg = `\n  <image width="${width}" height="${height}" href="data:image/png;base64,${waterPng}"/>`;
+      waterImg = `\n    <image width="${width}" height="${height}" href="data:image/png;base64,${waterPng}"/>`;
     }
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  ${defsXml}${bgRect}${waterImg}
-  <g${rotation}>
+  const outW = exportSize?.width ?? width;
+  const outH = exportSize?.height ?? height;
+  // Export dims are rounded independently per axis, so allow the hairline
+  // non-uniform stretch instead of letterboxing (matches the canvas path).
+  const preserve = exportSize ? ' preserveAspectRatio="none"' : "";
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${width} ${height}"${preserve}>
+  ${defsXml}${bgRect}
+  <g${rotation}>${waterImg}
     ${paths}
   </g>${label}${grainRect}
 </svg>`;

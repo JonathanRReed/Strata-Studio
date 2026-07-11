@@ -9,34 +9,14 @@ import {
 import maplibregl from "maplibre-gl";
 import type { GeoBounds } from "../engine/types.ts";
 import { normalizeBounds } from "../engine/projection.ts";
+import { bboxAreaKm2, isBboxSmallEnough } from "../data/osmOverpass.ts";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
-const OSM_STYLE = {
-  version: 8 as const,
-  sources: {
-    osm: {
-      type: "raster" as const,
-      tiles: [
-        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-      ],
-      tileSize: 256,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      maxzoom: 20,
-    },
-  },
-  layers: [
-    {
-      id: "osm",
-      type: "raster" as const,
-      source: "osm",
-    },
-  ],
-};
+// OpenFreeMap vector basemap (free, keyless, commercial use allowed).
+// Swappable: other styles include /styles/positron, /styles/bright,
+// /styles/liberty, and /styles/fiord.
+export const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/dark";
 
 function getSquareBounds(map: maplibregl.Map): GeoBounds {
   const center = map.project(map.getCenter());
@@ -56,19 +36,39 @@ function getSquareBounds(map: maplibregl.Map): GeoBounds {
   });
 }
 
+/** Instrument readout formatting: real minus sign, fixed decimals. */
+function fmtDeg(value: number): string {
+  return value.toFixed(4).replace(/-/g, "−");
+}
+
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
+  /** When provided, fit the selection square to these bounds on load (share-URL restore). */
+  initialBounds?: GeoBounds | null;
   onChange: (bounds: GeoBounds, zoom: number) => void;
+  /** Current selection, echoed back for the header readout. */
+  bounds: GeoBounds;
+  zoom: number;
+  /** Whether the viewfinder is in its large-overlay state (chrome + map.resize). */
+  expanded: boolean;
+  onToggleExpand: () => void;
 };
 
 export default function MapSelector({
   initialCenter = [-122.4194, 37.7749],
   initialZoom = 11,
+  initialBounds = null,
   onChange,
+  bounds,
+  zoom,
+  expanded,
+  onToggleExpand,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  // Initial-only prop: read via ref so it doesn't retrigger the map effect.
+  const initialBoundsRef = useRef(initialBounds);
 
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -170,7 +170,7 @@ export default function MapSelector({
   }, [setMessage, setLoading]);
 
   // Nominatim's usage policy forbids client-side autocomplete, so searches
-  // only run on explicit submit (Enter or the Search button).
+  // only run on explicit submit (Enter).
   const onInputChange = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
       const value = e.target.value;
@@ -213,7 +213,7 @@ export default function MapSelector({
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: OSM_STYLE as unknown as maplibregl.StyleSpecification,
+      style: BASEMAP_STYLE_URL,
       center: initialCenter,
       zoom: initialZoom,
       attributionControl: false,
@@ -223,6 +223,25 @@ export default function MapSelector({
       // Force a resize after the container has proper dimensions
       setTimeout(() => {
         map.resize();
+        const restore = initialBoundsRef.current;
+        if (restore) {
+          // The selection square covers the central min(w,h)*0.7 of the
+          // container; pad fitBounds so the restored bounds land exactly
+          // under it (see getSquareBounds).
+          const container = map.getContainer();
+          const w = container.clientWidth;
+          const h = container.clientHeight;
+          const squareSize = Math.min(w, h) * 0.7;
+          const padX = (w - squareSize) / 2;
+          const padY = (h - squareSize) / 2;
+          map.fitBounds(
+            [
+              [restore.west, restore.south],
+              [restore.east, restore.north],
+            ],
+            { animate: false, padding: { top: padY, bottom: padY, left: padX, right: padX } },
+          );
+        }
         onChange(getSquareBounds(map), map.getZoom());
       }, 100);
     });
@@ -251,62 +270,109 @@ export default function MapSelector({
     };
   }, [initialCenter, initialZoom, onChange]);
 
+  // The expand toggle changes the container's size out from under MapLibre;
+  // nudge it after the layout settles so tiles fill the new viewport.
+  useEffect(() => {
+    const id = window.setTimeout(() => mapRef.current?.resize(), 50);
+    return () => window.clearTimeout(id);
+  }, [expanded]);
+
+  // Esc collapses the expanded viewfinder.
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onToggleExpand();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expanded, onToggleExpand]);
+
+  const centerLat = (bounds.north + bounds.south) / 2;
+  const centerLng = (bounds.east + bounds.west) / 2;
+  const areaKm2 = bboxAreaKm2(bounds);
+  const osmEligible = isBboxSmallEnough(bounds);
+
   return (
-    <div className="relative w-full aspect-square rounded-lg overflow-hidden border border-white/10">
-      <div
-        ref={containerRef}
-        style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: "#000" }}
-        aria-label="Map for area selection"
-      />
-      <div className="pointer-events-none absolute top-2 left-2 right-2 z-10 flex justify-center">
-        <form onSubmit={handleSubmit} className="flex items-center gap-1">
+    <div className="flex h-full w-full flex-col bg-surface">
+      {/* Viewfinder header: readout, expand toggle, search. */}
+      <div className="shrink-0 border-b border-hairline">
+        <div className="flex items-center gap-2 pl-3">
+          <p className="instrument-label min-w-0 flex-1 truncate text-ink-muted">
+            {fmtDeg(centerLat)} {fmtDeg(centerLng)} · Z{Math.round(zoom)} ·{" "}
+            <span className={osmEligible ? "text-ok" : "text-ink-faint"}>
+              {areaKm2.toFixed(1)} KM²
+            </span>
+          </p>
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            aria-label={expanded ? "Collapse map" : "Expand map"}
+            aria-expanded={expanded}
+            className="flex h-11 w-11 shrink-0 items-center justify-center text-[15px] text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+          >
+            <span aria-hidden="true">{expanded ? "✕" : "⤢"}</span>
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="border-t border-hairline">
           <input
             type="text"
             aria-label="Search for a location"
             value={query}
             onChange={onInputChange}
-            placeholder="Search location..."
-            className="pointer-events-auto bg-black/70 border border-white/20 rounded text-xs text-white px-2 py-1.5 w-40 placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-white/40"
+            placeholder="Search place…"
+            enterKeyHint="search"
+            className="h-10 w-full bg-transparent px-3 font-mono text-[12px] text-ink outline-none placeholder:text-ink-faint focus:bg-surface-2"
           />
-          <button
-            type="submit"
-            className="pointer-events-auto bg-black/70 border border-white/20 rounded text-xs text-white px-2 py-1.5 hover:bg-white/10"
-            aria-label="Search"
-          >
-            {loading ? "..." : "Search"}
+          {/* Default button: guarantees Enter-to-submit and gives assistive
+              tech an explicit submit control. */}
+          <button type="submit" className="sr-only">
+            Search
           </button>
         </form>
-        {message && (
+      </div>
+
+      {/* Map area — the selection square is min(w,h)*0.7 of THIS element,
+          matching getSquareBounds exactly (container queries keep it square). */}
+      <div className="relative min-h-0 flex-1 overflow-hidden [container-type:size]">
+        <div
+          ref={containerRef}
+          style={{ position: "absolute", inset: 0, background: "var(--color-ground)" }}
+          aria-label="Map for area selection"
+        />
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="relative aspect-square w-[min(70cqw,70cqh)] shadow-[0_0_0_9999px_rgba(0,0,0,0.3)]">
+            {/* Corner brackets */}
+            <span className="absolute -left-px -top-px h-3.5 w-3.5 border-l-2 border-t-2 border-ink/90" />
+            <span className="absolute -right-px -top-px h-3.5 w-3.5 border-r-2 border-t-2 border-ink/90" />
+            <span className="absolute -bottom-px -left-px h-3.5 w-3.5 border-b-2 border-l-2 border-ink/90" />
+            <span className="absolute -bottom-px -right-px h-3.5 w-3.5 border-b-2 border-r-2 border-ink/90" />
+            {/* Mid-edge ticks */}
+            <span className="absolute left-1/2 top-0 h-2 w-0.5 -translate-x-1/2 bg-ink/90" />
+            <span className="absolute bottom-0 left-1/2 h-2 w-0.5 -translate-x-1/2 bg-ink/90" />
+            <span className="absolute left-0 top-1/2 h-0.5 w-2 -translate-y-1/2 bg-ink/90" />
+            <span className="absolute right-0 top-1/2 h-0.5 w-2 -translate-y-1/2 bg-ink/90" />
+            {/* Center crosshair dot */}
+            <span className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ink/90" />
+          </div>
+        </div>
+        {(loading || message) && (
           <div
-            className="pointer-events-none absolute top-12 left-1/2 -translate-x-1/2 bg-black/80 border border-white/30 rounded text-xs text-white px-3 py-1.5 max-w-[90%] text-center"
+            className="pointer-events-none absolute left-1/2 top-2 z-10 max-w-[90%] -translate-x-1/2 truncate rounded-sm border border-hairline-2 bg-ground/90 px-3 py-1.5 text-center text-[12px] text-ink"
             aria-live="polite"
           >
-            {message}
+            {loading ? "Searching…" : message}
           </div>
         )}
-      </div>
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div className="relative w-[70%] h-[70%] border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]">
-          {/* Corner markers */}
-          <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-white" />
-          <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-white" />
-          <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-white" />
-          <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-white" />
-          {/* Label */}
-          <div className="absolute -top-6 left-0 text-[10px] text-white/70 font-medium uppercase tracking-wider">
-            Selection
+        {showResultMarker && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+            <div className="h-6 w-6 animate-ping rounded-full border-2 border-signal bg-signal/40" />
+            <div className="absolute h-3 w-3 rounded-full border-2 border-ink bg-signal" />
           </div>
+        )}
+        <div className="pointer-events-none absolute bottom-1 left-1.5 right-1.5 font-mono text-[9.5px] leading-tight text-ink-faint">
+          Map data &copy; OpenStreetMap contributors, OpenFreeMap &amp;
+          OpenMapTiles | Terrain &copy; Mapzen / AWS Open Data
         </div>
-      </div>
-      {showResultMarker && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-20">
-          <div className="w-6 h-6 rounded-full bg-blue-400/40 border-2 border-blue-300 animate-ping" />
-          <div className="absolute w-3 h-3 rounded-full bg-blue-400 border-2 border-white" />
-        </div>
-      )}
-      <div className="pointer-events-none absolute bottom-1.5 left-1.5 right-1.5 text-[10px] text-white/50 leading-tight">
-        Map data &copy; OpenStreetMap contributors, CARTO | Terrain &copy;
-        Mapzen / AWS Open Data
       </div>
     </div>
   );

@@ -1,8 +1,28 @@
-import { useState, useEffect } from "react";
-import type { Palette, StyleParams, MaskMode, AspectRatio, Studio, ControlKey, AnimationMode } from "../engine/types.ts";
-import { presets, type Preset } from "../presets/stylePresets.ts";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
+import type {
+  Palette,
+  StyleParams,
+  MaskMode,
+  AspectRatio,
+  Studio,
+  ControlKey,
+  AnimationMode,
+  ElevationGrid,
+} from "../engine/types.ts";
+import { presets, defaultStyleParams, applyPreset, type Preset } from "../presets/stylePresets.ts";
 import { stylesByStudio, getStyle } from "../studios/registry.ts";
+import { cacheStats, clearCache, type CacheStats } from "../data/cache.ts";
 import { PalettePicker } from "./PalettePicker.tsx";
+import { ThumbGrid, type ThumbGridItem } from "./ThumbGrid.tsx";
 
 type Props = {
   params: StyleParams;
@@ -11,20 +31,17 @@ type Props = {
   onStyleChange: (styleId: string) => void;
   onApplyPreset: (preset: Preset) => void;
   onGenerate: () => void;
-  onExportPng: (size: number) => void;
-  onExportSvg: (size: number) => void;
-  onExportAnimation: (format: "gif" | "apng" | "webm") => void;
+  onOpenExport: () => void;
   onFetchFeatures: (isRetry?: boolean) => void;
-  onExportJson: () => void;
-  onCopyUrl: () => void;
-  copiedUrl: boolean;
   isLoading: boolean;
-  isFeatureLoading: boolean;
+  isExporting: boolean;
   isExportingAnimation: boolean;
-  animationProgress: { progress: number; status: string } | null;
+  isFeatureLoading: boolean;
   featureInfo: string | null;
   hasFeatures: boolean;
   osmAreaHint?: string | null;
+  /** Real elevation grid (when generated) so thumbnails render the user's terrain. */
+  terrainGrid: ElevationGrid | null;
   allPalettes: Record<string, Palette>;
   allPaletteNames: Record<string, string>;
   onSavePalette: (id: string, name: string, palette: Palette) => void;
@@ -38,6 +55,8 @@ const MASK_MODE_DESCRIPTIONS: Record<MaskMode, string> = {
   amplify: "Makes terrain displacement larger over this feature",
   flatten: "Damps terrain displacement toward zero over this feature",
   glow: "Highlights terrain lines over this feature in accent color",
+  outline: "Traces this feature's boundary with accent strokes",
+  invert: "Reverses terrain displacement over this feature",
 };
 
 const ANIMATION_MODE_DESCRIPTIONS: Record<AnimationMode, string> = {
@@ -46,6 +65,42 @@ const ANIMATION_MODE_DESCRIPTIONS: Record<AnimationMode, string> = {
   draw: "Lines draw themselves in stroke by stroke, then loop",
   parallax: "Depth layers separate and drift at different speeds",
 };
+
+const STUDIOS: Studio[] = ["classic", "experimental"];
+const STUDIO_LABELS: Record<Studio, string> = {
+  classic: "Classic Studio",
+  experimental: "Experimental Lab",
+};
+
+const selectClass =
+  "min-h-11 rounded-sm border border-hairline bg-surface-2 px-2.5 text-[13px] text-ink outline-none transition-colors focus:border-signal";
+const textInputClass =
+  "min-h-11 rounded-sm border border-hairline bg-surface-2 px-2.5 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-signal";
+const secondaryButtonClass =
+  "flex min-h-11 items-center justify-center rounded-sm border border-hairline-2 px-3 text-[13px] text-ink transition-colors hover:bg-surface-2 disabled:opacity-50";
+
+function InfoDot({ text }: { text: string }) {
+  const id = useId();
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label="More info"
+        aria-describedby={id}
+        className="instrument-label flex h-4 w-4 cursor-help select-none items-center justify-center rounded-full border border-hairline bg-surface-2 text-ink-faint"
+      >
+        ?
+      </button>
+      <span
+        id={id}
+        role="tooltip"
+        className="absolute left-5 top-0 z-50 hidden w-48 rounded-sm border border-hairline-2 bg-ground px-2 py-1.5 text-[12px] leading-snug text-ink-muted shadow-lg group-focus-within:block group-hover:block"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
 
 function Slider({
   label,
@@ -64,14 +119,18 @@ function Slider({
   onChange: (v: number) => void;
   tooltip?: string;
 }) {
+  const fill = max > min ? ((value - min) / (max - min)) * 100 : 0;
   return (
-    <label className="flex flex-col gap-1.5 text-sm text-white/80">
-      <span className="flex justify-between items-center">
-        <span className="flex items-center gap-1">
+    <label className="flex flex-col gap-1.5">
+      <span className="flex items-center justify-between text-[13px] text-ink-muted">
+        <span className="flex items-center gap-1.5">
           {label}
           {tooltip && <InfoDot text={tooltip} />}
         </span>
-        <span className="text-white/50 tabular-nums" aria-live="polite">
+        <span
+          className="w-[6ch] text-right font-mono text-[12px] tabular-nums text-ink"
+          aria-live="polite"
+        >
           {value.toFixed(step < 1 ? 2 : 0)}
         </span>
       </span>
@@ -82,22 +141,10 @@ function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full accent-white"
+        style={{ "--fader-fill": `${fill}%` } as CSSProperties}
+        className="w-full"
       />
     </label>
-  );
-}
-
-function InfoDot({ text }: { text: string }) {
-  return (
-    <span className="relative group inline-flex">
-      <span className="w-3.5 h-3.5 rounded-full bg-white/10 text-white/40 text-[9px] flex items-center justify-center cursor-help select-none">
-        ?
-      </span>
-      <span className="absolute left-5 top-0 z-50 hidden group-hover:block bg-black border border-white/20 rounded px-2 py-1.5 text-[10px] text-white/70 leading-snug w-48 shadow-lg">
-        {text}
-      </span>
-    </span>
   );
 }
 
@@ -113,20 +160,22 @@ function ModeSelector({
   tooltip?: string;
 }) {
   return (
-    <label className="flex flex-col gap-1.5 text-sm text-white/80">
-      <span className="flex items-center gap-1">
+    <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
+      <span className="flex items-center gap-1.5">
         {label}
         {tooltip && <InfoDot text={tooltip} />}
       </span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as MaskMode)}
-        className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm outline-none focus:border-white/30"
+        className={selectClass}
       >
-        <option value="interrupt" className="bg-neutral-900">Interrupt</option>
-        <option value="amplify" className="bg-neutral-900">Amplify</option>
-        <option value="flatten" className="bg-neutral-900">Flatten</option>
-        <option value="glow" className="bg-neutral-900">Glow</option>
+        <option value="interrupt">Interrupt</option>
+        <option value="amplify">Amplify</option>
+        <option value="flatten">Flatten</option>
+        <option value="glow">Glow</option>
+        <option value="outline">Outline</option>
+        <option value="invert">Invert</option>
       </select>
     </label>
   );
@@ -149,16 +198,16 @@ function Section({
     setOpen(defaultOpen);
   }, [defaultOpen]);
   return (
-    <div className="flex flex-col gap-2">
+    <section className="border-b border-hairline">
       <button
         type="button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        className="flex items-center justify-between text-xs font-medium uppercase tracking-wider text-white/40 hover:text-white/60 transition-colors"
+        className="group flex min-h-11 w-full items-center justify-between text-left"
       >
-        <span className="flex items-center gap-2">
+        <span className="instrument-label flex items-center gap-2 text-ink-faint transition-colors group-hover:text-ink-muted">
           {title}
-          {badge && <span className="text-[9px] text-green-400/60 normal-case tracking-normal">{badge}</span>}
+          {badge && <span className="instrument-label text-ok">{badge}</span>}
         </span>
         <svg
           width="10"
@@ -167,13 +216,82 @@ function Section({
           fill="none"
           stroke="currentColor"
           strokeWidth="2"
-          className={`transition-transform ${open ? "rotate-180" : ""}`}
+          aria-hidden="true"
+          className={`text-ink-faint transition-transform ${open ? "rotate-180" : ""}`}
         >
           <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open && <div className="flex flex-col gap-3">{children}</div>}
-    </div>
+      {open && <div className="flex flex-col gap-3.5 pb-4">{children}</div>}
+    </section>
+  );
+}
+
+function formatCacheSize(stats: CacheStats | null): string {
+  if (!stats) return "";
+  const mb = stats.approxBytes / (1024 * 1024);
+  return mb < 1 ? "<1 MB" : `~${Math.round(mb)} MB`;
+}
+
+/** DATA section: one-line credits + the cache footprint / clear control. */
+function DataSection() {
+  const [stats, setStats] = useState<CacheStats | null>(null);
+  const [clearing, setClearing] = useState(false);
+
+  const refresh = useCallback(() => {
+    void cacheStats().then((s) => setStats(s ?? null));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const handleClear = useCallback(async () => {
+    setClearing(true);
+    await clearCache();
+    refresh();
+    setClearing(false);
+  }, [refresh]);
+
+  const cached = formatCacheSize(stats);
+
+  return (
+    <Section title="Data" defaultOpen={true}>
+      <p className="text-[12px] leading-relaxed text-ink-faint">
+        Basemap ©{" "}
+        <a
+          href="https://www.openstreetmap.org/copyright"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-hairline-2 underline-offset-2 transition-colors hover:text-ink-muted"
+        >
+          OpenStreetMap contributors
+        </a>{" "}
+        · OpenFreeMap. Terrain:{" "}
+        <a
+          href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-hairline-2 underline-offset-2 transition-colors hover:text-ink-muted"
+        >
+          Mapzen/AWS Open Data
+        </a>{" "}
+        — USGS, NASA SRTM.
+      </p>
+      <button
+        type="button"
+        onClick={handleClear}
+        disabled={clearing}
+        className="flex min-h-11 items-center justify-between rounded-sm border border-transparent px-3 text-[13px] text-ink-muted transition-colors hover:border-hairline hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+      >
+        <span>{clearing ? "Clearing…" : "Clear cached map data"}</span>
+        {cached && (
+          <span className="font-mono text-[12px] tabular-nums text-ink-faint">
+            {cached} cached
+          </span>
+        )}
+      </button>
+    </Section>
   );
 }
 
@@ -184,20 +302,16 @@ export function ControlsPanel({
   onStyleChange,
   onApplyPreset,
   onGenerate,
-  onExportPng,
-  onExportSvg,
-  onExportAnimation,
+  onOpenExport,
   onFetchFeatures,
-  onExportJson,
-  onCopyUrl,
-  copiedUrl,
   isLoading,
-  isFeatureLoading,
+  isExporting,
   isExportingAnimation,
-  animationProgress,
+  isFeatureLoading,
   featureInfo,
   hasFeatures,
   osmAreaHint,
+  terrainGrid,
   allPalettes,
   allPaletteNames,
   onSavePalette,
@@ -205,8 +319,8 @@ export function ControlsPanel({
   isAnimating,
   onToggleAnimation,
 }: Props) {
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [showPerTypeWater, setShowPerTypeWater] = useState(false);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const update = (patch: Partial<StyleParams>) => {
     onChange({ ...params, ...patch });
   };
@@ -224,101 +338,129 @@ export function ControlsPanel({
     controls.has("oceanInfluence") || controls.has("lakeInfluence") || controls.has("riverInfluence");
   const hasAnySlider = ["amplitude", "spacing", "lineWidth", "noise", "detail", "compression", "occlusion"].some((k) => controls.has(k as ControlKey));
 
+  const styleItems = useMemo<ThumbGridItem[]>(
+    () =>
+      stylesByStudio[studio].map((style) => ({
+        id: style.id,
+        label: style.name,
+        styleId: style.id,
+        params: { ...defaultStyleParams, ...style.defaultParams },
+      })),
+    [studio],
+  );
+
+  const studioPresets = useMemo(
+    () => presets.filter((p) => getStyle(p.styleId).studio === studio),
+    [studio],
+  );
+  const presetItems = useMemo<ThumbGridItem[]>(
+    () =>
+      studioPresets.map((preset) => ({
+        id: preset.id,
+        label: preset.name,
+        styleId: preset.styleId,
+        params: applyPreset(preset, getStyle(preset.styleId).defaultParams),
+      })),
+    [studioPresets],
+  );
+
+  const handlePresetSelect = useCallback(
+    (id: string) => {
+      const preset = studioPresets.find((p) => p.id === id);
+      if (preset) onApplyPreset(preset);
+    },
+    [studioPresets, onApplyPreset],
+  );
+
+  const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const current = STUDIOS.indexOf(studio);
+    const next =
+      (current + (e.key === "ArrowRight" ? 1 : STUDIOS.length - 1)) % STUDIOS.length;
+    const target = STUDIOS[next];
+    if (target !== studio) onStyleChange(stylesByStudio[target][0].id);
+    tabRefs.current[next]?.focus();
+  };
+
+  // FEATURES status chip: parse the building count out of the summary line.
+  const buildingCount = featureInfo?.match(/Loaded (\d+) buildings/)?.[1];
+  const featureChip = isFeatureLoading ? (
+    <span className="status-live text-ink-muted">Fetching features</span>
+  ) : osmAreaHint ? (
+    <span className="text-ink-faint">Area too large — zoom in</span>
+  ) : hasFeatures ? (
+    <span className="text-ok">
+      Features loaded
+      {buildingCount ? ` · ${Number(buildingCount).toLocaleString("en-US")} buildings` : ""}
+    </span>
+  ) : (
+    <span className="text-ink-faint">No features loaded</span>
+  );
+
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setMobileOpen(!mobileOpen)}
-        aria-expanded={mobileOpen}
-        aria-controls="controls-panel"
-        aria-label="Toggle controls panel"
-        className="lg:hidden fixed top-3 right-3 z-50 px-4 py-2.5 min-h-[44px] bg-white text-black rounded text-xs font-medium"
-      >
-        {mobileOpen ? "Close" : "Controls"}
-      </button>
-
-      <div
-        id="controls-panel"
-        className={`${
-          mobileOpen ? "flex" : "hidden lg:flex"
-        } flex-col gap-4 p-5 w-full max-w-xs border-r border-white/10 bg-black/40 h-full overflow-y-auto`}
-      >
-        {/* Header */}
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Strata Studio</h1>
-          <p className="text-xs text-white/50 mt-1">
-            {studio === "classic" ? "Classic Studio" : "Experimental Lab"} / {activeStyle.name}
-          </p>
-          <p className="text-[11px] text-white/30 mt-1.5 leading-snug">
-            {studio === "classic"
-              ? "Polished cartographic poster styles for printing and sharing."
-              : "Terrain-driven waveform and noise art. A visual synth for places."}
-          </p>
+    <aside
+      id="controls-panel"
+      className="flex w-full flex-col border-b border-hairline bg-surface lg:h-full lg:w-[340px] lg:shrink-0 lg:border-b-0 lg:border-r"
+    >
+      {/* Header block: wordmark + studio switcher */}
+      <header className="shrink-0 border-b border-hairline px-5 pb-4 pt-5">
+        <h1 className="display text-[15px] tracking-[0.06em] text-ink">Strata Studio</h1>
+        <div
+          role="tablist"
+          aria-label="Studio"
+          className="mt-3 grid grid-cols-2 overflow-hidden rounded-sm border border-hairline"
+        >
+          {STUDIOS.map((s, i) => (
+            <button
+              key={s}
+              ref={(el) => {
+                tabRefs.current[i] = el;
+              }}
+              type="button"
+              role="tab"
+              aria-selected={studio === s}
+              tabIndex={studio === s ? 0 : -1}
+              onKeyDown={handleTabKeyDown}
+              onClick={() => {
+                if (studio !== s) onStyleChange(stylesByStudio[s][0].id);
+              }}
+              className={`flex min-h-11 items-center justify-center border-b-2 px-2 text-[13px] transition-colors ${
+                studio === s
+                  ? "border-signal bg-surface-2 text-ink"
+                  : "border-transparent text-ink-muted hover:text-ink"
+              }`}
+            >
+              {STUDIO_LABELS[s]}
+            </button>
+          ))}
         </div>
+      </header>
 
-        {/* Style & Presets */}
-        <div className="flex flex-col gap-2">
-          <div className="grid grid-cols-2 gap-1 p-1 bg-white/5 rounded-lg" role="tablist" aria-label="Studio">
-            {(["classic", "experimental"] as Studio[]).map((s) => (
-              <button
-                key={s}
-                type="button"
-                role="tab"
-                aria-selected={studio === s}
-                onClick={() => {
-                  if (studio !== s) onStyleChange(stylesByStudio[s][0].id);
-                }}
-                className={`py-1.5 text-xs rounded-md transition-colors ${
-                  studio === s
-                    ? "bg-white text-black font-medium"
-                    : "text-white/60 hover:text-white"
-                }`}
-              >
-                {s === "classic" ? "Classic Studio" : "Experimental Lab"}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap gap-1.5">
-            {stylesByStudio[studio].map((style) => (
-              <button
-                key={style.id}
-                type="button"
-                onClick={() => onStyleChange(style.id)}
-                title={style.description}
-                className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                  style.id === styleId
-                    ? "border-white bg-white text-black font-medium"
-                    : "border-white/20 hover:bg-white/10"
-                }`}
-              >
-                {style.name}
-              </button>
-            ))}
-          </div>
-          <p className="text-[11px] text-white/40 leading-snug">{activeStyle.description}</p>
-        </div>
+      {/* Scrollable body */}
+      <div className="px-5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        {/* Style */}
+        <Section title="Style" defaultOpen={true}>
+          <ThumbGrid
+            items={styleItems}
+            selectedId={styleId}
+            onSelect={onStyleChange}
+            grid={terrainGrid ?? undefined}
+            columns={3}
+          />
+          <p className="text-[12px] leading-snug text-ink-faint">{activeStyle.description}</p>
+        </Section>
 
         {/* Presets */}
-        <div className="flex flex-col gap-2">
-          <span className="text-xs font-medium uppercase tracking-wider text-white/40">
-            Presets
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {presets
-              .filter((p) => getStyle(p.styleId).studio === studio)
-              .map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => onApplyPreset(preset)}
-                  className="px-2.5 py-1 text-xs rounded-full border border-white/20 hover:bg-white/10 transition-colors"
-                >
-                  {preset.name}
-                </button>
-              ))}
-          </div>
-        </div>
+        <Section title="Presets" defaultOpen={true}>
+          <ThumbGrid
+            items={presetItems}
+            selectedId={null}
+            onSelect={handlePresetSelect}
+            grid={terrainGrid ?? undefined}
+            columns={3}
+          />
+        </Section>
 
         {/* Terrain sliders */}
         {hasAnySlider && (
@@ -401,33 +543,30 @@ export function ControlsPanel({
         </Section>
         )}
 
-        {/* Map Features / Feature Influence */}
+        {/* Features (OSM) */}
         <Section
-          title={hasFeatureControls ? "Feature influence" : "Map features"}
+          title="Features"
           defaultOpen={hasFeatures}
-          badge={hasFeatures ? "OSM loaded" : undefined}
+          badge={hasFeatures ? "loaded" : undefined}
         >
+          <p role="status" className="instrument-label" title={featureInfo ?? osmAreaHint ?? undefined}>
+            {featureChip}
+          </p>
           <button
             type="button"
             onClick={() => onFetchFeatures(false)}
             disabled={isFeatureLoading}
-            className="px-3 py-2 text-xs rounded border border-white/20 hover:bg-white/10 disabled:opacity-50 transition-colors"
+            className={secondaryButtonClass}
           >
             {isFeatureLoading
-              ? "Fetching OSM data..."
+              ? "Fetching OSM data…"
               : hasFeatures
                 ? "Re-fetch OSM features"
                 : "Fetch OSM features (buildings, roads, water)"}
           </button>
-          {featureInfo && (
-            <p role="status" className="text-xs text-green-400/80">{featureInfo}</p>
-          )}
-          {osmAreaHint && !featureInfo && (
-            <p className="text-xs text-yellow-400/60">{osmAreaHint}</p>
-          )}
 
           {hasFeatureControls && (
-          <div className="flex flex-col gap-3 pl-2 border-l border-white/10">
+          <div className="flex flex-col gap-3.5 border-l border-hairline pl-2.5">
             {/* Buildings */}
             {controls.has("buildingInfluence") && (
               <>
@@ -494,12 +633,13 @@ export function ControlsPanel({
                 <button
                   type="button"
                   onClick={() => setShowPerTypeWater(!showPerTypeWater)}
-                  className="text-[10px] text-white/40 hover:text-white/60 transition-colors text-left"
+                  aria-expanded={showPerTypeWater}
+                  className="instrument-label min-h-9 text-left text-ink-faint transition-colors hover:text-ink-muted"
                 >
                   {showPerTypeWater ? "− Hide per-type water" : "+ Per-type water (ocean / lake / river)"}
                 </button>
                 {showPerTypeWater && (
-                  <div className="flex flex-col gap-3 pl-2 border-l border-white/10">
+                  <div className="flex flex-col gap-3.5 border-l border-hairline pl-2.5">
                     {controls.has("oceanInfluence") && (
                       <>
                         <Slider
@@ -567,25 +707,25 @@ export function ControlsPanel({
 
         {/* Animation */}
         <Section title="Animation" defaultOpen={params.animationMode !== "none"}>
-          <label className="flex flex-col gap-1.5 text-sm text-white/80">
-            <span className="flex items-center gap-1">
+          <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
+            <span className="flex items-center gap-1.5">
               Animation style
               <InfoDot text="Add motion to your artwork. Drift breathes, draw reveals lines stroke by stroke, parallax separates depth layers." />
             </span>
             <select
               value={params.animationMode}
               onChange={(e) => update({ animationMode: e.target.value as AnimationMode })}
-              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm outline-none focus:border-white/30"
+              className={selectClass}
             >
-              <option value="none" className="bg-neutral-900">None (static)</option>
-              <option value="drift" className="bg-neutral-900">Drift — organic breathing</option>
-              <option value="draw" className="bg-neutral-900">Draw-in — stroke reveal</option>
-              <option value="parallax" className="bg-neutral-900">Parallax — depth layers</option>
+              <option value="none">None (static)</option>
+              <option value="drift">Drift — organic breathing</option>
+              <option value="draw">Draw-in — stroke reveal</option>
+              <option value="parallax">Parallax — depth layers</option>
             </select>
           </label>
           {params.animationMode !== "none" && (
             <>
-              <p className="text-[10px] text-white/40 leading-snug">
+              <p className="text-[12px] leading-snug text-ink-faint">
                 {ANIMATION_MODE_DESCRIPTIONS[params.animationMode]}
               </p>
               <Slider
@@ -600,11 +740,11 @@ export function ControlsPanel({
               <button
                 type="button"
                 onClick={onToggleAnimation}
-                className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
+                className={
                   isAnimating
-                    ? "bg-white/20 text-white border border-white/30"
-                    : "bg-white text-black hover:bg-white/90"
-                }`}
+                    ? "flex min-h-11 items-center justify-center rounded-sm border border-signal bg-surface-2 px-3 text-[13px] text-ink transition-colors"
+                    : secondaryButtonClass
+                }
               >
                 {isAnimating ? "⏸ Pause preview" : "▶ Play preview"}
               </button>
@@ -636,29 +776,29 @@ export function ControlsPanel({
             />
           )}
           {controls.has("label") && (
-            <label className="flex flex-col gap-1.5 text-sm text-white/80">
+            <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
               Label
               <input
                 type="text"
                 value={params.label}
                 onChange={(e) => update({ label: e.target.value })}
                 placeholder="Optional place name"
-                className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm outline-none focus:border-white/30"
+                className={textInputClass}
               />
             </label>
           )}
           {controls.has("aspectRatio") && (
-            <label className="flex flex-col gap-1.5 text-sm text-white/80">
+            <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
               Aspect ratio
               <select
                 value={params.aspectRatio}
                 onChange={(e) => update({ aspectRatio: e.target.value as AspectRatio })}
-                className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm outline-none focus:border-white/30"
+                className={selectClass}
               >
-                <option value="square" className="bg-neutral-900">Square (1:1)</option>
-                <option value="16:9" className="bg-neutral-900">Wallpaper (16:9)</option>
-                <option value="9:16" className="bg-neutral-900">Phone (9:16)</option>
-                <option value="12:18" className="bg-neutral-900">Poster (12:18)</option>
+                <option value="square">Square (1:1)</option>
+                <option value="16:9">Wallpaper (16:9)</option>
+                <option value="9:16">Phone (9:16)</option>
+                <option value="12:18">Poster (12:18)</option>
               </select>
             </label>
           )}
@@ -666,22 +806,23 @@ export function ControlsPanel({
 
         {/* Seed & Palette */}
         <Section title="Seed & Palette" defaultOpen={false}>
-          <label className="flex flex-col gap-1.5 text-sm text-white/80">
+          <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
             Seed
             <div className="flex gap-2">
               <input
                 type="text"
                 value={params.seed}
                 onChange={(e) => update({ seed: e.target.value })}
-                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm outline-none focus:border-white/30"
+                className={`${textInputClass} min-w-0 flex-1 font-mono text-[12px]`}
               />
               <button
                 type="button"
                 onClick={() => update({ seed: Math.random().toString(36).slice(2, 8) })}
-                className="px-3 py-1.5 text-xs rounded border border-white/20 hover:bg-white/10 transition-colors"
+                className="flex min-h-11 w-11 items-center justify-center rounded-sm border border-hairline-2 text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
                 title="Randomize seed"
+                aria-label="Randomize seed"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                   <path d="M3 3v5h5" />
                   <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
@@ -701,144 +842,25 @@ export function ControlsPanel({
           />
         </Section>
 
-        {/* Export */}
-        <div className="flex flex-col gap-2 mt-auto">
-          <button
-            type="button"
-            onClick={onGenerate}
-            disabled={isLoading || isExportingAnimation}
-            aria-busy={isLoading}
-            className="w-full py-2.5 min-h-[44px] bg-white text-black rounded font-medium text-sm hover:bg-white/90 disabled:opacity-50 transition-colors"
-          >
-            {isLoading ? "Generating..." : "Generate"}
-          </button>
-
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onExportJson}
-              disabled={isExportingAnimation}
-              className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
-            >
-              Export JSON
-            </button>
-            <button
-              type="button"
-              onClick={onCopyUrl}
-              disabled={isExportingAnimation}
-              className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
-            >
-              {copiedUrl ? "Copied!" : "Copy URL"}
-            </button>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-white/40">Export PNG</span>
-            <div className="flex gap-2">
-              {[1024, 2048, 3000].map((size) => (
-                <button
-                  key={size}
-                  type="button"
-                  onClick={() => onExportPng(size)}
-                  disabled={isLoading}
-                  className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
-                >
-                  {size}²
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-white/40">Export SVG</span>
-            <div className="flex gap-2">
-              {[1024, 2048, 3000].map((size) => (
-                <button
-                  key={size}
-                  type="button"
-                  onClick={() => onExportSvg(size)}
-                  disabled={isLoading}
-                  className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
-                >
-                  {size}²
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Animation export */}
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-white/40 flex items-center gap-1">
-              Export animation
-              <InfoDot text="Renders all frames and encodes a looping animation. GIF is universal, APNG has better quality + transparency, WebM is smallest for video." />
-            </span>
-            {isExportingAnimation && animationProgress && (
-              <div className="flex flex-col gap-1">
-                <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-white rounded-full transition-all"
-                    style={{ width: `${Math.round(animationProgress.progress * 100)}%` }}
-                  />
-                </div>
-                <span className="text-[10px] text-white/50">{animationProgress.status}</span>
-              </div>
-            )}
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => onExportAnimation("gif")}
-                disabled={isLoading || isExportingAnimation || params.animationMode === "none"}
-                className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
-              >
-                GIF
-              </button>
-              <button
-                type="button"
-                onClick={() => onExportAnimation("apng")}
-                disabled={isLoading || isExportingAnimation || params.animationMode === "none"}
-                className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
-              >
-                APNG
-              </button>
-              <button
-                type="button"
-                onClick={() => onExportAnimation("webm")}
-                disabled={isLoading || isExportingAnimation || params.animationMode === "none"}
-                className="flex-1 py-2 min-h-[40px] border border-white/20 rounded text-xs hover:bg-white/10 disabled:opacity-50 transition-colors"
-              >
-                WebM
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <details className="text-xs text-white/40">
-          <summary className="cursor-pointer hover:text-white/60 transition-colors">
-            Credits
-          </summary>
-          <p className="mt-2">
-            Map data &copy;{" "}
-            <a
-              href="https://www.openstreetmap.org/copyright"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline hover:text-white/60"
-            >
-              OpenStreetMap contributors
-            </a>
-            . Terrain tiles from Mapzen / AWS Open Data; see{" "}
-            <a
-              href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline hover:text-white/60"
-            >
-              attribution
-            </a>{" "}
-            for data sources.
-          </p>
-        </details>
+        {/* Data credits + cache */}
+        <DataSection />
       </div>
-    </>
+
+      {/* Sticky footer: the panel's one signal primary + Export */}
+      <div className="sticky bottom-0 z-10 flex shrink-0 flex-col gap-2 border-t border-hairline bg-surface p-4">
+        <button
+          type="button"
+          onClick={onGenerate}
+          disabled={isLoading || isExporting || isExportingAnimation}
+          aria-busy={isLoading}
+          className="display flex h-11 w-full items-center justify-center rounded-sm bg-signal text-[13px] tracking-[0.08em] text-ground transition-colors hover:bg-signal/90 disabled:opacity-50"
+        >
+          {isLoading ? <span className="status-live">Generating</span> : "Generate"}
+        </button>
+        <button type="button" onClick={onOpenExport} className={secondaryButtonClass}>
+          Export…
+        </button>
+      </div>
+    </aside>
   );
 }

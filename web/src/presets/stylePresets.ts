@@ -66,6 +66,12 @@ export const presets: Preset[] = [
     params: { amplitude: 60, spacing: 12, lineWidth: 1.5, noise: 0.05, compression: 0.9, seed: "broadcast", palette: "cream", occlusion: 1 },
   },
   {
+    id: "topo-signal",
+    name: "Topo Signal",
+    styleId: "waveform-terrain",
+    params: { amplitude: 55, spacing: 7, lineWidth: 1.2, noise: 0.12, compression: 1.05, seed: "toposignal", palette: "midnight", occlusion: 1 },
+  },
+  {
     id: "fault-line",
     name: "Fault Line",
     styleId: "seismic",
