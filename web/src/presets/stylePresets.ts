@@ -24,6 +24,7 @@ export const defaultStyleParams: StyleParams = {
   grain: 0,
   rotation: 0,
   label: "",
+  labelStyle: "plain",
   aspectRatio: "square",
   occlusion: 1,
   phase: 0,

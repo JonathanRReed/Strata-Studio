@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState, type RefObject } from "react";
 import { Artboard } from "./Artboard.tsx";
 import type { AspectRatio, GeoBounds } from "../engine/types.ts";
+import type { CuratedPlace } from "../data/places.ts";
 
 const MapSelector = lazy(() => import("./MapSelector.tsx"));
 
@@ -25,9 +26,6 @@ type Props = {
   showTerrainRetry: boolean;
   terrainRetryCount: number;
   onRetryTerrain: () => void;
-  showOsmRetry: boolean;
-  osmRetryCount: number;
-  onRetryOsm: () => void;
   onCanvasResized: () => void;
   // Viewfinder wiring
   bounds: GeoBounds;
@@ -36,6 +34,9 @@ type Props = {
   initialCenter: [number, number];
   initialZoom: number;
   initialBounds: GeoBounds | null;
+  /** Last curated place chosen (chip strip / Surprise Me); highlights its chip. */
+  activePlaceId: string | null;
+  onSelectPlace: (place: CuratedPlace) => void;
 };
 
 /** Typographic minus for the instrument voice. */
@@ -84,9 +85,6 @@ export function Stage({
   showTerrainRetry,
   terrainRetryCount,
   onRetryTerrain,
-  showOsmRetry,
-  osmRetryCount,
-  onRetryOsm,
   onCanvasResized,
   bounds,
   mapZoom,
@@ -94,12 +92,18 @@ export function Stage({
   initialCenter,
   initialZoom,
   initialBounds,
+  activePlaceId,
+  onSelectPlace,
 }: Props) {
   const [mapExpanded, setMapExpanded] = useState(false);
   const toggleExpand = () => setMapExpanded((prev) => !prev);
 
   const artworkVisible = hasArtwork || isGenerating;
-  const showStale = boundsDirty && hasArtwork && !isGenerating;
+  // Auto-regeneration owns the happy path (isGenerating covers pending
+  // debounce + fetch), so the stale banner is only the fallback surface —
+  // shown when regeneration failed (error banner owns the message then) or
+  // was suppressed (animation export in progress).
+  const showStale = boundsDirty && hasArtwork && !isGenerating && !errorMessage;
   const caption = formatCaption(bounds, terrainInfo, seed);
 
   return (
@@ -135,6 +139,8 @@ export function Stage({
               zoom={mapZoom}
               expanded={mapExpanded}
               onToggleExpand={toggleExpand}
+              activePlaceId={activePlaceId}
+              onSelectPlace={onSelectPlace}
             />
           </Suspense>
         </div>
@@ -177,11 +183,6 @@ export function Stage({
                 {showTerrainRetry && (
                   <button type="button" onClick={onRetryTerrain} className={retryButtonClass}>
                     Retry{terrainRetryCount > 0 ? ` (${terrainRetryCount})` : ""}
-                  </button>
-                )}
-                {showOsmRetry && (
-                  <button type="button" onClick={onRetryOsm} className={retryButtonClass}>
-                    Retry OSM{osmRetryCount > 0 ? ` (${osmRetryCount})` : ""}
                   </button>
                 )}
                 <button

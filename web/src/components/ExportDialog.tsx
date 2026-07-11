@@ -8,7 +8,8 @@ type ExportSize = 1024 | 2048 | 3000;
 type Props = {
   open: boolean;
   onClose: () => void;
-  onExportPng: (size: number) => void;
+  /** dpi, when set, is written into the PNG as a pHYs chunk for true-size prints. */
+  onExportPng: (size: number, dpi?: number) => void;
   onExportSvg: (size: number) => void;
   onExportAnimation: (format: AnimationFormat) => void;
   onExportJson: () => void;
@@ -29,10 +30,31 @@ const FORMATS: { value: ExportFormat; label: string }[] = [
   { value: "animation", label: "Animation" },
 ];
 
-const PNG_SIZES: { value: ExportSize; desc: string }[] = [
+/**
+ * Print-truth inch figure for a size row: the export's long edge is always
+ * exactly `size` pixels (getExportDimensions pins the long side), so
+ * size/dpi is the long-edge print size for EVERY aspect ratio. The dialog
+ * deliberately labels only the long edge: it doesn't receive the current
+ * aspect ratio (App owns the dialog and its props), and the long edge is the
+ * one figure that stays honest across square/16:9/9:16/12:18.
+ */
+function longEdgeInches(size: number, dpi: number): string {
+  const inches = size / dpi;
+  return Number.isInteger(inches) ? String(inches) : inches.toFixed(1);
+}
+
+const PNG_SIZES: { value: ExportSize; desc: string; dpi?: number }[] = [
   { value: 1024, desc: "screens & social" },
-  { value: 2048, desc: "wallpaper & large social" },
-  { value: 3000, desc: "print · 12×18 in at 250 DPI" },
+  {
+    value: 2048,
+    dpi: 300,
+    desc: `wallpaper & social · 300 DPI ≈ ${longEdgeInches(2048, 300)} in long edge`,
+  },
+  {
+    value: 3000,
+    dpi: 250,
+    desc: `print · 250 DPI ≈ ${longEdgeInches(3000, 250)} in long edge`,
+  },
 ];
 
 const SVG_DESC = "vector — plotter & print-shop ready";
@@ -90,7 +112,7 @@ export function ExportDialog({
   const exportDisabled = busy || animationBlocked;
 
   const handleExport = () => {
-    if (format === "png") onExportPng(size);
+    if (format === "png") onExportPng(size, PNG_SIZES.find((s) => s.value === size)?.dpi);
     else if (format === "svg") onExportSvg(size);
     else onExportAnimation(animFormat);
   };

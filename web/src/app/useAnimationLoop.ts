@@ -35,6 +35,7 @@ const ANIM_RESTART_KEY_MAP: Record<Exclude<keyof StyleParams, "animationSpeed" |
   grain: true,
   rotation: true,
   label: true,
+  labelStyle: true,
   aspectRatio: true,
   occlusion: true,
   animationMode: true,

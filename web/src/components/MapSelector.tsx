@@ -10,6 +10,7 @@ import maplibregl from "maplibre-gl";
 import type { GeoBounds } from "../engine/types.ts";
 import { normalizeBounds } from "../engine/projection.ts";
 import { bboxAreaKm2, isBboxSmallEnough } from "../data/osmOverpass.ts";
+import { CURATED_PLACES, surprisePlace, type CuratedPlace } from "../data/places.ts";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
@@ -53,6 +54,11 @@ type Props = {
   /** Whether the viewfinder is in its large-overlay state (chrome + map.resize). */
   expanded: boolean;
   onToggleExpand: () => void;
+  /** Last curated place chosen; its chip renders active (border-signal). */
+  activePlaceId?: string | null;
+  /** Called when a curated place is chosen (chip or Surprise Me) — the map
+   * flies there itself; the parent applies the place's preset. */
+  onSelectPlace?: (place: CuratedPlace) => void;
 };
 
 export default function MapSelector({
@@ -64,6 +70,8 @@ export default function MapSelector({
   zoom,
   expanded,
   onToggleExpand,
+  activePlaceId = null,
+  onSelectPlace,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -199,6 +207,21 @@ export default function MapSelector({
     [handleSearch]
   );
 
+  /** Fly to a curated place; moveend then reports fresh bounds upstream,
+   * which the live-regeneration flow turns into a new artwork. */
+  const selectPlace = useCallback(
+    (place: CuratedPlace) => {
+      cancelSearch();
+      mapRef.current?.flyTo({ center: place.center, zoom: place.zoom });
+      onSelectPlace?.(place);
+    },
+    [cancelSearch, onSelectPlace]
+  );
+
+  const handleSurprise = useCallback(() => {
+    selectPlace(surprisePlace(activePlaceId ?? undefined));
+  }, [selectPlace, activePlaceId]);
+
   useEffect(() => {
     return () => {
       if (searchTimeoutRef.current !== null) clearTimeout(searchTimeoutRef.current);
@@ -305,6 +328,15 @@ export default function MapSelector({
           </p>
           <button
             type="button"
+            onClick={handleSurprise}
+            aria-label="Surprise me"
+            title="Surprise me"
+            className="flex h-11 w-11 shrink-0 items-center justify-center text-[17px] text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+          >
+            <span aria-hidden="true">⚄</span>
+          </button>
+          <button
+            type="button"
             onClick={onToggleExpand}
             aria-label={expanded ? "Collapse map" : "Expand map"}
             aria-expanded={expanded}
@@ -329,6 +361,35 @@ export default function MapSelector({
             Search
           </button>
         </form>
+        {/* Curated places strip — expanded viewfinder only. */}
+        {expanded && (
+          <div
+            role="group"
+            aria-label="Curated places"
+            className="flex gap-1.5 overflow-x-auto border-t border-hairline px-3 py-2"
+          >
+            {CURATED_PLACES.map((place) => {
+              const active = place.id === activePlaceId;
+              return (
+                <button
+                  key={place.id}
+                  type="button"
+                  onClick={() => selectPlace(place)}
+                  aria-pressed={active}
+                  title={place.blurb}
+                  className={`flex h-11 shrink-0 flex-col items-start justify-center rounded-sm border bg-surface px-3 text-left transition-colors ${
+                    active
+                      ? "border-signal"
+                      : "border-hairline hover:border-hairline-2 hover:bg-surface-2"
+                  }`}
+                >
+                  <span className="instrument-label text-ink">{place.name}</span>
+                  <span className="instrument-label text-ink-faint">{place.region}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Map area — the selection square is min(w,h)*0.7 of THIS element,

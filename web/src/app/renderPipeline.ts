@@ -1,8 +1,9 @@
 import { buildFeatureMasks } from "../engine/maskRasterizer.ts";
-import { cropGridToAspect } from "../engine/grid.ts";
+import { cropGridToAspect, normalizeGrid } from "../engine/grid.ts";
 import { createNoise } from "../engine/noise.ts";
 import type {
   ArtworkInput,
+  ArtworkMeta,
   ElevationGrid,
   FeatureMasks,
   GeoBounds,
@@ -21,6 +22,33 @@ export function getMaskDimensions(
   const maskW = width >= height ? MASK_SIZE : Math.round((MASK_SIZE * width) / height);
   const maskH = width >= height ? Math.round((MASK_SIZE * height) / width) : MASK_SIZE;
   return { maskW, maskH };
+}
+
+/** Coordinates + elevation range of the cropped grid, for the poster title block. */
+export function buildArtworkMeta(grid: ElevationGrid): ArtworkMeta {
+  const { min, max } = normalizeGrid(grid.data);
+  return { bounds: grid.bounds, elevation: { min, max } };
+}
+
+/**
+ * A zero-coverage 1×1 masks object that only carries ArtworkMeta. Used when
+ * no OSM features are loaded so the renderer (which receives masks, not the
+ * full ArtworkInput) still gets coordinates/elevation for the poster title
+ * block. All-zero masks are influence no-ops, so rendering is unchanged.
+ */
+function metaOnlyMasks(meta: ArtworkMeta): FeatureMasks {
+  const zero = new Float32Array(1);
+  return {
+    width: 1,
+    height: 1,
+    building: zero,
+    road: zero,
+    water: zero,
+    ocean: zero,
+    lake: zero,
+    river: zero,
+    meta,
+  };
 }
 
 export type BuildArtworkInputOptions = {
@@ -47,10 +75,13 @@ export function buildArtworkInput({
   skipMasks,
 }: BuildArtworkInputOptions): ArtworkInput {
   const croppedGrid = cropGridToAspect(grid, width, height);
-  let masks: FeatureMasks | undefined;
+  const meta = buildArtworkMeta(croppedGrid);
+  let masks: FeatureMasks;
   if (features && !skipMasks) {
     const { maskW, maskH } = getMaskDimensions(width, height);
-    masks = buildFeatureMasks(features, croppedGrid.bounds, maskW, maskH);
+    masks = { ...buildFeatureMasks(features, croppedGrid.bounds, maskW, maskH), meta };
+  } else {
+    masks = metaOnlyMasks(meta);
   }
   return {
     bounds: croppedGrid.bounds,

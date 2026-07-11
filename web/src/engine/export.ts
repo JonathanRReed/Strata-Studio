@@ -1,29 +1,120 @@
-export function downloadPng(canvas: HTMLCanvasElement, filename: string) {
-  try {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          console.error("Failed to create PNG blob");
-          return;
-        }
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.download = filename;
-        link.href = url;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      },
-      "image/png",
-    );
-  } catch (err) {
-    console.error("PNG export failed:", err);
+// --- PNG pHYs (physical density) injection -------------------------------
+//
+// Print shops open a PNG at its declared physical size only when it carries
+// a pHYs chunk (pixels per metre). Canvas.toBlob never writes one, so print
+// exports splice it in at the byte level before download.
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const METERS_PER_INCH = 0.0254;
+
+let crcTable: Uint32Array | null = null;
+
+/** Standard PNG CRC-32 (polynomial 0xEDB88320), as an unsigned 32-bit int. */
+export function crc32(bytes: Uint8Array): number {
+  if (!crcTable) {
+    crcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      crcTable[n] = c >>> 0;
+    }
   }
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = crcTable[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
-export function downloadSvg(svgString: string, filename: string) {
-  const blob = new Blob([svgString], { type: "image/svg+xml" });
+/** Pixels per metre a pHYs chunk declares for the given DPI. */
+export function dpiToPpm(dpi: number): number {
+  return Math.round(dpi / METERS_PER_INCH);
+}
+
+/**
+ * A complete pHYs chunk (length + type + data + CRC) declaring `dpi` in both
+ * axes: 9 data bytes — x ppm (u32be), y ppm (u32be), unit specifier 1 (metre).
+ */
+export function buildPhysChunk(dpi: number): Uint8Array<ArrayBuffer> {
+  const ppm = dpiToPpm(dpi);
+  const chunk = new Uint8Array(4 + 4 + 9 + 4);
+  const view = new DataView(chunk.buffer);
+  view.setUint32(0, 9);
+  chunk[4] = 0x70; // p
+  chunk[5] = 0x48; // H
+  chunk[6] = 0x59; // Y
+  chunk[7] = 0x73; // s
+  view.setUint32(8, ppm);
+  view.setUint32(12, ppm);
+  chunk[16] = 1;
+  view.setUint32(17, crc32(chunk.subarray(4, 17)));
+  return chunk;
+}
+
+/**
+ * Splices a pHYs chunk into PNG bytes immediately before the first IDAT
+ * (dropping any existing pHYs). Pure byte-level chunk walk — no decode.
+ * Returns the input untouched when it isn't a well-formed PNG.
+ */
+export function insertPhysChunk(
+  png: Uint8Array<ArrayBuffer>,
+  dpi: number,
+): Uint8Array<ArrayBuffer> {
+  if (png.length < 8 || PNG_SIGNATURE.some((b, i) => png[i] !== b)) return png;
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  const parts: Uint8Array<ArrayBuffer>[] = [png.subarray(0, 8)];
+  let inserted = false;
+  let offset = 8;
+  while (offset + 12 <= png.length) {
+    const dataLength = view.getUint32(offset);
+    const end = offset + 12 + dataLength;
+    if (end > png.length) return png; // truncated chunk — leave untouched
+    const type = String.fromCharCode(
+      png[offset + 4],
+      png[offset + 5],
+      png[offset + 6],
+      png[offset + 7],
+    );
+    if (type === "IDAT" && !inserted) {
+      parts.push(buildPhysChunk(dpi));
+      inserted = true;
+    }
+    if (type !== "pHYs") parts.push(png.subarray(offset, end));
+    offset = end;
+    if (type === "IEND") break;
+  }
+  if (!inserted) return png;
+  if (offset < png.length) parts.push(png.subarray(offset));
+  const total = parts.reduce((sum, p) => sum + p.length, 0);
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+/** PNG blob → the same PNG with a pHYs chunk declaring `dpi`. */
+export async function withPngDpi(blob: Blob, dpi: number): Promise<Blob> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const spliced = insertPhysChunk(bytes, dpi);
+  if (spliced === bytes) return blob;
+  return new Blob([spliced], { type: "image/png" });
+}
+
+// --- Download helpers -----------------------------------------------------
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("Failed to create PNG blob"))),
+      "image/png",
+    );
+  });
+}
+
+function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.download = filename;
@@ -32,6 +123,25 @@ export function downloadSvg(svgString: string, filename: string) {
   link.click();
   document.body.removeChild(link);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export async function downloadPng(
+  canvas: HTMLCanvasElement,
+  filename: string,
+  /** When set, a pHYs chunk declaring this density is spliced into the PNG. */
+  dpi?: number,
+) {
+  try {
+    let blob = await canvasToPngBlob(canvas);
+    if (dpi) blob = await withPngDpi(blob, dpi);
+    downloadBlob(blob, filename);
+  } catch (err) {
+    console.error("PNG export failed:", err);
+  }
+}
+
+export function downloadSvg(svgString: string, filename: string) {
+  downloadBlob(new Blob([svgString], { type: "image/svg+xml" }), filename);
 }
 
 export function createOffscreenCanvas(
@@ -84,6 +194,8 @@ export function downloadPngWithAttribution(
   backgroundColor = "#000000",
   /** Device pixels per logical pixel, so attribution text scales with exports. */
   scale = 1,
+  /** When set, a pHYs chunk declaring this print density is spliced in. */
+  dpi?: number,
 ) {
   // Draw onto a copy so the source canvas (e.g. the live preview) is untouched.
   const copy = document.createElement("canvas");
@@ -91,7 +203,7 @@ export function downloadPngWithAttribution(
   copy.height = canvas.height;
   const ctx = copy.getContext("2d");
   if (!ctx) {
-    downloadPng(canvas, filename);
+    void downloadPng(canvas, filename, dpi);
     return;
   }
   ctx.drawImage(canvas, 0, 0);
@@ -102,7 +214,7 @@ export function downloadPngWithAttribution(
     : "rgba(255,255,255,0.4)";
   ctx.textAlign = "right";
   ctx.fillText(attribution, copy.width - 8 * scale, copy.height - 8 * scale);
-  downloadPng(copy, filename);
+  void downloadPng(copy, filename, dpi);
 }
 
 function escapeXml(str: string): string {

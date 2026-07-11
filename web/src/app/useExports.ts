@@ -79,7 +79,7 @@ export function useExports({
   );
 
   const exportPng = useCallback(
-    async (size: number) => {
+    async (size: number, dpi?: number) => {
       const { width, height } = getExportDimensions(params.aspectRatio, size);
       const logical = getPreviewDimensions(params.aspectRatio);
       const gridSize = exportGridSize(size);
@@ -105,6 +105,7 @@ export function useExports({
           ATTRIBUTION,
           backgroundColor,
           width / logical.width,
+          dpi,
         );
         setStatus({ phase: "idle" });
       } catch (err) {

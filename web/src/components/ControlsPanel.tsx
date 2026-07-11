@@ -17,6 +17,7 @@ import type {
   ControlKey,
   AnimationMode,
   ElevationGrid,
+  LabelStyle,
 } from "../engine/types.ts";
 import { presets, defaultStyleParams, applyPreset, type Preset } from "../presets/stylePresets.ts";
 import { stylesByStudio, getStyle } from "../studios/registry.ts";
@@ -786,6 +787,37 @@ export function ControlsPanel({
                 className={textInputClass}
               />
             </label>
+          )}
+          {controls.has("label") && (
+            <fieldset className="flex flex-col gap-1.5">
+              <legend className="instrument-label flex items-center gap-1.5 text-ink-faint">
+                Label style
+                <InfoDot text="Poster renders the label as a letterspaced-caps title block with coordinates and elevation range." />
+              </legend>
+              <div className="grid grid-cols-2 overflow-hidden rounded-sm border border-hairline">
+                {(["plain", "poster"] as LabelStyle[]).map((style) => (
+                  <label key={style}>
+                    <input
+                      type="radio"
+                      name="label-style"
+                      value={style}
+                      checked={params.labelStyle === style}
+                      onChange={() => update({ labelStyle: style })}
+                      className="peer sr-only"
+                    />
+                    <span
+                      className={`flex min-h-11 cursor-pointer items-center justify-center border-b-2 px-2 text-[13px] transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-signal ${
+                        params.labelStyle === style
+                          ? "border-signal bg-surface-2 text-ink"
+                          : "border-transparent text-ink-muted hover:text-ink"
+                      }`}
+                    >
+                      {style === "plain" ? "Plain" : "Poster"}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
           )}
           {controls.has("aspectRatio") && (
             <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">

@@ -52,8 +52,30 @@ describe("buildArtworkInput", () => {
     expect(input.width).toBe(512);
     expect(input.height).toBe(512);
     expect(input.seed).toBe("test-seed");
-    expect(input.masks).toBeUndefined();
+    // No features: a 1×1 zero-mask carrier exists purely to deliver meta.
+    expect(input.masks).toBeDefined();
+    expect(input.masks!.width).toBe(1);
+    expect(input.masks!.height).toBe(1);
+    expect(Array.from(input.masks!.building)).toEqual([0]);
+    expect(Array.from(input.masks!.water)).toEqual([0]);
   });
+
+  it("attaches ArtworkMeta (bounds + elevation range) for the poster title block", () => {
+    const grid = makeGrid(64); // data = i % 97 → elevation range [0, 96]
+    const input = buildArtworkInput({ grid, params, width: 512, height: 512 });
+    expect(input.masks!.meta).toEqual({
+      bounds: BOUNDS,
+      elevation: { min: 0, max: 96 },
+    });
+  });
+
+  it("computes meta from the CROPPED grid so coordinates match the artwork", () => {
+    const grid = makeGrid(64);
+    const input = buildArtworkInput({ grid, params, width: 512, height: 288 });
+    expect(input.masks!.meta!.bounds).toEqual(input.bounds);
+    expect(input.masks!.meta!.bounds.north).toBeLessThan(BOUNDS.north);
+  });
+
 
   it("crops the grid and bounds to the target aspect", () => {
     const grid = makeGrid(64);
@@ -68,11 +90,13 @@ describe("buildArtworkInput", () => {
     expect(input.bounds).toEqual(input.elevationGrid.bounds);
   });
 
-  it("skips mask rasterization when skipMasks is set", () => {
+  it("skips mask rasterization when skipMasks is set (meta-only carrier)", () => {
     const grid = makeGrid(16);
     const features = { type: "FeatureCollection" as const, features: [] };
     const input = buildArtworkInput({ grid, features, params, width: 512, height: 512, skipMasks: true });
-    expect(input.masks).toBeUndefined();
+    expect(input.masks!.width).toBe(1);
+    expect(input.masks!.height).toBe(1);
+    expect(input.masks!.meta).toBeDefined();
     expect(input.features).toBe(features);
   });
 });
