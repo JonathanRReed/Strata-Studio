@@ -68,6 +68,12 @@ type Props = ControlsPanelProps & {
   copiedUrl: boolean;
   /** While the map overlay is open it owns the Escape key. */
   mapExpanded: boolean;
+  /** Opens the variations overlay (STYLE tab); disabled until terrain exists. */
+  onOpenVariations: () => void;
+  variationsReady: boolean;
+  /** Native share (EXPORT tab); the button is hidden where unsupported. */
+  onShare: () => void;
+  shareSupported: boolean;
 };
 
 /**
@@ -108,6 +114,10 @@ export function MobileSheet({
   onCopyUrl,
   copiedUrl,
   mapExpanded,
+  onOpenVariations,
+  variationsReady,
+  onShare,
+  shareSupported,
 }: Props) {
   const [snap, setSnap] = useState<SheetSnap>("collapsed");
   const [tab, setTab] = useState<SheetTab>("style");
@@ -424,6 +434,14 @@ export function MobileSheet({
               className="pt-3"
             >
               <StudioSwitcher className="mb-1" studio={studio} onStyleChange={onStyleChange} />
+              <button
+                type="button"
+                onClick={onOpenVariations}
+                disabled={!variationsReady}
+                className={`${secondaryButtonClass} mt-3 w-full`}
+              >
+                Variations — 4 fresh seeds
+              </button>
               <StyleSection
                 studio={studio}
                 styleId={styleId}
@@ -474,6 +492,11 @@ export function MobileSheet({
               <button type="button" onClick={onOpenExport} className={secondaryButtonClass}>
                 Export… PNG · SVG · animation
               </button>
+              {shareSupported && (
+                <button type="button" onClick={onShare} className={secondaryButtonClass}>
+                  Share…
+                </button>
+              )}
               <button type="button" onClick={onCopyUrl} className={secondaryButtonClass}>
                 {copiedUrl ? "Link copied" : "Copy share link"}
               </button>

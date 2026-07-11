@@ -20,6 +20,10 @@ type Props = {
   boundsDirty: boolean;
   onRegenerate: () => void;
   seed: string;
+  /** Poster label (auto-filled place name or user text); leads the caption. */
+  label: string;
+  /** Opens the variations overlay (desktop ghost button by the caption). */
+  onOpenVariations: () => void;
   terrainInfo: string | null;
   warning: string | null;
   errorMessage: string | null;
@@ -51,17 +55,23 @@ function minus(value: string): string {
 }
 
 /**
- * Caption plate line: "37.7749°N 122.4194°W · ELEV −110–282 M · SEED MONOLITH".
- * Elevation is parsed out of the preformatted terrainInfo string (the useTerrain
- * hook owns that format); when unavailable the segment is omitted.
+ * Caption plate line: "AMSTERDAM · 52.3700°N 4.9000°E · ELEV −2–18 M · SEED
+ * MONOLITH". The place name (auto-filled or user label) leads when present;
+ * elevation is parsed out of the preformatted terrainInfo string (the
+ * useTerrain hook owns that format); when unavailable the segment is omitted.
  */
-function formatCaption(bounds: GeoBounds, terrainInfo: string | null, seed: string): string {
+function formatCaption(
+  bounds: GeoBounds,
+  terrainInfo: string | null,
+  seed: string,
+  label: string,
+): string {
   const lat = (bounds.north + bounds.south) / 2;
   const lng = (bounds.east + bounds.west) / 2;
   const coords = `${Math.abs(lat).toFixed(4)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lng).toFixed(4)}°${lng >= 0 ? "E" : "W"}`;
   const match = terrainInfo?.match(/Elevation (-?\d+)m – (-?\d+)m/);
   const elev = match ? `ELEV ${minus(match[1])}–${minus(match[2])} M` : null;
-  return [coords, elev, `SEED ${seed}`].filter(Boolean).join(" · ");
+  return [label.trim() || null, coords, elev, `SEED ${seed}`].filter(Boolean).join(" · ");
 }
 
 const retryButtonClass =
@@ -84,6 +94,8 @@ export function Stage({
   boundsDirty,
   onRegenerate,
   seed,
+  label,
+  onOpenVariations,
   terrainInfo,
   warning,
   errorMessage,
@@ -110,7 +122,7 @@ export function Stage({
   // shown when regeneration failed (error banner owns the message then) or
   // was suppressed (animation export in progress).
   const showStale = boundsDirty && hasArtwork && !isGenerating && !errorMessage;
-  const caption = formatCaption(bounds, terrainInfo, seed);
+  const caption = formatCaption(bounds, terrainInfo, seed, label);
 
   return (
     <main
@@ -226,13 +238,23 @@ export function Stage({
           ariaLabel={artworkLabel}
           onCanvasResized={onCanvasResized}
         />
-        <p
-          className={`instrument-label mt-4 shrink-0 text-center text-ink-faint ${
+        <div
+          className={`mt-4 flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 ${
             artworkVisible ? "" : "invisible"
           }`}
         >
-          {caption}
-        </p>
+          <p className="instrument-label text-center text-ink-faint">{caption}</p>
+          {/* Variations ghost button — desktop only; the mobile STYLE tab has its own. */}
+          {hasArtwork && (
+            <button
+              type="button"
+              onClick={onOpenVariations}
+              className="instrument-label hidden h-7 items-center rounded-sm border border-hairline px-2.5 text-ink-muted transition-colors hover:border-hairline-2 hover:text-ink lg:flex"
+            >
+              Variations
+            </button>
+          )}
+        </div>
       </div>
     </main>
   );

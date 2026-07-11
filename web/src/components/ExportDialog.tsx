@@ -15,6 +15,10 @@ type Props = {
   onExportJson: () => void;
   onCopyUrl: () => void;
   copiedUrl: boolean;
+  /** Native share (navigator.share with the artwork attached). */
+  onShare: () => void;
+  /** False where navigator.share is unavailable — the button is hidden, not dead. */
+  shareSupported: boolean;
   exportStatus: ExportStatus;
   animationStatus: AnimationExportStatus;
   isExporting: boolean;
@@ -85,6 +89,8 @@ export function ExportDialog({
   onExportJson,
   onCopyUrl,
   copiedUrl,
+  onShare,
+  shareSupported,
   exportStatus,
   animationStatus,
   isExporting,
@@ -281,6 +287,16 @@ export function ExportDialog({
         <div className="flex flex-col gap-2 border-t border-hairline pt-4">
           <span className="instrument-label text-ink-faint">Share</span>
           <div className="flex gap-2">
+            {shareSupported && (
+              <button
+                type="button"
+                onClick={onShare}
+                disabled={isExportingAnimation}
+                className={shareButtonClass}
+              >
+                Share…
+              </button>
+            )}
             <button
               type="button"
               onClick={onCopyUrl}

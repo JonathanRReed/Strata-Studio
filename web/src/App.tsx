@@ -3,6 +3,8 @@ import { ControlsPanel } from "./components/ControlsPanel.tsx";
 import { MobileSheet } from "./components/MobileSheet.tsx";
 import { Stage } from "./components/Stage.tsx";
 import { ExportDialog } from "./components/ExportDialog.tsx";
+import { VariationsDialog } from "./components/VariationsDialog.tsx";
+import { EggToast } from "./components/EggToast.tsx";
 import { useIsDesktop } from "./components/useIsDesktop.ts";
 import type { FlyToRequest } from "./components/MapSelector.tsx";
 import { getStyle } from "./studios/registry.ts";
@@ -19,6 +21,9 @@ import { useArtworkRenderer } from "./app/useArtworkRenderer.ts";
 import { useAnimationLoop } from "./app/useAnimationLoop.ts";
 import { useExports } from "./app/useExports.ts";
 import { usePalettes } from "./app/usePalettes.ts";
+import { useEasterEggs } from "./app/useEasterEggs.ts";
+import { useShare } from "./app/useShare.ts";
+import { useAutoLabel } from "./app/useAutoLabel.ts";
 import { readInitialUrlState, useUrlState } from "./app/useUrlState.ts";
 import {
   AUTO_REGEN_DEBOUNCE_MS,
@@ -55,6 +60,7 @@ export default function App() {
   const [mapZoom, setMapZoom] = useState(boot.url.zoom ?? boot.place?.zoom ?? DEFAULT_ZOOM);
   const [isAnimating, setIsAnimating] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [variationsOpen, setVariationsOpen] = useState(false);
   const [activePlaceId, setActivePlaceId] = useState<string | null>(boot.place?.id ?? null);
   // Viewfinder overlay + fly-to live here so the mobile sheet can drive the
   // map (Stage/MapSelector render them; behavior at lg is unchanged).
@@ -84,6 +90,7 @@ export default function App() {
     styleId,
     allPalettes,
     suspended: isAnimating || terrain.boundsDirty,
+    isAnimating,
   });
   useAnimationLoop({ canvasRef, isAnimating, input: previewInput, params, styleId, allPalettes });
 
@@ -104,6 +111,31 @@ export default function App() {
     mapZoom,
   });
 
+  // Landmark easter eggs: each completed generate (fresh grid) is checked;
+  // first discoveries unlock a palette via the custom-palette store + toast.
+  const { eggToast, dismissEggToast } = useEasterEggs({ grid: terrain.grid, savePalette });
+
+  // Native share (artwork PNG attached where supported; hidden elsewhere).
+  const { shareSupported, share } = useShare({
+    canvasRef,
+    styleId,
+    seed: params.seed,
+    label: params.label,
+    onFallbackCopy: () => void copyUrl(),
+  });
+
+  // Auto-named poster labels: generate settles resolve a place name that
+  // fills the label unless the user typed their own (see useAutoLabel).
+  const handleAutoLabel = useCallback((name: string) => {
+    setParams((prev) => (prev.label === name ? prev : { ...prev, label: name }));
+  }, []);
+  const { applyCuratedName } = useAutoLabel({
+    grid: terrain.grid,
+    label: params.label,
+    initialCuratedName: boot.place?.name ?? null,
+    onAutoLabel: handleAutoLabel,
+  });
+
   const isExportingAnimation = exports.animationStatus.phase === "exporting";
   const isExportingAnimationRef = useRef(isExportingAnimation);
   isExportingAnimationRef.current = isExportingAnimation;
@@ -119,9 +151,11 @@ export default function App() {
     if (!canvasRef.current) return;
     setBooted(true);
     bootedRef.current = true;
-    // Render placeholder noise artwork immediately for feedback
+    // Render placeholder noise artwork immediately for feedback (instant —
+    // this also cancels any reveal a previous generate left running).
     renderArtwork(createPlaceholderGrid(PREVIEW_SIZE, params.seed, bounds), { skipMasks: true });
-    void generateTerrain(renderArtwork);
+    // Real terrain lands with the one-shot draw-in reveal.
+    void generateTerrain((grid) => renderArtwork(grid, { reveal: true }));
     if (isBboxSmallEnough(bounds)) void fetchFeatures(false);
   }, [renderArtwork, generateTerrain, fetchFeatures, params.seed, bounds]);
 
@@ -229,8 +263,11 @@ export default function App() {
       setActivePlaceId(place.id);
       const preset = presets.find((p) => p.id === place.presetId);
       if (preset) handleApplyPreset(preset);
+      // Curated names label the poster instantly — no geocode round-trip.
+      // After the preset so its functional setParams lands on preset params.
+      applyCuratedName(place.name);
     },
-    [handleApplyPreset],
+    [handleApplyPreset, applyCuratedName],
   );
 
   /** Place chosen from the mobile sheet: the map isn't the click target
@@ -262,6 +299,13 @@ export default function App() {
   );
 
   const handleToggleAnimation = useCallback(() => setIsAnimating((prev) => !prev), []);
+
+  const openVariations = useCallback(() => setVariationsOpen(true), []);
+  /** Adopt a variation: its seed becomes the artwork's (instant re-render + URL). */
+  const handleAdoptVariation = useCallback((seed: string) => {
+    setParams((prev) => ({ ...prev, seed }));
+    setVariationsOpen(false);
+  }, []);
 
   // Derived UI state from the per-operation statuses
   const terrainBusy = terrain.status.phase === "fetching" || terrain.status.phase === "rendering";
@@ -341,6 +385,8 @@ export default function App() {
         boundsDirty={terrain.boundsDirty}
         onRegenerate={handleGenerate}
         seed={params.seed}
+        label={params.label}
+        onOpenVariations={openVariations}
         terrainInfo={terrain.terrainInfo}
         warning={terrain.warning}
         errorMessage={errorMessage}
@@ -372,6 +418,10 @@ export default function App() {
           onCopyUrl={() => void copyUrl()}
           copiedUrl={copiedUrl}
           mapExpanded={mapExpanded}
+          onOpenVariations={openVariations}
+          variationsReady={!!terrain.grid}
+          onShare={() => void share()}
+          shareSupported={shareSupported}
         />
       )}
       <ExportDialog
@@ -383,6 +433,8 @@ export default function App() {
         onExportJson={exports.exportJson}
         onCopyUrl={copyUrl}
         copiedUrl={copiedUrl}
+        onShare={() => void share()}
+        shareSupported={shareSupported}
         exportStatus={exports.status}
         animationStatus={exports.animationStatus}
         isExporting={isExporting}
@@ -390,6 +442,17 @@ export default function App() {
         animationAvailable={params.animationMode !== "none"}
         onDismissErrors={dismissExportErrors}
       />
+      <VariationsDialog
+        open={variationsOpen}
+        onClose={() => setVariationsOpen(false)}
+        grid={terrain.grid}
+        features={osm.features}
+        params={params}
+        styleId={styleId}
+        allPalettes={allPalettes}
+        onAdopt={handleAdoptVariation}
+      />
+      {eggToast && <EggToast text={eggToast} onDismiss={dismissEggToast} />}
     </div>
   );
 }
