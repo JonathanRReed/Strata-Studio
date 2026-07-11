@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ControlsPanel } from "./components/ControlsPanel.tsx";
+import { MobileSheet } from "./components/MobileSheet.tsx";
 import { Stage } from "./components/Stage.tsx";
 import { ExportDialog } from "./components/ExportDialog.tsx";
+import { useIsDesktop } from "./components/useIsDesktop.ts";
+import type { FlyToRequest } from "./components/MapSelector.tsx";
 import { getStyle } from "./studios/registry.ts";
 import { isBboxSmallEnough, bboxAreaKm2 } from "./data/osmOverpass.ts";
 import { defaultPalette } from "./presets/palettes.ts";
@@ -53,6 +56,12 @@ export default function App() {
   const [isAnimating, setIsAnimating] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [activePlaceId, setActivePlaceId] = useState<string | null>(boot.place?.id ?? null);
+  // Viewfinder overlay + fly-to live here so the mobile sheet can drive the
+  // map (Stage/MapSelector render them; behavior at lg is unchanged).
+  const [mapExpanded, setMapExpanded] = useState(false);
+  const [mapFlyTo, setMapFlyTo] = useState<FlyToRequest | null>(null);
+  const flyToKeyRef = useRef(0);
+  const isDesktop = useIsDesktop();
 
   // Autopilot state: `booted` flips when the first generate fires (map's
   // first bounds report), `autoGen` schedules pending auto-generation.
@@ -224,6 +233,18 @@ export default function App() {
     [handleApplyPreset],
   );
 
+  /** Place chosen from the mobile sheet: the map isn't the click target
+   * there, so request the fly-to explicitly, then run the shared flow. */
+  const handleSelectPlaceFromSheet = useCallback(
+    (place: CuratedPlace) => {
+      setMapFlyTo({ center: place.center, zoom: place.zoom, key: ++flyToKeyRef.current });
+      handleSelectPlace(place);
+    },
+    [handleSelectPlace],
+  );
+
+  const toggleMapExpand = useCallback(() => setMapExpanded((prev) => !prev), []);
+
   const handleSavePalette = useCallback(
     (id: string, name: string, palette: Palette) => {
       savePalette(id, name, palette);
@@ -279,32 +300,36 @@ export default function App() {
     params.label || `${centerLat.toFixed(4)}, ${centerLng.toFixed(4)}`
   }`;
 
+  // One prop bundle, two containers: the desktop rail and the mobile sheet
+  // render the same section components from the same state — never both.
+  const controlsProps = {
+    params,
+    styleId,
+    onChange: setParams,
+    onStyleChange: handleStyleChange,
+    onApplyPreset: handleApplyPreset,
+    onGenerate: handleGenerate,
+    onOpenExport: () => setExportOpen(true),
+    onFetchFeatures: osm.fetchFeatures,
+    isLoading: terrainBusy,
+    isExporting,
+    isExportingAnimation,
+    isFeatureLoading: osm.status.phase === "fetching",
+    featureInfo: osm.featureInfo,
+    hasFeatures: !!osm.features,
+    osmAreaHint: !isBboxSmallEnough(bounds) ? `Area is ${bboxAreaKm2(bounds).toFixed(1)} km² — zoom in to under 25 km² to fetch OSM features` : null,
+    terrainGrid: terrain.grid,
+    allPalettes,
+    allPaletteNames,
+    onSavePalette: handleSavePalette,
+    onDeletePalette: handleDeletePalette,
+    isAnimating,
+    onToggleAnimation: handleToggleAnimation,
+  };
+
   return (
-    <div className="flex min-h-screen flex-col bg-ground text-ink lg:h-screen lg:flex-row lg:overflow-hidden">
-      <ControlsPanel
-        params={params}
-        styleId={styleId}
-        onChange={setParams}
-        onStyleChange={handleStyleChange}
-        onApplyPreset={handleApplyPreset}
-        onGenerate={handleGenerate}
-        onOpenExport={() => setExportOpen(true)}
-        onFetchFeatures={osm.fetchFeatures}
-        isLoading={terrainBusy}
-        isExporting={isExporting}
-        isExportingAnimation={isExportingAnimation}
-        isFeatureLoading={osm.status.phase === "fetching"}
-        featureInfo={osm.featureInfo}
-        hasFeatures={!!osm.features}
-        osmAreaHint={!isBboxSmallEnough(bounds) ? `Area is ${bboxAreaKm2(bounds).toFixed(1)} km² — zoom in to under 25 km² to fetch OSM features` : null}
-        terrainGrid={terrain.grid}
-        allPalettes={allPalettes}
-        allPaletteNames={allPaletteNames}
-        onSavePalette={handleSavePalette}
-        onDeletePalette={handleDeletePalette}
-        isAnimating={isAnimating}
-        onToggleAnimation={handleToggleAnimation}
-      />
+    <div className="flex min-h-screen flex-col bg-ground text-ink max-lg:h-[100svh] max-lg:min-h-0 max-lg:overflow-hidden max-lg:pb-[var(--sheet-peek)] lg:h-screen lg:flex-row lg:overflow-hidden">
+      {isDesktop && <ControlsPanel {...controlsProps} />}
       <Stage
         canvasRef={canvasRef}
         aspectRatio={params.aspectRatio}
@@ -332,7 +357,23 @@ export default function App() {
         initialBounds={boot.url.bounds}
         activePlaceId={activePlaceId}
         onSelectPlace={handleSelectPlace}
+        mapExpanded={mapExpanded}
+        onToggleMapExpand={toggleMapExpand}
+        mapFlyTo={mapFlyTo}
       />
+      {!isDesktop && (
+        <MobileSheet
+          {...controlsProps}
+          bounds={bounds}
+          mapZoom={mapZoom}
+          activePlaceId={activePlaceId}
+          onSelectPlace={handleSelectPlaceFromSheet}
+          onOpenMap={() => setMapExpanded(true)}
+          onCopyUrl={() => void copyUrl()}
+          copiedUrl={copiedUrl}
+          mapExpanded={mapExpanded}
+        />
+      )}
       <ExportDialog
         open={exportOpen}
         onClose={() => setExportOpen(false)}

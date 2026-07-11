@@ -42,6 +42,19 @@ function fmtDeg(value: number): string {
   return value.toFixed(4).replace(/-/g, "−");
 }
 
+/** Below-lg check (Tailwind lg = 64rem); read at event time, not reactively. */
+function isCompactViewport(): boolean {
+  return window.matchMedia("(max-width: 63.999rem)").matches;
+}
+
+/** One imperative fly-to request; `key` distinguishes repeat requests. */
+export type FlyToRequest = {
+  /** [lng, lat] — MapLibre order. */
+  center: [number, number];
+  zoom: number;
+  key: number;
+};
+
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
@@ -59,6 +72,8 @@ type Props = {
   /** Called when a curated place is chosen (chip or Surprise Me) — the map
    * flies there itself; the parent applies the place's preset. */
   onSelectPlace?: (place: CuratedPlace) => void;
+  /** Fly-to requests from outside the map (mobile sheet place picks). */
+  flyTo?: FlyToRequest | null;
 };
 
 export default function MapSelector({
@@ -72,11 +87,15 @@ export default function MapSelector({
   onToggleExpand,
   activePlaceId = null,
   onSelectPlace,
+  flyTo = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   // Initial-only prop: read via ref so it doesn't retrigger the map effect.
   const initialBoundsRef = useRef(initialBounds);
+  // Last selection reported from a real framing (load/moveend) — never from a
+  // resize — so mobile expand/collapse can restore it (see handleResize).
+  const lastSelectionRef = useRef<GeoBounds | null>(null);
 
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -265,12 +284,16 @@ export default function MapSelector({
             { animate: false, padding: { top: padY, bottom: padY, left: padX, right: padX } },
           );
         }
-        onChange(getSquareBounds(map), map.getZoom());
+        const first = getSquareBounds(map);
+        lastSelectionRef.current = first;
+        onChange(first, map.getZoom());
       }, 100);
     });
 
     const handleUpdate = () => {
-      onChange(getSquareBounds(map), map.getZoom());
+      const next = getSquareBounds(map);
+      lastSelectionRef.current = next;
+      onChange(next, map.getZoom());
     };
 
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -279,14 +302,41 @@ export default function MapSelector({
       timeoutId = setTimeout(handleUpdate, 200);
     };
 
+    // Desktop keeps the historical behavior: a resize reframes the selection
+    // under the new square. On mobile the PiP (~120px) and the fullscreen
+    // overlay differ so much that this would silently reselect a 9x smaller
+    // or larger area on every expand/collapse — instead, refit the last real
+    // framing under the new selection square so what the user framed is what
+    // stays selected (the follow-up moveend re-reports it upstream).
+    const handleResize = () => {
+      const restore = lastSelectionRef.current;
+      if (isCompactViewport() && restore) {
+        const container = map.getContainer();
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        const squareSize = Math.min(w, h) * 0.7;
+        const padX = (w - squareSize) / 2;
+        const padY = (h - squareSize) / 2;
+        map.fitBounds(
+          [
+            [restore.west, restore.south],
+            [restore.east, restore.north],
+          ],
+          { animate: false, padding: { top: padY, bottom: padY, left: padX, right: padX } },
+        );
+      } else {
+        handleUpdate();
+      }
+    };
+
     map.on("moveend", debouncedHandleUpdate);
-    map.on("resize", handleUpdate);
+    map.on("resize", handleResize);
 
     mapRef.current = map;
 
     return () => {
       map.off("moveend", debouncedHandleUpdate);
-      map.off("resize", handleUpdate);
+      map.off("resize", handleResize);
       if (timeoutId !== null) clearTimeout(timeoutId);
       map.remove();
       mapRef.current = null;
@@ -294,11 +344,18 @@ export default function MapSelector({
   }, [initialCenter, initialZoom, onChange]);
 
   // The expand toggle changes the container's size out from under MapLibre;
-  // nudge it after the layout settles so tiles fill the new viewport.
+  // nudge it after the layout settles so tiles fill the new viewport (the
+  // resize handler above owns any mobile selection compensation).
   useEffect(() => {
     const id = window.setTimeout(() => mapRef.current?.resize(), 50);
     return () => window.clearTimeout(id);
   }, [expanded]);
+
+  // External fly-to requests (mobile sheet place picks / Surprise Me).
+  useEffect(() => {
+    if (!flyTo) return;
+    mapRef.current?.flyTo({ center: flyTo.center, zoom: flyTo.zoom });
+  }, [flyTo]);
 
   // Esc collapses the expanded viewfinder.
   useEffect(() => {
@@ -317,8 +374,9 @@ export default function MapSelector({
 
   return (
     <div className="flex h-full w-full flex-col bg-surface">
-      {/* Viewfinder header: readout, expand toggle, search. */}
-      <div className="shrink-0 border-b border-hairline">
+      {/* Viewfinder header: readout, expand toggle, search. Hidden below lg
+          while collapsed — the mobile PiP is a pure locator (tap to expand). */}
+      <div className={`shrink-0 border-b border-hairline ${expanded ? "" : "max-lg:hidden"}`}>
         <div className="flex items-center gap-2 pl-3">
           <p className="instrument-label min-w-0 flex-1 truncate text-ink-muted">
             {fmtDeg(centerLat)} {fmtDeg(centerLng)} · Z{Math.round(zoom)} ·{" "}
@@ -430,10 +488,32 @@ export default function MapSelector({
             <div className="absolute h-3 w-3 rounded-full border-2 border-ink bg-signal" />
           </div>
         )}
-        <div className="pointer-events-none absolute bottom-1 left-1.5 right-1.5 font-mono text-[9.5px] leading-tight text-ink-faint">
+        <div
+          className={`pointer-events-none absolute bottom-1 left-1.5 right-1.5 font-mono text-[9.5px] leading-tight text-ink-faint ${
+            expanded ? "" : "max-lg:hidden"
+          }`}
+        >
           Map data &copy; OpenStreetMap contributors, OpenFreeMap &amp;
           OpenMapTiles | Terrain &copy; Mapzen / AWS Open Data
         </div>
+        {/* Mobile PiP: the whole locator is one tap-to-expand target (the
+            full overlay owns gestures, search and the places strip). */}
+        {!expanded && (
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            aria-label="Expand map"
+            aria-expanded={false}
+            className="absolute inset-0 z-30 flex items-end justify-end p-1 lg:hidden"
+          >
+            <span
+              aria-hidden="true"
+              className="flex h-6 w-6 items-center justify-center rounded-sm border border-hairline-2 bg-ground/80 text-[12px] text-ink-muted"
+            >
+              ⤢
+            </span>
+          </button>
+        )}
       </div>
     </div>
   );

@@ -225,3 +225,14 @@ input[type="text"]:focus-visible {
     animation: none;
   }
 }
+
+/*
+ * ——— Mobile bottom sheet (appended; desktop ≥lg untouched) ———
+ * Collapsed-sheet chrome height: 1px top border + 24px grab handle
+ * + 45px tab bar (44 + 1 border) + 60px Generate row (8 + 44 + 8),
+ * plus the home-indicator safe area. App reserves this much of the
+ * viewport below the stage; MobileSheet translates to rest on it.
+ */
+:root {
+  --sheet-peek: calc(130px + env(safe-area-inset-bottom, 0px));
+}

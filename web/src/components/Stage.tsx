@@ -1,7 +1,8 @@
-import { lazy, Suspense, useState, type RefObject } from "react";
+import { lazy, Suspense, type RefObject } from "react";
 import { Artboard } from "./Artboard.tsx";
 import type { AspectRatio, GeoBounds } from "../engine/types.ts";
 import type { CuratedPlace } from "../data/places.ts";
+import type { FlyToRequest } from "./MapSelector.tsx";
 
 const MapSelector = lazy(() => import("./MapSelector.tsx"));
 
@@ -37,6 +38,11 @@ type Props = {
   /** Last curated place chosen (chip strip / Surprise Me); highlights its chip. */
   activePlaceId: string | null;
   onSelectPlace: (place: CuratedPlace) => void;
+  /** Viewfinder overlay state — owned by App so the mobile sheet can open it. */
+  mapExpanded: boolean;
+  onToggleMapExpand: () => void;
+  /** Imperative fly-to channel (mobile sheet place picks); null = none requested. */
+  mapFlyTo: FlyToRequest | null;
 };
 
 /** Typographic minus for the instrument voice. */
@@ -94,10 +100,10 @@ export function Stage({
   initialBounds,
   activePlaceId,
   onSelectPlace,
+  mapExpanded,
+  onToggleMapExpand,
+  mapFlyTo,
 }: Props) {
-  const [mapExpanded, setMapExpanded] = useState(false);
-  const toggleExpand = () => setMapExpanded((prev) => !prev);
-
   const artworkVisible = hasArtwork || isGenerating;
   // Auto-regeneration owns the happy path (isGenerating covers pending
   // debounce + fetch), so the stale banner is only the fallback surface —
@@ -111,15 +117,16 @@ export function Stage({
       className="relative flex min-w-0 flex-1 flex-col"
       style={{ backgroundColor: `color-mix(in srgb, ${wallColor} 6%, var(--color-ground))` }}
     >
-      {/* Viewfinder — static block above the artboard below lg, floating PiP at lg. */}
+      {/* Viewfinder — floating PiP at every size: ~120px locator bottom-left on
+          mobile (tap to expand to the fullscreen overlay), 240px instrument at lg. */}
       <div
         className={
           mapExpanded
             ? "fixed inset-0 z-40 flex bg-ground/60 p-4 sm:p-8 lg:absolute lg:p-[7%]"
-            : "relative z-10 h-[300px] w-full shrink-0 border-b border-hairline bg-surface lg:absolute lg:bottom-6 lg:left-6 lg:z-20 lg:h-[240px] lg:w-[240px] lg:border lg:border-hairline-2 lg:shadow-[0_16px_48px_rgba(0,0,0,0.5)] 2xl:h-[300px] 2xl:w-[300px]"
+            : "absolute bottom-3 left-3 z-20 h-[120px] w-[120px] border border-hairline-2 bg-surface shadow-[0_12px_32px_rgba(0,0,0,0.5)] max-lg:overflow-hidden max-lg:rounded-sm lg:bottom-6 lg:left-6 lg:h-[240px] lg:w-[240px] lg:shadow-[0_16px_48px_rgba(0,0,0,0.5)] 2xl:h-[300px] 2xl:w-[300px]"
         }
         onClick={(e) => {
-          if (mapExpanded && e.target === e.currentTarget) toggleExpand();
+          if (mapExpanded && e.target === e.currentTarget) onToggleMapExpand();
         }}
       >
         <div
@@ -138,19 +145,21 @@ export function Stage({
               bounds={bounds}
               zoom={mapZoom}
               expanded={mapExpanded}
-              onToggleExpand={toggleExpand}
+              onToggleExpand={onToggleMapExpand}
               activePlaceId={activePlaceId}
               onSelectPlace={onSelectPlace}
+              flyTo={mapFlyTo}
             />
           </Suspense>
         </div>
       </div>
 
-      {/* Artwork wall. At lg–2xl the wall reserves a left column for the
-          floating viewfinder so it never occludes the frame or caption; at
-          2xl+ the artwork is fully centered museum-style and the (larger)
-          viewfinder floats clear of the caption. */}
-      <div className="relative flex h-[75vh] flex-col items-center justify-center px-6 py-10 lg:h-auto lg:min-h-0 lg:flex-1 lg:pb-8 lg:pl-[296px] lg:pr-10 lg:pt-14 2xl:pl-10">
+      {/* Artwork wall. Below lg it fills the stage (viewport minus the sheet's
+          collapsed chrome) so the artwork owns the screen. At lg–2xl the wall
+          reserves a left column for the floating viewfinder so it never
+          occludes the frame or caption; at 2xl+ the artwork is fully centered
+          museum-style and the (larger) viewfinder floats clear of the caption. */}
+      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-[144px] pt-12 lg:h-auto lg:min-h-0 lg:flex-1 lg:pb-8 lg:pl-[296px] lg:pr-10 lg:pt-14 2xl:pl-10">
         {/* Status pill rail — top-center of the artwork area, so it never
             covers the stacked viewfinder or the caption plate. */}
         <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex flex-col items-center gap-2 px-4 lg:top-6">
