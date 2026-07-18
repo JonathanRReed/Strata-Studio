@@ -29,6 +29,7 @@ describe("attachSubscriber (shared tile loads)", () => {
 
     shared.resolve("tile-data");
     await expect(p2).resolves.toBe("tile-data");
+    expect(shared.subscribers).toBe(0);
   });
 
   test("the shared fetch aborts only when the last subscriber leaves", async () => {
@@ -44,6 +45,7 @@ describe("attachSubscriber (shared tile loads)", () => {
     expect(shared.controller.signal.aborted).toBe(true);
     await expect(pa).rejects.toThrow("Aborted");
     await expect(pb).rejects.toThrow("Aborted");
+    expect(shared.subscribers).toBe(0);
   });
 
   test("signal-less subscribers pin the shared fetch alive", async () => {
@@ -58,6 +60,7 @@ describe("attachSubscriber (shared tile loads)", () => {
 
     shared.resolve("tile-data");
     await expect(p2).resolves.toBe("tile-data");
+    expect(shared.subscribers).toBe(0);
   });
 
   test("upstream failures still propagate to live subscribers", async () => {
@@ -66,6 +69,7 @@ describe("attachSubscriber (shared tile loads)", () => {
     const p = attachSubscriber(shared, sub.signal);
     shared.reject(new Error("HTTP 500"));
     await expect(p).rejects.toThrow("HTTP 500");
+    expect(shared.subscribers).toBe(0);
   });
 
   test("an already-aborted signal rejects immediately", async () => {
@@ -73,5 +77,7 @@ describe("attachSubscriber (shared tile loads)", () => {
     const dead = new AbortController();
     dead.abort();
     await expect(attachSubscriber(shared, dead.signal)).rejects.toThrow("Aborted");
+    expect(shared.subscribers).toBe(0);
+    expect(shared.controller.signal.aborted).toBe(true);
   });
 });

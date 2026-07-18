@@ -1,27 +1,29 @@
-// Strata Studio caching proxy — deliberately a SEPARATE Worker from the
-// static-assets site. Enabling Workers Cache on a Worker meters every request
-// through it, so assets stay on their own (cache-disabled) Worker and only
-// third-party API traffic flows through this one.
+// Strata Studio data proxy. The static application remains on Cloudflare Pages.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "strata-proxy",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-06",
 
-  // Workers Cache (GA 2026-07-06, requires Wrangler >= 4.69.0).
-  // Caching is driven purely by the Cache-Control / CDN-Cache-Control headers
-  // this Worker sets on its responses. Works on workers.dev; request
-  // collapsing is automatic. Do NOT use the legacy caches.default API.
+  // Workers Cache is driven by the response Cache-Control headers. Do not use
+  // caches.default, and do not route static application assets through here.
   "cache": {
     "enabled": true
   },
 
-  // NOTE: a `limits.cpu_ms` guardrail was considered but omitted — per the
-  // Wrangler configuration docs, `limits` is only supported on the Standard
-  // (paid) usage model. The free plan is hard-capped at 10 ms CPU per
-  // invocation anyway. If this Worker ever moves to a paid plan, add:
-  //   "limits": { "cpu_ms": 50 }
+  // Safe committed defaults. Production must replace ALLOWED_ORIGINS with the
+  // exact Pages/custom-domain origin. OVERPASS_ENABLED must remain false until
+  // a route-specific Cloudflare rate-limit/WAF rule has been staged and tested.
+  "vars": {
+    "ALLOWED_ORIGINS": "http://localhost:5173",
+    "TERRAIN_ENABLED": "true",
+    "OVERPASS_ENABLED": "false",
+    "OVERPASS_PROTECTION_STAGED": "false",
+    "BUILD_ID": "local"
+  },
 
+  // limits.cpu_ms is intentionally absent because that guardrail is not
+  // compatible with the free-plan deployment target.
   "observability": {
     "enabled": true
   }

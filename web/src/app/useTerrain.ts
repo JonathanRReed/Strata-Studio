@@ -1,11 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import { fetchTerrain } from "../data/terrainTiles.ts";
-import type { ElevationGrid, GeoBounds } from "../engine/types.ts";
-import { PREVIEW_SIZE } from "./aspect.ts";
-import { classifyError, retryWithBackoff, type GenerateStatus } from "./status.ts";
+import type { AspectRatio, ElevationGrid, GeoBounds } from "../engine/types.ts";
+import { getPreviewDimensions } from "./aspect.ts";
+import { classifyError, type GenerateStatus } from "./status.ts";
 
-const MAX_AUTO_RETRIES = 2;
-const BASE_BACKOFF_MS = 800;
+const PREVIEW_TERRAIN_DEADLINE_MS = 25000;
 
 function describeTerrain(grid: ElevationGrid, bounds: GeoBounds): string {
   let min = Infinity;
@@ -26,8 +25,14 @@ function describeTerrain(grid: ElevationGrid, bounds: GeoBounds): string {
   return `Elevation ${min.toFixed(0)}m – ${max.toFixed(0)}m (${range.toFixed(0)}m range) · ${centerLat}°, ${centerLng}°`;
 }
 
-/** Terrain grid state plus the Generate flow (fetch, auto-retry, diagnostics). */
-export function useTerrain({ bounds }: { bounds: GeoBounds }) {
+/** Terrain grid state plus the Generate flow (fetch, deadline, diagnostics). */
+export function useTerrain({
+  bounds,
+  aspectRatio,
+}: {
+  bounds: GeoBounds;
+  aspectRatio: AspectRatio;
+}) {
   const [grid, setGrid] = useState<ElevationGrid | null>(null);
   const [status, setStatus] = useState<GenerateStatus>({ phase: "idle" });
   const [terrainInfo, setTerrainInfo] = useState<string | null>(null);
@@ -41,15 +46,12 @@ export function useTerrain({ bounds }: { bounds: GeoBounds }) {
    * Fetches terrain for the current bounds and hands the fresh grid to
    * `renderArtwork` (React state hasn't propagated at that point).
    *
-   * Status is set once before the retry loop and resolved exactly once after
-   * it (success, terminal error, or abort). The old inline loop had a
-   * `finally` inside the `for`, which cleared the loading state on every
-   * retry `continue` — re-enabling the Generate button mid-backoff.
-   * On abort we return without touching status: whoever aborted (a newer
-   * generate call or a bounds change) owns the status from then on.
+   * Tile-level policy owns bounded retries; the preview itself is one operation
+   * with a 25-second deadline. On intentional abort we return without touching
+   * status: whoever aborted (a newer generate call or bounds change) owns it.
    */
   const generate = useCallback(
-    async (renderArtwork: (grid: ElevationGrid) => void) => {
+    async (renderArtwork: (grid: ElevationGrid) => void | Promise<void>) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -62,34 +64,24 @@ export function useTerrain({ bounds }: { bounds: GeoBounds }) {
       let failedTiles = 0;
 
       try {
-        const newGrid = await retryWithBackoff(
-          () => {
-            setStatus({ phase: "fetching", note: "Loading terrain tiles..." });
-            totalTiles = 0;
-            failedTiles = 0;
-            return fetchTerrain(bounds, PREVIEW_SIZE, controller.signal, {
-              onDiagnostics: (d) => {
-                totalTiles = d.totalTiles;
-                failedTiles = d.failedTiles;
-              },
-            });
-          },
+        const newGrid = await fetchTerrain(
+          bounds,
+          getPreviewDimensions(aspectRatio),
+          controller.signal,
           {
-            maxRetries: MAX_AUTO_RETRIES,
-            baseBackoffMs: BASE_BACKOFF_MS,
-            signal: controller.signal,
-            onWait: (backoffMs, attempt) =>
-              setStatus({
-                phase: "fetching",
-                note: `Retrying in ${backoffMs / 1000}s... (${attempt + 1}/${MAX_AUTO_RETRIES})`,
-              }),
+            operationTimeoutMs: PREVIEW_TERRAIN_DEADLINE_MS,
+            onDiagnostics: (d) => {
+              totalTiles = d.totalTiles;
+              failedTiles = d.failedTiles;
+            },
           },
         );
         if (controller.signal.aborted) return;
         setGrid(newGrid);
         setBoundsDirty(false);
         setStatus({ phase: "rendering" });
-        renderArtwork(newGrid);
+        await renderArtwork(newGrid);
+        if (controller.signal.aborted) return;
         setHasGenerated(true);
         setTerrainInfo(describeTerrain(newGrid, bounds));
         if (failedTiles > 0) {
@@ -105,7 +97,7 @@ export function useTerrain({ bounds }: { bounds: GeoBounds }) {
         setStatus({ phase: "error", error });
       }
     },
-    [bounds],
+    [aspectRatio, bounds],
   );
 
   /** Bounds changed: abort in-flight work and mark the preview stale. */
@@ -113,6 +105,7 @@ export function useTerrain({ bounds }: { bounds: GeoBounds }) {
     abortRef.current?.abort();
     setStatus({ phase: "idle" });
     setWarning(null);
+    setTerrainInfo(null);
     setBoundsDirty(true);
   }, []);
 
@@ -120,10 +113,10 @@ export function useTerrain({ bounds }: { bounds: GeoBounds }) {
     setStatus((prev) => (prev.phase === "error" ? { phase: "idle" } : prev));
   }, []);
 
-  /** Manual retry: bump the counter and re-run after a polite delay. */
+  /** Manual retry is a fresh user-triggered operation with a new controller/deadline. */
   const retry = useCallback((run: () => void) => {
     setRetryCount((count) => count + 1);
-    setTimeout(run, 500);
+    run();
   }, []);
 
   return {

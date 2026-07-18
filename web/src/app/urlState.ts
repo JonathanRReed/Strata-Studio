@@ -1,7 +1,20 @@
 import type { GeoBounds, StyleParams } from "../engine/types.ts";
+import type { CustomPaletteEntry } from "../presets/customPalettes.ts";
 import { applyPreset, defaultStyleParams, presets } from "../presets/stylePresets.ts";
+import {
+  COMPOSITION_QUERY_KEY,
+  createCompositionDocument,
+  decodeCompositionFromUrl,
+  encodeCompositionForUrl,
+} from "./composition.ts";
 import { DEFAULT_STYLE_ID, getStyle, stylesById } from "../studios/registry.ts";
-import { ASPECT_RATIOS } from "./aspect.ts";
+import {
+  MAX_SHARE_PAYLOAD_LENGTH,
+  normalizeMapCenter,
+  normalizeMapZoom,
+  normalizeStyleParams,
+  validateGeoBounds,
+} from "./stateSafety.ts";
 
 /**
  * Share-URL scheme (full fidelity).
@@ -33,37 +46,22 @@ export type ShareState = {
   params: StyleParams;
   bounds: GeoBounds;
   mapZoom: number;
+  selectedCustomPalette?: CustomPaletteEntry | null;
 };
 
 export type ParsedShareState = {
   styleId: string;
   params: StyleParams;
-  /** Exact selection bounds from `b`, when present and valid. */
+  /** Exact selection bounds from a versioned document or legacy `b`. */
   bounds: GeoBounds | null;
-  /** Map camera center [lng, lat], from lat/lng or derived from `b`. */
+  /** Map camera center [lng, lat], from the document, lat/lng, or legacy `b`. */
   center: [number, number] | null;
   zoom: number | null;
+  /** Embedded cross-profile palette, already canonicalized to its content id. */
+  customPalette: { id: string; entry: CustomPaletteEntry } | null;
 };
 
 const PARAM_KEYS = Object.keys(defaultStyleParams) as (keyof StyleParams)[];
-
-const MASK_MODE_KEYS = new Set([
-  "buildingMode",
-  "roadMode",
-  "waterMode",
-  "oceanMode",
-  "lakeMode",
-  "riverMode",
-]);
-const MASK_MODES = new Set(["interrupt", "amplify", "flatten", "glow", "outline", "invert"]);
-const ANIMATION_MODES = new Set(["none", "drift", "draw", "parallax"]);
-
-function encodeBase64Url(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
 
 function decodeBase64Url(encoded: string): string {
   const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
@@ -71,6 +69,11 @@ function decodeBase64Url(encoded: string): string {
   const binary = atob(base64 + pad);
   const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
   return new TextDecoder().decode(bytes);
+}
+
+function parseQueryNumber(value: string | null): number {
+  if (value === null || value.trim() === "") return Number.NaN;
+  return Number(value);
 }
 
 /** Baseline params a URL's diff is computed against for the given style. */
@@ -88,44 +91,27 @@ export function paramsDiff(params: StyleParams, defaults: StyleParams): Partial<
   return diff as Partial<StyleParams>;
 }
 
-/** Keeps only known param keys whose values have the right type and range. */
-function sanitizeDiff(raw: unknown): Partial<StyleParams> {
+/** Keeps only known diff keys, then applies the central composition normalizer. */
+function sanitizeDiff(raw: unknown, fallback: StyleParams): Partial<StyleParams> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: Record<string, unknown> = {};
+  const candidate: Partial<Record<keyof StyleParams, unknown>> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (key === "seed" || key === "palette") continue;
     if (!(key in defaultStyleParams)) continue;
-    const defaultValue = defaultStyleParams[key as keyof StyleParams];
-    if (typeof value !== typeof defaultValue) continue;
-    if (typeof value === "number" && !Number.isFinite(value)) continue;
-    if (key === "aspectRatio" && !(String(value) in ASPECT_RATIOS)) continue;
-    if (MASK_MODE_KEYS.has(key) && !MASK_MODES.has(String(value))) continue;
-    if (key === "animationMode" && !ANIMATION_MODES.has(String(value))) continue;
-    out[key] = value;
+    candidate[key as keyof StyleParams] = value;
   }
-  return out as Partial<StyleParams>;
+  const normalized = normalizeStyleParams({ ...fallback, ...candidate }, fallback);
+  const out: Partial<StyleParams> = {};
+  for (const key of Object.keys(candidate) as (keyof StyleParams)[]) {
+    Object.assign(out, { [key]: normalized[key] });
+  }
+  return out;
 }
 
 export function serializeShareState(state: ShareState): string {
-  const { params, styleId, bounds, mapZoom } = state;
-  const lat = (bounds.north + bounds.south) / 2;
-  const lng = (bounds.east + bounds.west) / 2;
+  const document = createCompositionDocument(state);
   const search = new URLSearchParams();
-  search.set("lat", lat.toFixed(4));
-  search.set("lng", lng.toFixed(4));
-  // z is a camera nicety (b is the source of truth); 2 dp keeps URLs tidy.
-  search.set("z", String(Math.round(mapZoom * 100) / 100));
-  search.set("style", styleId);
-  search.set("seed", params.seed);
-  search.set("palette", params.palette);
-  search.set(
-    "b",
-    [bounds.west, bounds.south, bounds.east, bounds.north].map((v) => v.toFixed(5)).join(","),
-  );
-  const diff = paramsDiff(params, resolveDefaultParams(styleId));
-  if (Object.keys(diff).length > 0) {
-    search.set("p", encodeBase64Url(JSON.stringify(diff)));
-  }
+  search.set(COMPOSITION_QUERY_KEY, encodeCompositionForUrl(document));
   return search.toString();
 }
 
@@ -135,6 +121,36 @@ export function parseShareParams(
 ): ParsedShareState {
   const sp = typeof search === "string" ? new URLSearchParams(search) : search;
   const isKnownPalette = opts?.isKnownPalette ?? (() => true);
+
+  const encodedComposition = sp.get(COMPOSITION_QUERY_KEY);
+  if (encodedComposition) {
+    try {
+      const document = decodeCompositionFromUrl(encodedComposition);
+      const center: [number, number] = [
+        (document.bounds.west + document.bounds.east) / 2,
+        (document.bounds.south + document.bounds.north) / 2,
+      ];
+      return {
+        styleId: document.style,
+        params: document.params,
+        bounds: document.bounds,
+        center,
+        zoom: document.zoom,
+        customPalette: document.customPalette
+          ? {
+              id: document.customPalette.id,
+              entry: {
+                name: document.customPalette.name,
+                palette: document.customPalette.definition,
+              },
+            }
+          : null,
+      };
+    } catch {
+      // Invalid versioned data falls through to the legacy parser so mixed old
+      // links remain recoverable without ever partially applying the document.
+    }
+  }
 
   let styleId = DEFAULT_STYLE_ID;
   let params: StyleParams | null = null;
@@ -157,41 +173,41 @@ export function parseShareParams(
 
   // 3. Explicit seed/palette.
   const seed = sp.get("seed");
-  if (seed) params = { ...params, seed };
+  if (seed !== null) params = { ...params, seed };
   const palette = sp.get("palette");
   if (palette && isKnownPalette(palette)) params = { ...params, palette };
 
   // 4. The p diff wins last.
   const p = sp.get("p");
-  if (p) {
+  if (p && p.length <= MAX_SHARE_PAYLOAD_LENGTH) {
     try {
-      params = { ...params, ...sanitizeDiff(JSON.parse(decodeBase64Url(p))) };
+      params = { ...params, ...sanitizeDiff(JSON.parse(decodeBase64Url(p)), params) };
     } catch {
       // Malformed p param — ignore it and keep the resolved params.
     }
   }
+  params = normalizeStyleParams(params, resolveDefaultParams(styleId));
 
   let bounds: GeoBounds | null = null;
   const b = sp.get("b");
-  if (b) {
-    const parts = b.split(",").map((v) => parseFloat(v));
-    if (parts.length === 4 && parts.every((v) => Number.isFinite(v))) {
-      const [west, south, east, north] = parts;
-      if (west < east && south < north && Math.abs(north) <= 90 && Math.abs(south) <= 90) {
-        bounds = { west, south, east, north };
-      }
+  if (b && b.length <= 256) {
+    const rawParts = b.split(",");
+    if (rawParts.length === 4 && rawParts.every((value) => value.trim() !== "")) {
+      const [west, south, east, north] = rawParts.map(Number);
+      bounds = validateGeoBounds({ west, south, east, north });
     }
   }
 
-  const lat = parseFloat(sp.get("lat") ?? "");
-  const lng = parseFloat(sp.get("lng") ?? "");
-  const z = parseFloat(sp.get("z") ?? "");
+  const lat = parseQueryNumber(sp.get("lat"));
+  const lng = parseQueryNumber(sp.get("lng"));
+  const z = parseQueryNumber(sp.get("z"));
   const center: [number, number] | null =
     Number.isFinite(lat) && Number.isFinite(lng)
-      ? [lng, lat]
+      ? normalizeMapCenter([lng, lat], [0, 0])
       : bounds
         ? [(bounds.west + bounds.east) / 2, (bounds.south + bounds.north) / 2]
         : null;
+  const zoom = Number.isFinite(z) ? normalizeMapZoom(z, 11) : null;
 
-  return { styleId, params, bounds, center, zoom: Number.isFinite(z) ? z : null };
+  return { styleId, params, bounds, center, zoom, customPalette: null };
 }

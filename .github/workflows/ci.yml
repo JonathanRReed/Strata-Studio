@@ -1,0 +1,178 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.3.14"
+  VITE_APP_ORIGIN: "https://strata-studio.example"
+  VITE_TERRAIN_TILE_URL: "https://strata-proxy.example/terrain"
+  VITE_OVERPASS_URL: "https://strata-proxy.example/overpass"
+  VITE_BUILD_CONTEXT: "ci"
+
+jobs:
+  verify:
+    name: Lint, types, unit, build, and Worker bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'web/bun.lock', 'workers/proxy/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install all package boundaries from lockfiles
+        run: bun run install:frozen
+
+      - name: Check pinned Bun version
+        run: test "$(bun --version)" = "$BUN_VERSION"
+
+      - name: Lint web app
+        run: bun run lint
+
+      - name: Typecheck web app and proxy
+        run: bun run typecheck
+
+      - name: Run both unit suites
+        run: bun run test:unit
+
+      - name: Build production fixture and assert proxy-first bundle
+        run: bun run build
+
+      - name: Dry-run the proxy Worker bundle
+        run: bun run check:wrangler
+
+      - name: Upload production app
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 3
+
+  chromium-smoke:
+    name: Chromium launch smoke
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install launch-test and Vite preview dependencies
+        run: bun install --frozen-lockfile && bun install --cwd web --frozen-lockfile
+
+      - name: Restore production app
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install Chromium and system dependencies
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run launch smoke tests
+        run: bun run test:launch:built
+
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-chromium-diagnostics
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  broad-launch:
+    name: Main browser and accessibility coverage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install launch-test and Vite preview dependencies
+        run: bun install --frozen-lockfile && bun install --cwd web --frozen-lockfile
+
+      - name: Restore production app
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-all-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install browser engines and system dependencies
+        run: bunx playwright install --with-deps chromium firefox webkit
+
+      - name: Run Firefox and WebKit launch smoke
+        run: bun run test:launch:browsers
+
+      - name: Run Chromium accessibility gate
+        run: bun run test:launch:a11y
+
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-broad-diagnostics
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 7

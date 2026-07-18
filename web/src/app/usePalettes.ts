@@ -1,13 +1,21 @@
 import { useCallback, useMemo, useState } from "react";
 import type { Palette } from "../engine/types.ts";
 import { palettes, paletteNames } from "../presets/palettes.ts";
-import { loadCustomPalettes, saveCustomPalettes } from "../presets/customPalettes.ts";
+import {
+  loadCustomPalettes,
+  saveCustomPalettes,
+  type CustomPaletteEntry,
+} from "../presets/customPalettes.ts";
 
-/** Built-in palettes merged with localStorage-persisted custom palettes. */
-export function usePalettes() {
-  const [customPalettes, setCustomPalettes] = useState<
-    Record<string, { name: string; palette: Palette }>
-  >(() => loadCustomPalettes());
+/** Built-in palettes merged with localStorage-persisted and shared custom palettes. */
+export function usePalettes(initialPalette?: { id: string; entry: CustomPaletteEntry } | null) {
+  const [customPalettes, setCustomPalettes] = useState<Record<string, CustomPaletteEntry>>(() => {
+    const stored = loadCustomPalettes();
+    if (!initialPalette) return stored;
+    const next = { ...stored, [initialPalette.id]: initialPalette.entry };
+    saveCustomPalettes(next);
+    return next;
+  });
 
   const allPalettes = useMemo<Record<string, Palette>>(
     () => ({
@@ -35,6 +43,16 @@ export function usePalettes() {
     });
   }, []);
 
+  const installPalette = useCallback((id: string, entry: CustomPaletteEntry) => {
+    setCustomPalettes((prev) => {
+      const next = { ...prev, [id]: entry };
+      if (!saveCustomPalettes(next)) {
+        console.warn("Failed to persist imported custom palette to localStorage.");
+      }
+      return next;
+    });
+  }, []);
+
   const deletePalette = useCallback((id: string) => {
     setCustomPalettes((prev) => {
       const { [id]: _, ...next } = prev;
@@ -45,5 +63,12 @@ export function usePalettes() {
     });
   }, []);
 
-  return { allPalettes, allPaletteNames, savePalette, deletePalette };
+  return {
+    allPalettes,
+    allPaletteNames,
+    customPalettes,
+    savePalette,
+    installPalette,
+    deletePalette,
+  };
 }

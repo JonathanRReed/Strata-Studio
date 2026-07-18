@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Palette } from "../engine/types.ts";
 import { isCustomPaletteId } from "../presets/customPalettes.ts";
 import { defaultPalette } from "../presets/palettes.ts";
@@ -53,22 +53,34 @@ function ColorRow({
   textValue: string;
   onChange: (value: string) => void;
 }) {
+  const textId = `${useId()}-hex`;
+  const errorId = `${textId}-error`;
+  const invalid = !isValidHex(textValue);
   return (
-    <label className="flex items-center gap-2 text-[13px] text-ink-muted">
-      <span className="w-24 shrink-0">{label}</span>
+    <div className="grid grid-cols-[6rem_2rem_minmax(0,1fr)] items-center gap-2 text-[13px] text-ink-muted">
+      <label htmlFor={textId}>{label}</label>
       <input
         type="color"
+        aria-label={`${label} color picker`}
         value={paletteValue}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-8 w-8 shrink-0 cursor-pointer rounded-sm border border-hairline bg-transparent p-0"
+        onChange={(event) => onChange(event.target.value)}
+        className="h-8 w-8 shrink-0 cursor-pointer rounded-sm border border-hairline-2 bg-transparent p-0"
       />
       <input
+        id={textId}
         type="text"
         value={textValue}
-        onChange={(e) => onChange(e.target.value)}
-        className="min-w-0 flex-1 rounded-sm border border-hairline bg-surface-2 px-2 py-1.5 font-mono text-[12px] text-ink outline-none transition-colors focus:border-signal"
+        aria-invalid={invalid}
+        aria-describedby={invalid ? errorId : undefined}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-w-0 rounded-sm border border-hairline-2 bg-surface-2 px-2 py-1.5 font-mono text-[12px] text-ink outline-none transition-colors focus:border-signal"
       />
-    </label>
+      {invalid && (
+        <p id={errorId} role="alert" className="col-start-3 text-[12px] leading-snug text-alarm">
+          Enter a six-digit hex color, for example #5fb0d4.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -88,6 +100,11 @@ function PaletteEditor({
   const [name, setName] = useState(baseName);
   const [palette, setPalette] = useState<Record<ColorKey, string>>(fillPalette(basePalette));
   const [draft, setDraft] = useState<Record<ColorKey, string>>(fillPalette(basePalette));
+  const nameId = `${useId()}-palette-name`;
+  const nameErrorId = `${nameId}-error`;
+  const nameInvalid = !name.trim();
+  const colorsInvalid = Object.values(draft).some((value) => !isValidHex(value));
+  const canSave = !nameInvalid && !colorsInvalid;
 
   useEffect(() => {
     setName(baseName);
@@ -105,7 +122,7 @@ function PaletteEditor({
 
   const handleSave = () => {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!canSave) return;
     const id = baseId ?? `custom-${Date.now().toString(36)}`;
     onSave(id, trimmed, palette as Palette);
   };
@@ -127,16 +144,25 @@ function PaletteEditor({
       </div>
 
       <div className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
-          Name
+        <div className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
+          <label htmlFor={nameId}>Name</label>
           <input
+            id={nameId}
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            required
+            aria-invalid={nameInvalid}
+            aria-describedby={nameInvalid ? nameErrorId : undefined}
+            onChange={(event) => setName(event.target.value)}
             placeholder="Custom palette"
-            className="rounded-sm border border-hairline bg-surface px-2 py-1.5 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-signal"
+            className="rounded-sm border border-hairline-2 bg-surface px-2 py-1.5 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-muted focus:border-signal"
           />
-        </label>
+          {nameInvalid && (
+            <p id={nameErrorId} role="alert" className="text-[12px] leading-snug text-alarm">
+              Enter a palette name.
+            </p>
+          )}
+        </div>
 
         {COLOR_ROWS.map(({ key, label }) => (
           <ColorRow
@@ -152,7 +178,7 @@ function PaletteEditor({
           <button
             type="button"
             onClick={handleSave}
-            disabled={!name.trim()}
+            disabled={!canSave}
             className="flex min-h-11 flex-1 items-center justify-center rounded-sm bg-ink text-[12px] font-medium text-ground transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             Save
@@ -302,7 +328,11 @@ export function PalettePicker({
                       ? "w-auto px-1.5 text-alarm"
                       : "w-6 text-ink-faint hover:text-alarm"
                   }`}
-                  aria-label={deleteConfirmId === id ? "Confirm delete" : "Delete palette"}
+                  aria-label={
+                    deleteConfirmId === id
+                      ? `Confirm delete ${name}`
+                      : `Delete ${name} palette`
+                  }
                 >
                   {deleteConfirmId === id ? "Delete?" : "×"}
                 </button>

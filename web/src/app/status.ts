@@ -67,12 +67,16 @@ export type OsmStatus =
 export type ExportStatus =
   | { phase: "idle" }
   | { phase: "fetching"; note: string }
-  | { phase: "rendering" }
+  | { phase: "rendering"; note?: string }
+  | { phase: "done"; message: string; filename: string; width?: number; height?: number }
+  | { phase: "cancelled"; message: string }
   | { phase: "error"; error: AppError };
 
 export type AnimationExportStatus =
   | { phase: "idle" }
   | { phase: "exporting"; progress: number; note: string }
+  | { phase: "done"; message: string; filename: string; width: number; height: number }
+  | { phase: "cancelled"; message: string }
   | { phase: "error"; error: AppError };
 
 export function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {

@@ -3,9 +3,20 @@
  * bottom-center (clear of the mobile sheet), auto-dismissed by its hook
  * after 6s. role=status announces it politely to assistive tech.
  */
-export function EggToast({ text, onDismiss }: { text: string; onDismiss: () => void }) {
+export function EggToast({
+  text,
+  onDismiss,
+  backgroundInert = false,
+}: {
+  text: string;
+  onDismiss: () => void;
+  backgroundInert?: boolean;
+}) {
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--sheet-peek)+12px)] z-50 flex justify-center px-4 lg:bottom-8">
+    <div
+      inert={backgroundInert ? true : undefined}
+      className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--sheet-peek)+12px)] z-50 flex justify-center px-4 lg:bottom-8"
+    >
       <div
         role="status"
         className="pointer-events-auto flex min-h-9 items-center gap-1 rounded-sm border border-signal/40 bg-surface pl-4 pr-1 shadow-[0_12px_32px_rgba(0,0,0,0.5)]"

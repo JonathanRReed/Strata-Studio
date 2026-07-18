@@ -9,6 +9,7 @@ import type {
   Palette,
   StyleParams,
 } from "../engine/types.ts";
+import { ModalSurface } from "./ModalSurface.tsx";
 
 type Props = {
   open: boolean;
@@ -19,6 +20,7 @@ type Props = {
   params: StyleParams;
   styleId: string;
   allPalettes: Record<string, Palette>;
+  supportsNativeDialog: boolean;
   /** Adopt a variant's seed: params update, main artwork re-renders, overlay closes. */
   onAdopt: (seed: string) => void;
 };
@@ -38,20 +40,13 @@ export function VariationsDialog({
   params,
   styleId,
   allPalettes,
+  supportsNativeDialog,
   onAdopt,
 }: Props) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   const [seeds, setSeeds] = useState<string[]>([]);
 
   const { width, height } = getExportDimensions(params.aspectRatio, VARIATION_SIZE);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    else if (!open && dialog.open) dialog.close();
-  }, [open]);
 
   // Deal a fresh hand every time the overlay opens.
   useEffect(() => {
@@ -89,13 +84,11 @@ export function VariationsDialog({
   }, [open, grid, features, seeds, params, styleId, allPalettes, width, height]);
 
   return (
-    <dialog
-      ref={dialogRef}
+    <ModalSurface
+      open={open}
       onClose={onClose}
-      onClick={(e) => {
-        if (e.target === dialogRef.current) onClose();
-      }}
-      aria-label="Variations"
+      supportsNativeDialog={supportsNativeDialog}
+      ariaLabel="Variations"
       className="m-auto max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-[520px] overflow-y-auto rounded-sm border border-hairline-2 bg-surface p-0 text-ink shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop:bg-ground/80"
     >
       <div className="flex flex-col gap-4 p-5">
@@ -108,6 +101,7 @@ export function VariationsDialog({
           </div>
           <button
             type="button"
+            data-modal-initial-focus
             onClick={onClose}
             aria-label="Close variations"
             className="-m-2 flex h-11 w-11 items-center justify-center text-ink-muted transition-colors hover:text-ink"
@@ -159,6 +153,6 @@ export function VariationsDialog({
           Deal {VARIATION_COUNT} new seeds
         </button>
       </div>
-    </dialog>
+    </ModalSurface>
   );
 }

@@ -96,18 +96,20 @@ export function buildArtworkInput({
 
 /** Seeded noise grid rendered as instant feedback while real terrain loads. */
 export function createPlaceholderGrid(
-  size: number,
+  dimensions: number | { width: number; height: number },
   seed: string,
   bounds: GeoBounds,
 ): ElevationGrid {
+  const width = typeof dimensions === "number" ? dimensions : dimensions.width;
+  const height = typeof dimensions === "number" ? dimensions : dimensions.height;
   const noise = createNoise(seed, 4, 0.5);
-  const data = new Float32Array(size * size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = x / (size - 1);
-      const v = y / (size - 1);
-      data[y * size + x] = noise(u * 4, v * 4) * 0.5 + 0.5;
+  const data = new Float32Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / (width - 1 || 1);
+      const v = y / (height - 1 || 1);
+      data[y * width + x] = noise(u * 4, v * 4) * 0.5 + 0.5;
     }
   }
-  return { width: size, height: size, bounds, data };
+  return { width, height, bounds, data };
 }

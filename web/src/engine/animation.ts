@@ -17,7 +17,7 @@ import type { StyleParams, AnimationMode } from "./types.ts";
 import type { Scene, Stroke, ScenePoint } from "./scene.ts";
 
 /** Number of frames in a single animation loop. */
-export const DEFAULT_FRAMES = 48;
+export const DEFAULT_FRAMES = 24;
 export const DEFAULT_FPS = 24;
 
 /** Returns the phase value (0–1) for a given frame in the loop. */

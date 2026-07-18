@@ -3,10 +3,10 @@ const MAX_LAT = 85.0511;
 const MIN_LAT = -85.0511;
 
 function wrapLng(lng: number): number {
-  let v = lng;
-  while (v > 180) v -= 360;
-  while (v < -180) v += 360;
-  return v;
+  if (!Number.isFinite(lng)) return 0;
+  if (lng >= -180 && lng <= 180) return lng;
+  const wrapped = ((lng + 180) % 360 + 360) % 360 - 180;
+  return wrapped === -180 && lng > 0 ? 180 : wrapped;
 }
 
 function clampLat(lat: number): number {

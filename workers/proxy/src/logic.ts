@@ -1,14 +1,4 @@
-/**
- * Pure, runtime-agnostic logic for the strata-proxy Worker.
- *
- * Everything in this file is unit-testable under `bun test` — no Workers
- * runtime APIs, no I/O. The fetch handler in index.ts is a thin shell
- * around these functions.
- */
-
-// ---------------------------------------------------------------------------
-// Upstreams
-// ---------------------------------------------------------------------------
+/** Pure, runtime-agnostic policy for the Strata Studio proxy Worker. */
 
 export const TERRAIN_UPSTREAM =
   "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
@@ -16,54 +6,18 @@ export const OVERPASS_PRIMARY = "https://overpass-api.de/api/interpreter";
 export const OVERPASS_MIRROR =
   "https://overpass.private.coffee/api/interpreter";
 
-// ---------------------------------------------------------------------------
-// Cache-Control policies (Workers Cache keys off these headers)
-// ---------------------------------------------------------------------------
-
-/** Terrain tiles are frozen upstream: cache hard at the edge, a day in browsers. */
 export const CACHE_TERRAIN_OK =
   "public, s-maxage=2592000, max-age=86400, immutable";
-/** Missing tiles (ocean gaps etc.): cache briefly so we don't hammer S3. */
 export const CACHE_TERRAIN_404 = "public, s-maxage=3600";
-/** Overpass results: a day at the edge, serve stale while revalidating. */
 export const CACHE_OVERPASS_OK =
   "public, s-maxage=86400, stale-while-revalidate=86400";
-/** OG cards: a week at the edge. */
-export const CACHE_OG_OK = "public, s-maxage=604800";
-/** Anything transient or erroneous must never enter the cache. */
 export const CACHE_NONE = "no-store";
 
-/** Pick the Cache-Control header for a terrain upstream response status. */
 export function terrainCacheControl(status: number): string {
   if (status === 200) return CACHE_TERRAIN_OK;
   if (status === 404) return CACHE_TERRAIN_404;
-  return CACHE_NONE; // 5xx and anything unexpected: pass through uncached
+  return CACHE_NONE;
 }
-
-/** Pick the Cache-Control header for an Overpass upstream response status. */
-export function overpassCacheControl(status: number): string {
-  return status === 200 ? CACHE_OVERPASS_OK : CACHE_NONE;
-}
-
-/** Overpass statuses that warrant one (and only one) mirror retry. */
-export function shouldRetryOverpass(status: number): boolean {
-  return status === 429 || status === 504;
-}
-
-// ---------------------------------------------------------------------------
-// CORS
-// ---------------------------------------------------------------------------
-
-export const CORS_HEADERS: Readonly<Record<string, string>> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Max-Age": "86400",
-};
-
-// ---------------------------------------------------------------------------
-// Terrain tile route
-// ---------------------------------------------------------------------------
 
 export interface TileCoords {
   z: number;
@@ -73,17 +27,16 @@ export interface TileCoords {
 
 const TERRAIN_PATH_RE = /^\/terrain\/(\d{1,2})\/(\d{1,10})\/(\d{1,10})\.png$/;
 
-/**
- * Parse and validate `/terrain/{z}/{x}/{y}.png`.
- * Returns null unless z is 0-15 and x, y are integers within [0, 2^z).
- */
 export function parseTerrainPath(pathname: string): TileCoords | null {
-  const m = TERRAIN_PATH_RE.exec(pathname);
-  if (!m) return null;
-  const z = Number(m[1]);
-  const x = Number(m[2]);
-  const y = Number(m[3]);
+  const match = TERRAIN_PATH_RE.exec(pathname);
+  if (!match) return null;
+  const z = Number(match[1]);
+  const x = Number(match[2]);
+  const y = Number(match[3]);
   if (!isValidTile(z, x, y)) return null;
+  // One path per tile keeps the edge cache key canonical and prevents
+  // leading-zero aliases from multiplying cache entries.
+  if (pathname !== `/terrain/${z}/${x}/${y}.png`) return null;
   return { z, x, y };
 }
 
@@ -92,174 +45,214 @@ export function isValidTile(z: number, x: number, y: number): boolean {
     return false;
   }
   if (z < 0 || z > 15) return false;
-  const max = 2 ** z;
-  return x >= 0 && x < max && y >= 0 && y < max;
+  const limit = 2 ** z;
+  return x >= 0 && x < limit && y >= 0 && y < limit;
 }
 
 export function terrainUpstreamUrl({ z, x, y }: TileCoords): string {
   return `${TERRAIN_UPSTREAM}/${z}/${x}/${y}.png`;
 }
 
-// ---------------------------------------------------------------------------
-// Overpass route
-// ---------------------------------------------------------------------------
+export const MAX_BBOX_KM2 = 25;
+export const MAX_BBOX_SPAN_KM = 25;
+export const WEB_MERCATOR_MAX_LAT = 85.05112878;
+export const BBOX_DECIMAL_PLACES = 4;
+export const OVERPASS_TIMEOUT_SECONDS = 15;
+export const OVERPASS_MAXSIZE_BYTES = 16 * 1024 * 1024;
 
-export const OVERPASS_MAX_QUERY_BYTES = 8 * 1024;
+export interface CanonicalBbox {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+}
 
-export type OverpassDecodeResult =
-  | { ok: true; query: string }
+export type CanonicalBboxResult =
+  | { ok: true; bounds: CanonicalBbox; search: string }
   | { ok: false; error: string };
 
-/**
- * Decode a base64url-encoded Overpass QL query (from `?q=`) and validate it.
- * The query travels GET-normalized so the edge cache can key on the URL;
- * the Worker re-POSTs it upstream (HTTP caches don't cache POSTs).
- */
-export function decodeOverpassQuery(
-  encoded: string | null,
-): OverpassDecodeResult {
-  if (!encoded) {
-    return { ok: false, error: "missing q parameter" };
-  }
-  // Hard cap on the encoded form too (base64 is 4/3 the decoded size).
-  if (encoded.length > Math.ceil((OVERPASS_MAX_QUERY_BYTES * 4) / 3) + 4) {
-    return { ok: false, error: "query too large" };
-  }
+const DECIMAL = "-?(?:0|[1-9]\\d{0,2})\\.\\d{4}";
+const CANONICAL_BBOX_RE = new RegExp(
+  `^south=(${DECIMAL})&west=(${DECIMAL})&north=(${DECIMAL})&east=(${DECIMAL})$`,
+);
 
-  let bytes: Uint8Array;
-  try {
-    bytes = base64UrlDecode(encoded);
-  } catch {
-    return { ok: false, error: "q is not valid base64url" };
-  }
-
-  if (bytes.length === 0) {
-    return { ok: false, error: "query is empty" };
-  }
-  if (bytes.length >= OVERPASS_MAX_QUERY_BYTES) {
-    return { ok: false, error: "query too large" };
-  }
-
-  let query: string;
-  try {
-    query = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
-      bytes,
-    );
-  } catch {
-    return { ok: false, error: "query is not valid UTF-8" };
-  }
-
-  if (query.trim().length === 0) {
-    return { ok: false, error: "query is empty" };
-  }
-  return { ok: true, query };
+export function formatCanonicalCoordinate(value: number): string {
+  if (!Number.isFinite(value)) throw new RangeError("coordinate must be finite");
+  const formatted = value.toFixed(BBOX_DECIMAL_PLACES);
+  return formatted === "-0.0000" ? "0.0000" : formatted;
 }
 
-/** Decode base64url (RFC 4648 §5, padding optional) to bytes. */
-export function base64UrlDecode(input: string): Uint8Array {
-  const b64 = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(padded) || padded.length % 4 !== 0) {
-    throw new Error("invalid base64url");
-  }
-  const bin = atob(padded);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
+export function canonicalBboxSearch(bounds: CanonicalBbox): string {
+  return [
+    `south=${formatCanonicalCoordinate(bounds.south)}`,
+    `west=${formatCanonicalCoordinate(bounds.west)}`,
+    `north=${formatCanonicalCoordinate(bounds.north)}`,
+    `east=${formatCanonicalCoordinate(bounds.east)}`,
+  ].join("&");
 }
 
-/** Encode a string to base64url — handy for tests and for the web app contract. */
-export function base64UrlEncode(input: string): string {
-  const bytes = new TextEncoder().encode(input);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-// ---------------------------------------------------------------------------
-// OG card route
-// ---------------------------------------------------------------------------
-
-export interface OgParams {
-  place: string;
-  style: string;
-  palette: [string, string, string];
-  coords: string;
-}
-
-export const OG_DEFAULT_PALETTE: [string, string, string] = [
-  "#1a1a2e",
-  "#e94560",
-  "#f5f5f5",
-];
-
-const HEX_COLOR_RE = /^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/;
-const COORDS_RE = /^(-?\d{1,3}(?:\.\d{1,8})?),\s*(-?\d{1,3}(?:\.\d{1,8})?)$/;
-const STYLE_RE = /^[a-zA-Z0-9 _-]{1,40}$/;
-
-/** Sanitize and bound all /og query params. Never throws; always renders something. */
-export function parseOgParams(searchParams: URLSearchParams): OgParams {
-  // Place: strip control chars, collapse whitespace, cap at 80 chars.
-  const rawPlace = searchParams.get("place") ?? "";
-  const place =
-    rawPlace
-      .replace(/[\u0000-\u001f\u007f]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 80) || "Strata Studio";
-
-  // Style id: strict allowlist, else a neutral label.
-  const rawStyle = (searchParams.get("style") ?? "").trim();
-  const style = STYLE_RE.test(rawStyle) ? rawStyle : "custom";
-
-  // Palette: comma-separated hex; take the first 3 valid entries.
-  const palette: string[] = [];
-  for (const part of (searchParams.get("palette") ?? "").split(",")) {
-    const m = HEX_COLOR_RE.exec(part.trim());
-    if (m) {
-      const hex =
-        m[1]!.length === 3
-          ? m[1]!.split("").map((c) => c + c).join("")
-          : m[1]!;
-      palette.push(`#${hex.toLowerCase()}`);
-      if (palette.length === 3) break;
-    }
-  }
-  while (palette.length < 3) {
-    palette.push(OG_DEFAULT_PALETTE[palette.length]!);
-  }
-
-  // Coords: pattern-checked lat,lng within valid ranges.
-  const rawCoords = (searchParams.get("coords") ?? "").trim();
-  let coords = "";
-  const cm = COORDS_RE.exec(rawCoords);
-  if (cm) {
-    const lat = Number(cm[1]);
-    const lng = Number(cm[2]);
-    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      coords = `${formatCoord(lat, "N", "S")}  ${formatCoord(lng, "E", "W")}`;
-    }
-  }
-
+export function bboxDimensionsKm(bounds: CanonicalBbox): {
+  width: number;
+  height: number;
+} {
+  const deltaLng = bounds.east - bounds.west;
+  const deltaLat = bounds.north - bounds.south;
+  const meanLat = (bounds.north + bounds.south) / 2;
+  const radians = (meanLat * Math.PI) / 180;
   return {
-    place,
-    style,
-    palette: palette as [string, string, string],
-    coords,
+    width: Math.abs(Math.cos(radians) * deltaLng * 111.32),
+    height: Math.abs(deltaLat * 110.57),
   };
 }
 
-function formatCoord(value: number, pos: string, neg: string): string {
-  const hemi = value >= 0 ? pos : neg;
-  return `${Math.abs(value).toFixed(4)}°${hemi}`;
+export function bboxAreaKm2(bounds: CanonicalBbox): number {
+  const { width, height } = bboxDimensionsKm(bounds);
+  return width * height;
 }
 
-/** Escape a string for safe interpolation into the OG card's HTML template. */
-export function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+/**
+ * Accept exactly one canonical representation so edge-cache keys cannot vary by
+ * parameter aliases, order, duplicates, exponent notation, padding, or encoding.
+ */
+export function parseCanonicalBbox(search: string): CanonicalBboxResult {
+  const raw = search.startsWith("?") ? search.slice(1) : search;
+  const match = CANONICAL_BBOX_RE.exec(raw);
+  if (!match) {
+    return {
+      ok: false,
+      error:
+        "expected canonical south,west,north,east parameters with four decimal places",
+    };
+  }
+  if (match.slice(1).some((value) => value === "-0.0000")) {
+    return { ok: false, error: "negative zero is not canonical" };
+  }
+
+  const bounds: CanonicalBbox = {
+    south: Number(match[1]),
+    west: Number(match[2]),
+    north: Number(match[3]),
+    east: Number(match[4]),
+  };
+  if (
+    bounds.south < -WEB_MERCATOR_MAX_LAT ||
+    bounds.north > WEB_MERCATOR_MAX_LAT ||
+    bounds.west < -180 ||
+    bounds.east > 180
+  ) {
+    return { ok: false, error: "bbox is outside Web Mercator-safe bounds" };
+  }
+  if (bounds.south >= bounds.north || bounds.west >= bounds.east) {
+    return { ok: false, error: "bbox coordinates are not strictly ordered" };
+  }
+  const dimensions = bboxDimensionsKm(bounds);
+  if (
+    dimensions.width > MAX_BBOX_SPAN_KM ||
+    dimensions.height > MAX_BBOX_SPAN_KM
+  ) {
+    return {
+      ok: false,
+      error: `bbox span exceeds ${MAX_BBOX_SPAN_KM} km`,
+    };
+  }
+  if (dimensions.width * dimensions.height > MAX_BBOX_KM2) {
+    return { ok: false, error: `bbox exceeds ${MAX_BBOX_KM2} km²` };
+  }
+
+  const canonical = canonicalBboxSearch(bounds);
+  if (raw !== canonical) {
+    return { ok: false, error: "bbox parameters are not canonical" };
+  }
+  return { ok: true, bounds, search: canonical };
+}
+
+/** The only Overpass program the public Worker is permitted to execute. */
+export function buildOverpassQuery(bounds: CanonicalBbox): string {
+  const bbox = `(${formatCanonicalCoordinate(bounds.south)},${formatCanonicalCoordinate(bounds.west)},${formatCanonicalCoordinate(bounds.north)},${formatCanonicalCoordinate(bounds.east)})`;
+  return `[out:json][timeout:${OVERPASS_TIMEOUT_SECONDS}][maxsize:${OVERPASS_MAXSIZE_BYTES}];
+(
+  way["building"]${bbox};
+  way["highway"]${bbox};
+  way["natural"="water"]${bbox};
+  way["waterway"]${bbox};
+  way["natural"="coastline"]${bbox};
+  relation["natural"="water"]${bbox};
+  relation["waterway"]${bbox};
+);
+out body;
+>;
+out skel qt;`;
+}
+
+export function shouldRetryOverpass(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+export function isJsonContentType(value: string | null): boolean {
+  if (!value) return false;
+  const mediaType = value.split(";", 1)[0]!.trim().toLowerCase();
+  return mediaType === "application/json" || mediaType.endsWith("+json");
+}
+
+export function isPngContentType(value: string | null): boolean {
+  if (!value) return false;
+  return value.split(";", 1)[0]!.trim().toLowerCase() === "image/png";
+}
+
+export function parseAllowedOrigins(value: string | undefined): ReadonlySet<string> {
+  const origins = new Set<string>();
+  for (const candidate of value?.split(",") ?? []) {
+    const trimmed = candidate.trim();
+    if (!trimmed || trimmed === "*") continue;
+    try {
+      const url = new URL(trimmed);
+      if (
+        (url.protocol === "https:" || url.protocol === "http:") &&
+        url.username === "" &&
+        url.password === "" &&
+        url.pathname === "/" &&
+        url.search === "" &&
+        url.hash === "" &&
+        trimmed === url.origin
+      ) {
+        origins.add(trimmed);
+      }
+    } catch {
+      // Invalid entries fail closed.
+    }
+  }
+  return origins;
+}
+
+export function isAllowedOrigin(
+  origin: string | null,
+  allowed: ReadonlySet<string>,
+): boolean {
+  if (origin === null) return true;
+  try {
+    return new URL(origin).origin === origin && allowed.has(origin);
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizeRetryAfter(
+  value: string | null,
+  fallbackSeconds = 30,
+): string {
+  const parsed = value?.trim();
+  if (parsed && /^\d{1,3}$/.test(parsed)) {
+    const seconds = Number(parsed);
+    if (seconds >= 1 && seconds <= 300) return String(seconds);
+  }
+  return String(fallbackSeconds);
+}
+
+export function sanitizeBuildId(value: string | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  return /^[A-Za-z0-9._-]{1,64}$/.test(trimmed) ? trimmed : "unversioned";
+}
+
+export function enabledFlag(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "true";
 }

@@ -9,8 +9,23 @@ import {
 import maplibregl from "maplibre-gl";
 import type { GeoBounds } from "../engine/types.ts";
 import { normalizeBounds } from "../engine/projection.ts";
+import {
+  getAspectValue,
+  getCenteredFrameRect,
+  getContainedFrameDimensions,
+} from "../app/aspect.ts";
 import { bboxAreaKm2, isBboxSmallEnough } from "../data/osmOverpass.ts";
 import { CURATED_PLACES, surprisePlace, type CuratedPlace } from "../data/places.ts";
+import {
+  MAX_SEARCH_QUERY_LENGTH,
+  normalizeMapCenter,
+  normalizeMapZoom,
+  sanitizeSearchQuery,
+} from "../app/stateSafety.ts";
+import { NoMapFallback } from "./NoMapFallback.tsx";
+import { detectCapabilities } from "../app/capabilities.ts";
+import { useNominatimSearch } from "../app/useNominatimSearch.ts";
+import type { MapSelectionCause, MapSelectionProps } from "./mapSelectionTypes.ts";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
@@ -19,15 +34,23 @@ import "maplibre-gl/dist/maplibre-gl.css";
 // /styles/liberty, and /styles/fiord.
 export const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/dark";
 
-function getSquareBounds(map: maplibregl.Map): GeoBounds {
+function getFramedBounds(
+  map: maplibregl.Map,
+  aspectRatio: MapSelectionProps["aspectRatio"],
+): GeoBounds {
   const center = map.project(map.getCenter());
   const container = map.getContainer();
-  const size = Math.min(container.clientWidth, container.clientHeight) * 0.7;
-  const half = size / 2;
+  const frame = getCenteredFrameRect(
+    center.x,
+    center.y,
+    container.clientWidth,
+    container.clientHeight,
+    aspectRatio,
+  );
 
-  const topLeft = map.unproject([center.x - half, center.y - half]);
-  const topRight = map.unproject([center.x + half, center.y - half]);
-  const bottomRight = map.unproject([center.x + half, center.y + half]);
+  const topLeft = map.unproject([frame.left, frame.top]);
+  const topRight = map.unproject([frame.right, frame.top]);
+  const bottomRight = map.unproject([frame.right, frame.bottom]);
 
   return normalizeBounds({
     west: topLeft.lng,
@@ -37,49 +60,46 @@ function getSquareBounds(map: maplibregl.Map): GeoBounds {
   });
 }
 
+function getFramePadding(
+  map: maplibregl.Map,
+  aspectRatio: MapSelectionProps["aspectRatio"],
+): { top: number; bottom: number; left: number; right: number } {
+  const container = map.getContainer();
+  const frame = getContainedFrameDimensions(
+    container.clientWidth,
+    container.clientHeight,
+    aspectRatio,
+  );
+  const horizontal = Math.max(0, (container.clientWidth - frame.width) / 2);
+  const vertical = Math.max(0, (container.clientHeight - frame.height) / 2);
+  return { top: vertical, bottom: vertical, left: horizontal, right: horizontal };
+}
+
 /** Instrument readout formatting: real minus sign, fixed decimals. */
 function fmtDeg(value: number): string {
   return value.toFixed(4).replace(/-/g, "−");
 }
 
-/** Below-lg check (Tailwind lg = 64rem); read at event time, not reactively. */
-function isCompactViewport(): boolean {
-  return window.matchMedia("(max-width: 63.999rem)").matches;
+export const MAP_LOAD_TIMEOUT_MS = 12_000;
+
+type MapFailure = {
+  message: string;
+};
+
+function webGlAvailable(): boolean {
+  return detectCapabilities().webgl;
 }
 
-/** One imperative fly-to request; `key` distinguishes repeat requests. */
-export type FlyToRequest = {
-  /** [lng, lat] — MapLibre order. */
-  center: [number, number];
-  zoom: number;
-  key: number;
-};
-
-type Props = {
-  initialCenter?: [number, number];
-  initialZoom?: number;
-  /** When provided, fit the selection square to these bounds on load (share-URL restore). */
-  initialBounds?: GeoBounds | null;
-  onChange: (bounds: GeoBounds, zoom: number) => void;
-  /** Current selection, echoed back for the header readout. */
-  bounds: GeoBounds;
-  zoom: number;
-  /** Whether the viewfinder is in its large-overlay state (chrome + map.resize). */
-  expanded: boolean;
-  onToggleExpand: () => void;
-  /** Last curated place chosen; its chip renders active (border-signal). */
-  activePlaceId?: string | null;
-  /** Called when a curated place is chosen (chip or Surprise Me) — the map
-   * flies there itself; the parent applies the place's preset. */
-  onSelectPlace?: (place: CuratedPlace) => void;
-  /** Fly-to requests from outside the map (mobile sheet place picks). */
-  flyTo?: FlyToRequest | null;
-};
+function mapErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  return "The basemap could not start";
+}
 
 export default function MapSelector({
   initialCenter = [-122.4194, 37.7749],
   initialZoom = 11,
   initialBounds = null,
+  aspectRatio,
   onChange,
   bounds,
   zoom,
@@ -88,134 +108,133 @@ export default function MapSelector({
   activePlaceId = null,
   onSelectPlace,
   flyTo = null,
-}: Props) {
+}: MapSelectionProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  // Initial-only prop: read via ref so it doesn't retrigger the map effect.
-  const initialBoundsRef = useRef(initialBounds);
+  const pendingFlyToRef = useRef<{
+    center: [number, number];
+    zoom: number;
+    bounds?: GeoBounds;
+    cause: "curated" | "search" | "restore";
+  } | null>(null);
+  const pendingMoveCauseRef = useRef<MapSelectionCause | null>(null);
+  const reportSelectionRef = useRef<(cause: MapSelectionCause) => void>(() => {});
+  const frameSettledRef = useRef(false);
+  const activeAspectRef = useRef(aspectRatio);
+  const previousAspectRef = useRef(aspectRatio);
+  activeAspectRef.current = aspectRatio;
+  // The active artwork selection is read through a ref so map retries restore
+  // current user state without recreating the map on every bounds update.
+  const activeBoundsRef = useRef(bounds);
+  activeBoundsRef.current = bounds;
   // Last selection reported from a real framing (load/moveend) — never from a
   // resize — so mobile expand/collapse can restore it (see handleResize).
   const lastSelectionRef = useRef<GeoBounds | null>(null);
 
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [showResultMarker, setShowResultMarker] = useState(false);
+  const [mapFailure, setMapFailure] = useState<MapFailure | null>(null);
+  const [mapAttempt, setMapAttempt] = useState(0);
 
   const queryRef = useRef("");
-  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const messageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const currentControllerRef = useRef<AbortController | null>(null);
-  const searchIdRef = useRef(0);
+  const markerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const searchLocation = useCallback(async (rawQuery: string) => {
-    const trimmed = rawQuery.trim();
-    if (!trimmed) return;
+  const failCurrentMap = useCallback((error: unknown) => {
+    setMapFailure({ message: mapErrorMessage(error) });
+    // Changing the attempt guarantees the active map effect cleans itself up
+    // even though the component switches to its no-map fallback render.
+    setMapAttempt((attempt) => attempt + 1);
+  }, []);
 
-    const id = ++searchIdRef.current;
-    setLoading(true);
-    setMessage(null);
-    if (messageTimeoutRef.current !== null) {
-      clearTimeout(messageTimeoutRef.current);
-      messageTimeoutRef.current = null;
-    }
-
-    currentControllerRef.current?.abort();
-    const controller = new AbortController();
-    currentControllerRef.current = controller;
-
+  const flushPendingFlyTo = useCallback(() => {
+    const map = mapRef.current;
+    const pending = pendingFlyToRef.current;
+    if (!map || !pending || !frameSettledRef.current) return;
+    pendingFlyToRef.current = null;
+    pendingMoveCauseRef.current = pending.cause;
     try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
-        trimmed
-      )}`;
-      const response = await fetch(url, { signal: controller.signal });
-      if (id !== searchIdRef.current) return;
-      if (!response.ok) throw new Error("Search failed");
-
-      const results = (await response.json()) as Array<{
-        lat: string;
-        lon: string;
-        display_name?: string;
-      }>;
-      if (id !== searchIdRef.current) return;
-      if (!results.length) {
-        setMessage("No results");
-        messageTimeoutRef.current = setTimeout(() => setMessage(null), 2000);
-        return;
+      if (pending.bounds) {
+        map.fitBounds(
+          [
+            [pending.bounds.west, pending.bounds.south],
+            [pending.bounds.east, pending.bounds.north],
+          ],
+          {
+            padding: getFramePadding(map, activeAspectRef.current),
+            duration: 0,
+          },
+        );
+      } else {
+        // jumpTo is safe before style load and emits the target bounds immediately.
+        map.jumpTo(pending);
       }
-
-      const lat = parseFloat(results[0].lat);
-      const lon = parseFloat(results[0].lon);
-      if (Number.isNaN(lat) || Number.isNaN(lon)) {
-        throw new Error("Invalid coordinates");
-      }
-
-      const map = mapRef.current;
-      if (!map) {
-        setMessage("No results");
-        messageTimeoutRef.current = setTimeout(() => setMessage(null), 2000);
-        return;
-      }
-
-      map.flyTo({ center: [lon, lat], zoom: 16 });
-      const name = results[0].display_name || trimmed;
-      setMessage(name);
-      setShowResultMarker(true);
-      messageTimeoutRef.current = setTimeout(() => {
-        setMessage(null);
-        setShowResultMarker(false);
-      }, 5000);
-    } catch (err) {
-      if (id !== searchIdRef.current) return;
-      if (err instanceof Error && err.name === "AbortError") return;
-      setMessage("No results");
-      messageTimeoutRef.current = setTimeout(() => setMessage(null), 2000);
-    } finally {
-      if (id === searchIdRef.current) {
-        setLoading(false);
-      }
+    } catch (error) {
+      failCurrentMap(error);
     }
-  }, [setLoading, setMessage]);
+  }, [failCurrentMap]);
+
+  const requestFlyTo = useCallback(
+    (
+      center: [number, number],
+      requestedZoom: number,
+      cause: "curated" | "search" | "restore",
+      exactBounds?: GeoBounds,
+    ) => {
+      const request = {
+        center: normalizeMapCenter(center, initialCenter),
+        zoom: normalizeMapZoom(requestedZoom, initialZoom),
+        bounds: exactBounds,
+        cause,
+      };
+      // Keep the latest request until a MapLibre instance exists; flush uses a
+      // synchronous camera jump that is safe before style load.
+      pendingFlyToRef.current = request;
+      flushPendingFlyTo();
+    },
+    [flushPendingFlyTo, initialCenter, initialZoom],
+  );
+
+  const handleSearchResult = useCallback(
+    (result: { lat: number; lng: number }) => {
+      requestFlyTo([result.lng, result.lat], 16, "search");
+      setShowResultMarker(true);
+      if (markerTimeoutRef.current) clearTimeout(markerTimeoutRef.current);
+      markerTimeoutRef.current = setTimeout(() => {
+        setShowResultMarker(false);
+        markerTimeoutRef.current = null;
+      }, 5_000);
+    },
+    [requestFlyTo],
+  );
+  const locationSearch = useNominatimSearch({ onResult: handleSearchResult });
 
   const cancelSearch = useCallback(() => {
-    if (messageTimeoutRef.current !== null) {
-      clearTimeout(messageTimeoutRef.current);
-      messageTimeoutRef.current = null;
-    }
-    setMessage(null);
+    locationSearch.dismiss();
+    if (markerTimeoutRef.current) clearTimeout(markerTimeoutRef.current);
+    markerTimeoutRef.current = null;
     setShowResultMarker(false);
-
-    if (searchTimeoutRef.current !== null) {
-      clearTimeout(searchTimeoutRef.current);
-      searchTimeoutRef.current = null;
-    }
-
-    currentControllerRef.current?.abort();
-    currentControllerRef.current = null;
-    searchIdRef.current += 1;
-    setLoading(false);
-  }, [setMessage, setLoading]);
+  }, [locationSearch]);
 
   // Nominatim's usage policy forbids client-side autocomplete, so searches
   // only run on explicit submit (Enter).
   const onInputChange = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
-      const value = e.target.value;
+      const value = e.target.value.slice(0, MAX_SEARCH_QUERY_LENGTH);
+      locationSearch.edited();
       queryRef.current = value;
       setQuery(value);
     },
-    [setQuery]
+    [locationSearch]
   );
 
   const handleSearch = useCallback(
     (rawQuery: string) => {
-      const trimmed = rawQuery.trim();
+      const trimmed = sanitizeSearchQuery(rawQuery);
       if (!trimmed) return;
 
-      cancelSearch();
-      searchLocation(trimmed);
+      void locationSearch.search(trimmed);
     },
-    [cancelSearch, searchLocation]
+    [locationSearch]
   );
 
   const handleSubmit = useCallback(
@@ -226,12 +245,11 @@ export default function MapSelector({
     [handleSearch]
   );
 
-  /** Fly to a curated place; moveend then reports fresh bounds upstream,
-   * which the live-regeneration flow turns into a new artwork. */
+  /** Curated navigation is parent-owned so a keyed request survives map load,
+   * failure, fallback, and retry transitions until a valid bounds report lands. */
   const selectPlace = useCallback(
     (place: CuratedPlace) => {
       cancelSearch();
-      mapRef.current?.flyTo({ center: place.center, zoom: place.zoom });
       onSelectPlace?.(place);
     },
     [cancelSearch, onSelectPlace]
@@ -241,136 +259,265 @@ export default function MapSelector({
     selectPlace(surprisePlace(activePlaceId ?? undefined));
   }, [selectPlace, activePlaceId]);
 
-  useEffect(() => {
-    return () => {
-      if (searchTimeoutRef.current !== null) clearTimeout(searchTimeoutRef.current);
-      if (messageTimeoutRef.current !== null) clearTimeout(messageTimeoutRef.current);
-      currentControllerRef.current?.abort();
-      searchIdRef.current += 1;
-    };
-  }, []);
+  useEffect(
+    () => () => {
+      if (markerTimeoutRef.current) clearTimeout(markerTimeoutRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
+    const container = containerRef.current;
+    if (!container || mapRef.current) return;
 
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: BASEMAP_STYLE_URL,
-      center: initialCenter,
-      zoom: initialZoom,
-      attributionControl: false,
-    });
+    if (!webGlAvailable()) {
+      setMapFailure({ message: "WebGL is unavailable in this browser or device" });
+      return;
+    }
 
-    map.on("load", () => {
-      // Force a resize after the container has proper dimensions
-      setTimeout(() => {
-        map.resize();
-        const restore = initialBoundsRef.current;
-        if (restore) {
-          // The selection square covers the central min(w,h)*0.7 of the
-          // container; pad fitBounds so the restored bounds land exactly
-          // under it (see getSquareBounds).
-          const container = map.getContainer();
-          const w = container.clientWidth;
-          const h = container.clientHeight;
-          const squareSize = Math.min(w, h) * 0.7;
-          const padX = (w - squareSize) / 2;
-          const padY = (h - squareSize) / 2;
-          map.fitBounds(
-            [
-              [restore.west, restore.south],
-              [restore.east, restore.north],
-            ],
-            { animate: false, padding: { top: padY, bottom: padY, left: padX, right: padX } },
-          );
-        }
-        const first = getSquareBounds(map);
-        lastSelectionRef.current = first;
-        onChange(first, map.getZoom());
-      }, 100);
-    });
+    setMapFailure(null);
+    let map: maplibregl.Map;
+    try {
+      map = new maplibregl.Map({
+        container,
+        style: BASEMAP_STYLE_URL,
+        center: normalizeMapCenter(initialCenter, [-122.4194, 37.7749]),
+        zoom: normalizeMapZoom(initialZoom, 11),
+        attributionControl: false,
+      });
+    } catch (error) {
+      setMapFailure({ message: mapErrorMessage(error) });
+      return;
+    }
 
-    const handleUpdate = () => {
-      const next = getSquareBounds(map);
-      lastSelectionRef.current = next;
-      onChange(next, map.getZoom());
+    let mapCanvas: HTMLCanvasElement;
+    try {
+      mapCanvas = map.getCanvas();
+    } catch (error) {
+      setMapFailure({ message: mapErrorMessage(error) });
+      try {
+        map.remove();
+      } catch {
+        // The partially-created map may already be torn down.
+      }
+      return;
+    }
+
+    mapCanvas.tabIndex = 0;
+    mapCanvas.setAttribute("aria-label", "Interactive area selection map");
+    mapCanvas.setAttribute("aria-describedby", "map-keyboard-instructions");
+
+    let disposed = false;
+    let loaded = false;
+    let removed = false;
+    // map.resize() may synchronously emit "resize" before the active bounds
+    // have been fitted. Suppress that provisional report so boot cannot be
+    // invalidated and generated a second time.
+    frameSettledRef.current = false;
+    let queuedCause: MapSelectionCause = "manual";
+    let updateTimeout: ReturnType<typeof setTimeout> | null = null;
+    let settleTimeout: ReturnType<typeof setTimeout> | null = null;
+    let loadTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const handleUpdate = (cause: MapSelectionCause) => {
+      if (disposed || removed || !frameSettledRef.current) return;
+      try {
+        const next = getFramedBounds(map, activeAspectRef.current);
+        lastSelectionRef.current = next;
+        onChange(next, map.getZoom(), cause);
+      } catch (error) {
+        failMap(mapErrorMessage(error));
+      }
     };
+    reportSelectionRef.current = handleUpdate;
 
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const debouncedHandleUpdate = () => {
-      if (timeoutId !== null) clearTimeout(timeoutId);
-      timeoutId = setTimeout(handleUpdate, 200);
+      if (!frameSettledRef.current) return;
+      queuedCause = pendingMoveCauseRef.current ?? "manual";
+      pendingMoveCauseRef.current = null;
+      if (updateTimeout !== null) clearTimeout(updateTimeout);
+      updateTimeout = setTimeout(() => handleUpdate(queuedCause), 200);
     };
 
-    // Desktop keeps the historical behavior: a resize reframes the selection
-    // under the new square. On mobile the PiP (~120px) and the fullscreen
-    // overlay differ so much that this would silently reselect a 9x smaller
-    // or larger area on every expand/collapse — instead, refit the last real
-    // framing under the new selection square so what the user framed is what
-    // stays selected (the follow-up moveend re-reports it upstream).
+    // Container changes (including expanded/collapsed mode) preserve the exact
+    // active geography by refitting it into the aspect-aware frame.
     const handleResize = () => {
-      const restore = lastSelectionRef.current;
-      if (isCompactViewport() && restore) {
-        const container = map.getContainer();
-        const w = container.clientWidth;
-        const h = container.clientHeight;
-        const squareSize = Math.min(w, h) * 0.7;
-        const padX = (w - squareSize) / 2;
-        const padY = (h - squareSize) / 2;
+      if (!frameSettledRef.current) return;
+      try {
+        const restore = lastSelectionRef.current ?? activeBoundsRef.current;
+        pendingMoveCauseRef.current = "restore";
         map.fitBounds(
           [
             [restore.west, restore.south],
             [restore.east, restore.north],
           ],
-          { animate: false, padding: { top: padY, bottom: padY, left: padX, right: padX } },
+          {
+            animate: false,
+            padding: getFramePadding(map, activeAspectRef.current),
+          },
         );
-      } else {
-        handleUpdate();
+      } catch (error) {
+        failMap(mapErrorMessage(error));
       }
     };
 
+    const removeMap = () => {
+      if (removed) return;
+      removed = true;
+      try {
+        map.off("load", handleLoad);
+        map.off("error", handleMapError);
+        map.off("moveend", debouncedHandleUpdate);
+        map.off("resize", handleResize);
+        mapCanvas.removeEventListener("webglcontextlost", handleContextLost);
+      } catch {
+        // Listener cleanup is best-effort after a partial WebGL teardown.
+      }
+      if (updateTimeout !== null) clearTimeout(updateTimeout);
+      if (settleTimeout !== null) clearTimeout(settleTimeout);
+      if (loadTimeout !== null) clearTimeout(loadTimeout);
+      try {
+        map.remove();
+      } catch {
+        // A partially-constructed WebGL map may already have torn itself down.
+      }
+      if (mapRef.current === map) mapRef.current = null;
+    };
+
+    const failMap = (message: string) => {
+      if (disposed || removed) return;
+      setMapFailure({ message });
+      removeMap();
+    };
+
+    function handleLoad() {
+      if (disposed || removed) return;
+      loaded = true;
+      if (loadTimeout !== null) clearTimeout(loadTimeout);
+      setMapFailure(null);
+      // Force a resize after the container has proper dimensions, then fit the
+      // already-active artwork bounds. App ignores the equal-bounds echo.
+      settleTimeout = setTimeout(() => {
+        if (disposed || removed) return;
+        try {
+          map.resize();
+          const restore = activeBoundsRef.current;
+          pendingMoveCauseRef.current = "restore";
+          map.fitBounds(
+            [
+              [restore.west, restore.south],
+              [restore.east, restore.north],
+            ],
+            {
+              animate: false,
+              padding: getFramePadding(map, activeAspectRef.current),
+            },
+          );
+          pendingMoveCauseRef.current = null;
+          frameSettledRef.current = true;
+          handleUpdate("restore");
+          flushPendingFlyTo();
+        } catch (error) {
+          failMap(mapErrorMessage(error));
+        }
+      }, 100);
+    }
+
+    function handleMapError(event: maplibregl.ErrorEvent) {
+      const message = mapErrorMessage(event.error);
+      if (!loaded || /style|webgl|context|initialize/i.test(message)) failMap(message);
+    }
+
+    function handleContextLost(event: Event) {
+      event.preventDefault();
+      failMap("The map's WebGL context was lost");
+    }
+
+    map.on("load", handleLoad);
+    map.on("error", handleMapError);
     map.on("moveend", debouncedHandleUpdate);
     map.on("resize", handleResize);
-
+    mapCanvas.addEventListener("webglcontextlost", handleContextLost);
     mapRef.current = map;
+    flushPendingFlyTo();
+    loadTimeout = setTimeout(
+      () => failMap("The basemap did not finish loading in time"),
+      MAP_LOAD_TIMEOUT_MS,
+    );
 
     return () => {
-      map.off("moveend", debouncedHandleUpdate);
-      map.off("resize", handleResize);
-      if (timeoutId !== null) clearTimeout(timeoutId);
-      map.remove();
-      mapRef.current = null;
+      disposed = true;
+      removeMap();
     };
-  }, [initialCenter, initialZoom, onChange]);
+  }, [flushPendingFlyTo, initialCenter, initialZoom, mapAttempt, onChange]);
 
   // The expand toggle changes the container's size out from under MapLibre;
   // nudge it after the layout settles so tiles fill the new viewport (the
   // resize handler above owns any mobile selection compensation).
   useEffect(() => {
-    const id = window.setTimeout(() => mapRef.current?.resize(), 50);
+    const id = window.setTimeout(() => {
+      try {
+        mapRef.current?.resize();
+        flushPendingFlyTo();
+      } catch (error) {
+        failCurrentMap(error);
+      }
+    }, 50);
     return () => window.clearTimeout(id);
-  }, [expanded]);
+  }, [expanded, failCurrentMap, flushPendingFlyTo]);
+
+  // Changing artwork aspect changes the outlined geography at the current
+  // center/zoom. Report it once through the normal debounced regeneration path.
+  useEffect(() => {
+    if (previousAspectRef.current === aspectRatio) return;
+    previousAspectRef.current = aspectRatio;
+    const id = window.setTimeout(() => reportSelectionRef.current("aspect"), 0);
+    return () => window.clearTimeout(id);
+  }, [aspectRatio]);
 
   // External fly-to requests (mobile sheet place picks / Surprise Me).
   useEffect(() => {
     if (!flyTo) return;
-    mapRef.current?.flyTo({ center: flyTo.center, zoom: flyTo.zoom });
-  }, [flyTo]);
+    requestFlyTo(
+      flyTo.center,
+      flyTo.zoom,
+      flyTo.bounds ? "restore" : "curated",
+      flyTo.bounds,
+    );
+  }, [flyTo, mapAttempt, requestFlyTo]);
 
-  // Esc collapses the expanded viewfinder.
-  useEffect(() => {
-    if (!expanded) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onToggleExpand();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [expanded, onToggleExpand]);
+  const retryMap = useCallback(() => {
+    cancelSearch();
+    setMapFailure(null);
+    setMapAttempt((attempt) => attempt + 1);
+  }, [cancelSearch]);
+
+  if (mapFailure) {
+    return (
+      <NoMapFallback
+        initialCenter={initialCenter}
+        initialZoom={initialZoom}
+        initialBounds={initialBounds}
+        aspectRatio={aspectRatio}
+        onChange={onChange}
+        bounds={bounds}
+        zoom={zoom}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+        activePlaceId={activePlaceId}
+        onSelectPlace={onSelectPlace}
+        flyTo={flyTo}
+        reason={mapFailure.message}
+        onRetry={retryMap}
+      />
+    );
+  }
 
   const centerLat = (bounds.north + bounds.south) / 2;
   const centerLng = (bounds.east + bounds.west) / 2;
   const areaKm2 = bboxAreaKm2(bounds);
   const osmEligible = isBboxSmallEnough(bounds);
+  const frameAspect = getAspectValue(aspectRatio);
 
   return (
     <div className="flex h-full w-full flex-col bg-surface">
@@ -395,7 +542,7 @@ export default function MapSelector({
           </button>
           <button
             type="button"
-            onClick={onToggleExpand}
+            onClick={(event) => onToggleExpand(event.currentTarget)}
             aria-label={expanded ? "Collapse map" : "Expand map"}
             aria-expanded={expanded}
             className="flex h-11 w-11 shrink-0 items-center justify-center text-[15px] text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
@@ -406,9 +553,11 @@ export default function MapSelector({
         <form onSubmit={handleSubmit} className="border-t border-hairline">
           <input
             type="text"
+            data-map-initial-focus
             aria-label="Search for a location"
             value={query}
             onChange={onInputChange}
+            maxLength={MAX_SEARCH_QUERY_LENGTH}
             placeholder="Search place…"
             enterKeyHint="search"
             className="h-10 w-full bg-transparent px-3 font-mono text-[12px] text-ink outline-none placeholder:text-ink-faint focus:bg-surface-2"
@@ -450,8 +599,8 @@ export default function MapSelector({
         )}
       </div>
 
-      {/* Map area — the selection square is min(w,h)*0.7 of THIS element,
-          matching getSquareBounds exactly (container queries keep it square). */}
+      {/* Map area — the outlined aspect-aware frame and getFramedBounds share
+          the same 70%-contained rectangle from app/aspect.ts. */}
       <div className="relative min-h-0 flex-1 overflow-hidden [container-type:size]">
         <div
           ref={containerRef}
@@ -459,7 +608,15 @@ export default function MapSelector({
           aria-label="Map for area selection"
         />
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="relative aspect-square w-[min(70cqw,70cqh)] shadow-[0_0_0_9999px_rgba(0,0,0,0.3)]">
+          <div
+            data-testid="export-frame"
+            aria-hidden="true"
+            className="relative shadow-[0_0_0_9999px_rgba(0,0,0,0.3)]"
+            style={{
+              width: `min(70cqw, calc(70cqh * ${frameAspect}))`,
+              aspectRatio: String(frameAspect),
+            }}
+          >
             {/* Corner brackets */}
             <span className="absolute -left-px -top-px h-3.5 w-3.5 border-l-2 border-t-2 border-ink/90" />
             <span className="absolute -right-px -top-px h-3.5 w-3.5 border-r-2 border-t-2 border-ink/90" />
@@ -474,17 +631,42 @@ export default function MapSelector({
             <span className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ink/90" />
           </div>
         </div>
-        {(loading || message) && (
+        {locationSearch.state.phase !== "idle" && (
           <div
-            className="pointer-events-none absolute left-1/2 top-2 z-10 max-w-[90%] -translate-x-1/2 truncate rounded-sm border border-hairline-2 bg-ground/90 px-3 py-1.5 text-center text-[12px] text-ink"
+            className="pointer-events-auto absolute left-1/2 top-2 z-10 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-sm border border-hairline-2 bg-ground/95 px-3 py-1.5 text-center text-[12px] text-ink"
             aria-live="polite"
+            aria-atomic="true"
           >
-            {loading ? "Searching…" : message}
+            <span className="min-w-0 truncate">
+              {locationSearch.state.phase === "loading"
+                ? "Searching…"
+                : locationSearch.state.message}
+            </span>
+            {locationSearch.state.phase === "loading" && (
+              <button type="button" onClick={locationSearch.cancel} className="text-ink-muted hover:text-ink">
+                Cancel
+              </button>
+            )}
+            {locationSearch.state.phase === "error" && (
+              <>
+                <button type="button" onClick={locationSearch.retry} className="text-signal hover:underline">
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  onClick={locationSearch.dismiss}
+                  aria-label="Dismiss search error"
+                  className="text-ink-muted hover:text-ink"
+                >
+                  ✕
+                </button>
+              </>
+            )}
           </div>
         )}
         {showResultMarker && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
-            <div className="h-6 w-6 animate-ping rounded-full border-2 border-signal bg-signal/40" />
+            <div className="h-6 w-6 animate-ping rounded-full border-2 border-signal bg-signal/40 motion-reduce:animate-none" />
             <div className="absolute h-3 w-3 rounded-full border-2 border-ink bg-signal" />
           </div>
         )}
@@ -501,7 +683,7 @@ export default function MapSelector({
         {!expanded && (
           <button
             type="button"
-            onClick={onToggleExpand}
+            onClick={(event) => onToggleExpand(event.currentTarget)}
             aria-label="Expand map"
             aria-expanded={false}
             className="absolute inset-0 z-30 flex items-end justify-end p-1 lg:hidden"

@@ -6,9 +6,25 @@ import type {
   WaterType,
 } from "../engine/types.ts";
 import { getOsm, setOsm } from "./cache.ts";
+import {
+  abortErrorFromSignal,
+  AttemptBudget,
+  createRequestOperation,
+  fullJitterBackoffMs,
+  isAbortFailure,
+  normalizeRequestFailure,
+  RequestPolicyError,
+  requestFailureFromResponse,
+  runRequestAttempt,
+  systemRequestPolicyRuntime,
+  waitForRetry,
+  type RequestPolicyRuntime,
+} from "./requestPolicy.ts";
 
 export const OSM_ATTRIBUTION = "OpenStreetMap contributors";
 export const MAX_BBOX_KM2 = 25;
+export const MAX_BBOX_SPAN_KM = 25;
+export const WEB_MERCATOR_MAX_LAT = 85.05112878;
 
 type OverpassMember = {
   type: "node" | "way" | "relation";
@@ -26,21 +42,49 @@ type OverpassElement = {
   tags?: Record<string, string>;
 };
 
-export function bboxAreaKm2(bounds: GeoBounds): number {
+export function bboxDimensionsKm(bounds: GeoBounds): {
+  width: number;
+  height: number;
+} {
   const deltaLng = bounds.east - bounds.west;
   const deltaLat = bounds.north - bounds.south;
   const meanLat = (bounds.north + bounds.south) / 2;
   const rad = (meanLat * Math.PI) / 180;
-  return Math.abs(Math.cos(rad) * deltaLng * 111.32 * deltaLat * 110.57);
+  return {
+    width: Math.abs(Math.cos(rad) * deltaLng * 111.32),
+    height: Math.abs(deltaLat * 110.57),
+  };
+}
+
+export function bboxAreaKm2(bounds: GeoBounds): number {
+  const { width, height } = bboxDimensionsKm(bounds);
+  return width * height;
 }
 
 export function isBboxSmallEnough(bounds: GeoBounds): boolean {
-  return bboxAreaKm2(bounds) <= MAX_BBOX_KM2;
+  const coordinates = [bounds.south, bounds.west, bounds.north, bounds.east];
+  if (!coordinates.every(Number.isFinite)) return false;
+  if (
+    bounds.south < -WEB_MERCATOR_MAX_LAT ||
+    bounds.north > WEB_MERCATOR_MAX_LAT ||
+    bounds.west < -180 ||
+    bounds.east > 180 ||
+    bounds.south >= bounds.north ||
+    bounds.west >= bounds.east
+  ) {
+    return false;
+  }
+  const { width, height } = bboxDimensionsKm(bounds);
+  return (
+    width <= MAX_BBOX_SPAN_KM &&
+    height <= MAX_BBOX_SPAN_KM &&
+    width * height <= MAX_BBOX_KM2
+  );
 }
 
 export function buildOverpassQuery(bounds: GeoBounds): string {
   const bbox = `(${bounds.south},${bounds.west},${bounds.north},${bounds.east})`;
-  return `[out:json][timeout:25][maxsize:33554432];
+  return `[out:json][timeout:15][maxsize:16777216];
 (
   way["building"]${bbox};
   way["highway"]${bbox};
@@ -341,14 +385,19 @@ export function overpassToGeoJSON(
 }
 
 /** Grid steps (degrees) tried in order when snapping the bbox outward. */
-const SNAP_STEPS_DEG = [0.01, 0.005, 0.0025];
-
-/** Snapped query bboxes may exceed MAX_BBOX_KM2 slightly, but never this. */
-const SNAPPED_MAX_BBOX_KM2 = 35;
+const SNAP_STEPS_DEG = [0.01, 0.005, 0.0025, 0.001, 0.0005, 0.0001];
+const PROXY_BBOX_DECIMAL_PLACES = 4;
+const OSM_OPERATION_TIMEOUT_MS = 30_000;
+// The proxy may spend up to 22 seconds trying two upstreams. Keep its browser
+// attempt alive long enough to finish, then reserve the remaining operation
+// budget for one distinct direct provider.
+const OSM_ATTEMPT_TIMEOUT_MS = 24_000;
+const OSM_BASE_BACKOFF_MS = 250;
+const OSM_MAX_BACKOFF_MS = 1_500;
+const OSM_MAX_RETRY_AFTER_MS = 2_000;
+const OSM_MIN_ATTEMPT_RESERVE_MS = 750;
 
 function snapBoundsToGrid(bounds: GeoBounds, step: number): GeoBounds {
-  // The epsilon keeps edges already sitting on a grid line from expanding a
-  // full extra step due to floating-point noise.
   const epsilon = 1e-9;
   return {
     south: Math.floor(bounds.south / step + epsilon) * step,
@@ -358,26 +407,39 @@ function snapBoundsToGrid(bounds: GeoBounds, step: number): GeoBounds {
   };
 }
 
-/**
- * Snaps the requested bbox outward to a quantized grid so nearby selections
- * collapse onto one Overpass query and one cache entry. Falls back to finer
- * grids (and finally the original bbox) when snapping would inflate the
- * query area past SNAPPED_MAX_BBOX_KM2.
- */
+/** Nearby selections share a bounded canonical query without exceeding 25 km². */
 export function snapBoundsForQuery(bounds: GeoBounds): GeoBounds {
   for (const step of SNAP_STEPS_DEG) {
     const snapped = snapBoundsToGrid(bounds, step);
-    if (bboxAreaKm2(snapped) <= SNAPPED_MAX_BBOX_KM2) return snapped;
+    if (isBboxSmallEnough(snapped)) return snapped;
   }
   return bounds;
 }
 
-function boundsCacheKey(bounds: GeoBounds): string {
-  // v3: keys are the snapped query bbox; invalidates unsnapped v2 entries.
-  return `v3:${bounds.south.toFixed(4)},${bounds.west.toFixed(4)},${bounds.north.toFixed(4)},${bounds.east.toFixed(4)}`;
+function formatProxyCoordinate(value: number): string {
+  const formatted = value.toFixed(PROXY_BBOX_DECIMAL_PLACES);
+  return formatted === "-0.0000" ? "0.0000" : formatted;
 }
 
-/** Overpass API instances, tried in order when the previous one is busy. */
+/** Exact parameter order/form expected by the proxy's bounded cache key. */
+export function canonicalProxyBboxParams(bounds: GeoBounds): string {
+  return [
+    `south=${formatProxyCoordinate(bounds.south)}`,
+    `west=${formatProxyCoordinate(bounds.west)}`,
+    `north=${formatProxyCoordinate(bounds.north)}`,
+    `east=${formatProxyCoordinate(bounds.east)}`,
+  ].join("&");
+}
+
+export function proxyOverpassUrl(endpoint: string, bounds: GeoBounds): string {
+  return `${endpoint.replace(/\/+$/, "")}?${canonicalProxyBboxParams(bounds)}`;
+}
+
+function boundsCacheKey(bounds: GeoBounds): string {
+  return `v4:${canonicalProxyBboxParams(bounds)}`;
+}
+
+/** Overpass API instances, each attempted at most once after the proxy. */
 export const OVERPASS_MIRRORS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.private.coffee/api/interpreter",
@@ -386,155 +448,277 @@ export const OVERPASS_MIRRORS = [
 
 export type OverpassEndpoint = {
   url: string;
-  /**
-   * The strata-proxy Worker takes GET /overpass?q=<base64url QL> so the
-   * edge cache can key the query; public instances take the standard
-   * form-encoded POST.
-   */
   kind: "proxy" | "direct";
 };
 
-/**
- * Endpoints in try-order: the caching proxy first when configured
- * (VITE_OVERPASS_URL, see workers/proxy/README.md), public mirrors after it
- * so a proxy outage degrades to direct fetches instead of breaking.
- */
 export function overpassEndpoints(
   proxyUrl: string | undefined = import.meta.env.VITE_OVERPASS_URL as string | undefined,
 ): OverpassEndpoint[] {
-  const mirrors: OverpassEndpoint[] = OVERPASS_MIRRORS.map((url) => ({ url, kind: "direct" }));
-  if (!proxyUrl) return mirrors;
-  // The env var holds the full route (…workers.dev/overpass) per the README.
-  return [{ url: proxyUrl.replace(/\/+$/, ""), kind: "proxy" }, ...mirrors];
+  const mirrors: OverpassEndpoint[] = OVERPASS_MIRRORS.map((url) => ({
+    url,
+    kind: "direct",
+  }));
+  const configured = proxyUrl?.trim();
+  if (!configured) return mirrors;
+  // The Worker already tries the first two providers. Keep one distinct direct
+  // provider as the browser fallback so one operation cannot retry the same
+  // upstreams and silently exceed its aggregate attempt budget.
+  return [
+    { url: configured.replace(/\/+$/, ""), kind: "proxy" },
+    mirrors[mirrors.length - 1]!,
+  ];
 }
 
-/** base64url without padding — matches the proxy Worker's decoder. */
-export function encodeOverpassQuery(query: string): string {
-  const bytes = new TextEncoder().encode(query);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
+function isJsonContentType(value: string | null): boolean {
+  if (!value) return false;
+  const mediaType = value.split(";", 1)[0]!.trim().toLowerCase();
+  return mediaType === "application/json" || mediaType.endsWith("+json");
+}
+
+function discardResponseBody(response: Response): void {
+  try {
+    const cancellation = response.body?.cancel();
+    cancellation?.catch(() => {
+      // The status/media-type failure is authoritative; cancellation is best effort.
+    });
+  } catch {
+    // A locked/already-consumed body is already owned by its reader.
   }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-const OSM_MAX_RETRIES = 2;
-/** Cap attempts per mirror so total attempts stay bounded across failover. */
-const OSM_ATTEMPTS_PER_MIRROR = OSM_MAX_RETRIES;
-const OSM_BASE_BACKOFF_MS = 1500;
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Aborted"));
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(new Error("Aborted"));
-      },
-      { once: true },
+function validateOverpassPayload(value: unknown): { elements: OverpassElement[] } {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !Array.isArray((value as { elements?: unknown }).elements)
+  ) {
+    throw new RequestPolicyError(
+      "decode",
+      "Overpass response is missing an elements array",
+      { retryable: true },
     );
-  });
+  }
+  return value as { elements: OverpassElement[] };
 }
 
-/** Returns true if the error is retryable (rate limit, timeout, network). */
-function isRetryableOsmError(status: number | undefined, text: string): boolean {
-  if (status === 429 || status === 504 || status === 502 || status === 503) return true;
-  if (/timeout|too busy|server is probably too busy|rate limit/i.test(text)) return true;
-  return false;
+function boundedRetryDelayMs(
+  failure: RequestPolicyError,
+  retryIndex: number,
+  remainingMs: number,
+  endpointsRemaining: number,
+  runtime: RequestPolicyRuntime,
+): number {
+  const reserveMs = endpointsRemaining * OSM_MIN_ATTEMPT_RESERVE_MS;
+  const availableMs = Math.max(0, remainingMs - reserveMs);
+  if (availableMs === 0) return 0;
+  const jitterMs = fullJitterBackoffMs(
+    OSM_BASE_BACKOFF_MS,
+    OSM_MAX_BACKOFF_MS,
+    retryIndex,
+    runtime.random,
+  );
+  return Math.min(
+    Math.max(jitterMs, Math.min(failure.retryAfterMs ?? 0, OSM_MAX_RETRY_AFTER_MS)),
+    availableMs,
+  );
 }
 
-export async function fetchOsmFeatures(
+export type OsmFetch = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export type OsmFeatureFetcherDependencies = {
+  fetch?: OsmFetch;
+  getCached?: typeof getOsm;
+  setCached?: typeof setOsm;
+  runtime?: RequestPolicyRuntime;
+  proxyUrl?: string;
+  endpoints?: OverpassEndpoint[];
+  operationTimeoutMs?: number;
+  attemptTimeoutMs?: number;
+};
+
+/** Proxy-first OSM loader with one bounded attempt per configured endpoint. */
+export function createOsmFeatureFetcher(
+  dependencies: OsmFeatureFetcherDependencies = {},
+): (bounds: GeoBounds, signal?: AbortSignal) => Promise<GeoFeatureCollection> {
+  const runtime = dependencies.runtime ?? systemRequestPolicyRuntime;
+  const fetchImpl = dependencies.fetch ?? ((input, init) => fetch(input, init));
+  const getCached = dependencies.getCached ?? getOsm;
+  const setCached = dependencies.setCached ?? setOsm;
+  const endpoints =
+    dependencies.endpoints ?? overpassEndpoints(dependencies.proxyUrl);
+  const operationTimeoutMs =
+    dependencies.operationTimeoutMs ?? OSM_OPERATION_TIMEOUT_MS;
+  const attemptTimeoutMs = dependencies.attemptTimeoutMs ?? OSM_ATTEMPT_TIMEOUT_MS;
+
+  return async (bounds, signal) => {
+    if (!isBboxSmallEnough(bounds)) {
+      throw new Error(
+        `Bounding box is too large (> ${MAX_BBOX_KM2} km²). Please zoom in.`,
+      );
+    }
+
+    const snapped = snapBoundsForQuery(bounds);
+    const cacheKey = boundsCacheKey(snapped);
+    const cached = await getCached(cacheKey);
+    if (cached) return cached;
+
+    const operation = createRequestOperation({
+      signal,
+      timeoutMs: operationTimeoutMs,
+      runtime,
+      label: "OSM fetch",
+    });
+    const budget = new AttemptBudget(Math.max(1, endpoints.length));
+    const query = buildOverpassQuery(snapped);
+    let lastFailure: RequestPolicyError | undefined;
+    let retryIndex = 0;
+
+    try {
+      operation.throwIfAborted();
+      for (let index = 0; index < endpoints.length; index++) {
+        const endpoint = endpoints[index]!;
+        try {
+          const result = await runRequestAttempt({
+            operation,
+            budget,
+            timeoutMs: attemptTimeoutMs,
+            provider: endpoint.kind,
+            run: async ({ signal: attemptSignal }) => {
+              const url =
+                endpoint.kind === "proxy"
+                  ? proxyOverpassUrl(endpoint.url, snapped)
+                  : endpoint.url;
+              const response = await fetchImpl(
+                url,
+                endpoint.kind === "proxy"
+                  ? { method: "GET", signal: attemptSignal }
+                  : {
+                      method: "POST",
+                      headers: {
+                        Accept: "application/json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                      },
+                      body: new URLSearchParams({ data: query }).toString(),
+                      signal: attemptSignal,
+                    },
+              );
+              if (!response.ok) {
+                discardResponseBody(response);
+                throw requestFailureFromResponse(response, url, {
+                  provider: endpoint.kind,
+                  nowMs: runtime.now(),
+                });
+              }
+              if (!isJsonContentType(response.headers.get("Content-Type"))) {
+                discardResponseBody(response);
+                throw new RequestPolicyError(
+                  "decode",
+                  "Overpass response did not use a JSON content type",
+                  { provider: endpoint.kind, retryable: true },
+                );
+              }
+
+              let payload: unknown;
+              try {
+                payload = await response.json();
+              } catch (error) {
+                if (attemptSignal.aborted) {
+                  throw abortErrorFromSignal(attemptSignal);
+                }
+                throw new RequestPolicyError(
+                  "decode",
+                  "Overpass response contained malformed JSON",
+                  { provider: endpoint.kind, retryable: true, cause: error },
+                );
+              }
+              try {
+                return overpassToGeoJSON(validateOverpassPayload(payload));
+              } catch (error) {
+                if (error instanceof RequestPolicyError) throw error;
+                throw new RequestPolicyError(
+                  "decode",
+                  "Overpass response could not be converted",
+                  { provider: endpoint.kind, retryable: true, cause: error },
+                );
+              }
+            },
+          });
+          await setCached(cacheKey, result);
+          return result;
+        } catch (error) {
+          const failure = normalizeRequestFailure(error, endpoint.kind);
+          lastFailure = failure;
+          if (isAbortFailure(failure) || failure.kind === "attempt-budget") {
+            throw failure;
+          }
+          // A proxy-local 4xx (disabled route, canonicalization mismatch, or
+          // deployment skew) must not suppress the deliberate direct fallback.
+          // Once a direct provider reports a permanent failure, the shared
+          // query itself is unlikely to succeed at another mirror.
+          if (!failure.retryable && endpoint.kind !== "proxy") break;
+
+          const endpointsRemaining = endpoints.length - index - 1;
+          if (endpointsRemaining <= 0) break;
+          const delayMs = failure.retryable
+            ? boundedRetryDelayMs(
+                failure,
+                retryIndex++,
+                operation.remainingMs(),
+                endpointsRemaining,
+                runtime,
+              )
+            : 0;
+          if (delayMs > 0) {
+            await waitForRetry({
+              operation,
+              failure: new RequestPolicyError(failure.kind, failure.message, {
+                retryable: failure.retryable,
+                status: failure.status,
+                retryAfterMs: delayMs,
+                provider: failure.provider,
+                cause: failure,
+              }),
+              retryIndex: 0,
+              baseBackoffMs: 0,
+              maxBackoffMs: 0,
+            });
+          }
+        }
+      }
+
+      if (lastFailure?.kind === "rate-limited") {
+        throw new Error(
+          "Overpass API rate limits are busy. Please wait a moment and try again.",
+          { cause: lastFailure },
+        );
+      }
+      throw new Error("OSM features are temporarily unavailable.", {
+        cause: lastFailure,
+      });
+    } catch (error) {
+      if (error instanceof RequestPolicyError) {
+        if (error.kind === "caller-abort") {
+          throw new Error("OSM fetch was cancelled.", { cause: error });
+        }
+        if (error.kind === "operation-deadline") {
+          throw new Error("OSM fetch deadline exceeded.", { cause: error });
+        }
+      }
+      throw error;
+    } finally {
+      operation.dispose();
+    }
+  };
+}
+
+const osmFeatureFetcher = createOsmFeatureFetcher();
+
+export function fetchOsmFeatures(
   bounds: GeoBounds,
   signal?: AbortSignal,
 ): Promise<GeoFeatureCollection> {
-  if (!isBboxSmallEnough(bounds)) {
-    throw new Error(
-      `Bounding box is too large (> ${MAX_BBOX_KM2} km²). Please zoom in.`,
-    );
-  }
-
-  const snapped = snapBoundsForQuery(bounds);
-  const cacheKey = boundsCacheKey(snapped);
-  const cached = await getOsm(cacheKey);
-  if (cached) return cached;
-
-  const query = buildOverpassQuery(snapped);
-
-  let lastError: Error | null = null;
-
-  for (const endpoint of overpassEndpoints()) {
-    for (let attempt = 0; attempt < OSM_ATTEMPTS_PER_MIRROR; attempt++) {
-      if (signal?.aborted) throw new Error("OSM fetch was cancelled.");
-
-      let response: Response;
-      try {
-        response =
-          endpoint.kind === "proxy"
-            ? await fetch(`${endpoint.url}?q=${encodeOverpassQuery(query)}`, { signal })
-            : await fetch(endpoint.url, {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: `data=${encodeURIComponent(query)}`,
-                signal,
-              });
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") {
-          throw new Error("OSM fetch was cancelled.");
-        }
-        // Network error — retry this mirror, then fail over to the next.
-        lastError = new Error(
-          `Network error while fetching OSM features: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        if (attempt < OSM_ATTEMPTS_PER_MIRROR - 1) {
-          const backoff = OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
-          await sleep(backoff, signal);
-        }
-        continue;
-      }
-
-      if (!response.ok) {
-        const text = await response.text();
-        if (isRetryableOsmError(response.status, text)) {
-          // Honor Retry-After header if present
-          const retryAfter = response.headers.get("Retry-After");
-          const backoff = retryAfter
-            ? Math.min(parseInt(retryAfter, 10) * 1000, 30000)
-            : OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
-          lastError = new Error(
-            response.status === 429
-              ? "Overpass API rate limit reached. Please wait a minute before trying again."
-              : "Overpass API is too busy right now. This is a public server with rate limits. Please wait a few seconds and try again.",
-          );
-          if (attempt < OSM_ATTEMPTS_PER_MIRROR - 1) {
-            await sleep(backoff, signal);
-          }
-          continue;
-        }
-        // Non-retryable status — the request itself is bad; no mirror will help.
-        throw new Error(
-          `Overpass API returned ${response.status}: ${text.slice(0, 120).replace(/\s+/g, " ")}`,
-        );
-      }
-
-      let data: { elements: OverpassElement[] };
-      try {
-        data = await response.json();
-      } catch (err) {
-        throw new Error(
-          `Failed to parse Overpass API response: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-
-      const result = overpassToGeoJSON(data);
-      await setOsm(cacheKey, result);
-      return result;
-    }
-  }
-
-  throw lastError ?? new Error("OSM fetch failed after retries.");
+  return osmFeatureFetcher(bounds, signal);
 }

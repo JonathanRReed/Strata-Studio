@@ -3,6 +3,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { GeoBounds } from "../engine/types.ts";
@@ -63,7 +64,7 @@ type Props = ControlsPanelProps & {
   /** Place chosen from the sheet — the parent flies the map + applies the preset. */
   onSelectPlace: (place: CuratedPlace) => void;
   /** Opens the fullscreen map viewfinder overlay (search + places live there too). */
-  onOpenMap: () => void;
+  onOpenMap: (opener?: HTMLElement) => void;
   onCopyUrl: () => void;
   copiedUrl: boolean;
   /** While the map overlay is open it owns the Escape key. */
@@ -74,6 +75,10 @@ type Props = ControlsPanelProps & {
   /** Native share (EXPORT tab); the button is hidden where unsupported. */
   onShare: () => void;
   shareSupported: boolean;
+  /** Incremented by the orientation CTA to open and focus the Style tab. */
+  customizeRequest: number;
+  /** Lets the stage become inert while the full-height sheet is modal. */
+  onModalStateChange: (modal: boolean) => void;
 };
 
 /**
@@ -119,6 +124,8 @@ export function MobileSheet({
   variationsReady,
   onShare,
   shareSupported,
+  customizeRequest,
+  onModalStateChange,
 }: Props) {
   const [snap, setSnap] = useState<SheetSnap>("collapsed");
   const [tab, setTab] = useState<SheetTab>("style");
@@ -127,10 +134,23 @@ export function MobileSheet({
 
   const sheetRef = useRef<HTMLElement>(null);
   const chromeRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLButtonElement>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const dragRef = useRef<DragState | null>(null);
   /** Survives until the click event that follows a drag so it isn't a toggle. */
   const dragConsumedClickRef = useRef(false);
+
+  useEffect(() => {
+    if (customizeRequest === 0) return;
+    setTab("style");
+    setSnap("half");
+    window.requestAnimationFrame(() => tabRefs.current[1]?.focus());
+  }, [customizeRequest]);
+
+  useEffect(() => {
+    onModalStateChange(snap === "full");
+  }, [onModalStateChange, snap]);
+  useEffect(() => () => onModalStateChange(false), [onModalStateChange]);
 
   const update = (patch: Partial<typeof params>) => {
     onChange({ ...params, ...patch });
@@ -282,11 +302,13 @@ export function MobileSheet({
     return () => sheet.removeEventListener("keydown", onKey);
   }, [snap]);
 
-  const handleOpenMap = () => {
+  const handleOpenMap = (event: ReactMouseEvent<HTMLButtonElement>) => {
     // Drop to collapsed so the artwork + map are what's on screen when the
-    // fullscreen viewfinder closes again.
+    // fullscreen viewfinder closes again. Restore focus to the still-visible
+    // handle rather than the clicked control inside the now-inert sheet body.
     setSnap("collapsed");
-    onOpenMap();
+    onModalStateChange(false);
+    onOpenMap(handleRef.current ?? event.currentTarget);
   };
 
   const centerLat = (bounds.north + bounds.south) / 2;
@@ -307,6 +329,7 @@ export function MobileSheet({
       )}
       <section
         ref={sheetRef}
+        inert={mapExpanded ? true : undefined}
         role={isFull ? "dialog" : undefined}
         aria-modal={isFull || undefined}
         aria-label="Artwork controls"
@@ -319,6 +342,7 @@ export function MobileSheet({
         {/* Sheet chrome: grab handle + tab bar + sticky Generate. Always visible. */}
         <div ref={chromeRef} className="shrink-0">
           <button
+            ref={handleRef}
             type="button"
             aria-expanded={snap !== "collapsed"}
             aria-controls="mobile-sheet-body"
@@ -365,7 +389,7 @@ export function MobileSheet({
               aria-busy={isLoading}
               className={primaryButtonClass}
             >
-              {isLoading ? <span className="status-live">Generating</span> : "Generate"}
+              {isLoading ? <span className="status-live">Regenerating…</span> : "Regenerate now"}
             </button>
           </div>
           <div aria-hidden="true" className="h-[env(safe-area-inset-bottom,0px)]" />

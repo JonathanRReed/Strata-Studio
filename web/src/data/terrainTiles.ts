@@ -7,221 +7,518 @@ import {
 } from "../engine/projection.ts";
 import type { ElevationGrid, GeoBounds } from "../engine/types.ts";
 import { getTile, setTile } from "./cache.ts";
+import {
+  abortErrorFromSignal,
+  AttemptBudget,
+  createRequestOperation,
+  isAbortFailure,
+  RequestPolicyError,
+  requestFailureFromResponse,
+  runRequestAttempt,
+  systemRequestPolicyRuntime,
+  waitForRetry,
+  type RequestPolicyRuntime,
+} from "./requestPolicy.ts";
 
-/**
- * Tile URL template. Override via VITE_TERRAIN_TILE_URL (e.g. a Cloudflare
- * Worker proxy) using {z}/{x}/{y} placeholders; a bare base URL without
- * placeholders also works and gets /{z}/{x}/{y}.png appended.
- */
-export const TERRAIN_TILE_URL: string =
-  import.meta.env.VITE_TERRAIN_TILE_URL ??
+/** Direct AWS is a deliberate runtime fallback, never the preferred production provider. */
+export const DIRECT_TERRAIN_TILE_URL =
   "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+
+const configuredTerrainUrl = import.meta.env.VITE_TERRAIN_TILE_URL?.trim();
+const CONFIGURED_TERRAIN_PROXY_URL =
+  configuredTerrainUrl && configuredTerrainUrl !== DIRECT_TERRAIN_TILE_URL
+    ? configuredTerrainUrl
+    : undefined;
+
+/** Preferred tile URL retained as a public export for diagnostics/build assertions. */
+export const TERRAIN_TILE_URL: string =
+  CONFIGURED_TERRAIN_PROXY_URL || DIRECT_TERRAIN_TILE_URL;
 
 export const TERRAIN_ATTRIBUTION =
   "Terrain: Mapzen/Tilezen terrain tiles via AWS Open Data — elevation data courtesy of USGS, NASA SRTM, and other sources";
 
 const TILE_SIZE = 256;
 const MAX_ZOOM = 15;
-const LOAD_TIMEOUT_MS = 15000;
-const MAX_RETRIES = 3;
+const TILE_ATTEMPT_TIMEOUT_MS = 8000;
+const TILE_OPERATION_TIMEOUT_MS = 30000;
+const TILE_ATTEMPT_LIMIT = 3;
 const BASE_BACKOFF_MS = 300;
+const MAX_BACKOFF_MS = 2500;
 const MAX_CONCURRENCY = 6;
+const DEFAULT_FETCH_DEADLINE_MS = 25000;
+const PROXY_FAILURE_THRESHOLD = 2;
+const PROXY_COOLDOWN_MS = 15000;
 
-function tileUrl(z: number, x: number, y: number): string {
-  if (TERRAIN_TILE_URL.includes("{z}")) {
-    return TERRAIN_TILE_URL.replace("{z}", String(z))
+export type TerrainProviderName = "proxy" | "direct";
+
+function tileUrl(template: string, z: number, x: number, y: number): string {
+  if (template.includes("{z}")) {
+    return template
+      .replace("{z}", String(z))
       .replace("{x}", String(x))
       .replace("{y}", String(y));
   }
-  return `${TERRAIN_TILE_URL}/${z}/${x}/${y}.png`;
+  return `${template.replace(/\/$/, "")}/${z}/${x}/${y}.png`;
 }
 
 function decodeElevation(r: number, g: number, b: number): number {
   return r * 256 + g + b / 256 - 32768;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Aborted"));
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(new Error("Aborted"));
-      },
-      { once: true },
-    );
-  });
-}
-
-/** A failure that should not be retried (e.g. 404: the tile does not exist). */
-class PermanentTileError extends Error {}
-
-/** Fetch and decode a tile image with a per-attempt timeout. */
-async function loadTileBitmap(url: string, signal?: AbortSignal): Promise<ImageBitmap> {
-  if (signal?.aborted) throw new Error("Aborted");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
-  const onAbort = () => controller.abort();
-  signal?.addEventListener("abort", onAbort, { once: true });
+function discardResponseBody(response: Response): void {
   try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      const message = `Tile fetch failed (${response.status}): ${url}`;
-      // 4xx (except 429) means the request itself is bad; retrying won't help.
-      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-        throw new PermanentTileError(message);
-      }
-      throw new Error(message);
-    }
-    const blob = await response.blob();
-    return await createImageBitmap(blob);
-  } catch (err) {
-    if (signal?.aborted) throw new Error("Aborted");
-    if (err instanceof PermanentTileError) throw err;
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error(`Tile load timeout: ${url}`);
-    }
-    throw err instanceof Error ? err : new Error(String(err));
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
+    const cancellation = response.body?.cancel();
+    cancellation?.catch(() => {
+      // The status failure is authoritative; cancellation is best effort.
+    });
+  } catch {
+    // A locked/already-consumed body is already owned by its reader.
   }
 }
 
-/** Load a tile image with exponential backoff retry. */
-async function loadTileBitmapWithRetry(
-  url: string,
-  signal?: AbortSignal,
-  maxRetries = MAX_RETRIES,
-): Promise<ImageBitmap> {
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (signal?.aborted) throw new Error("Aborted");
-    try {
-      return await loadTileBitmap(url, signal);
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      // Don't retry on abort
-      if (lastError.message === "Aborted") throw lastError;
-      // Don't retry permanent failures (4xx other than 429)
-      if (lastError instanceof PermanentTileError) throw lastError;
-      // Don't retry on the last attempt
-      if (attempt < maxRetries) {
-        const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt);
-        await sleep(backoff, signal);
-      }
-    }
+async function decodeTerrainImage(
+  blob: Blob,
+  signal: AbortSignal,
+): Promise<{ source: CanvasImageSource; close: () => void }> {
+  if (typeof createImageBitmap === "function") {
+    const bitmap = await createImageBitmap(blob);
+    return { source: bitmap, close: () => bitmap.close() };
   }
-  throw lastError ?? new Error(`Failed to load tile: ${url}`);
+
+  const url = URL.createObjectURL(blob);
+  const image = new Image();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => signal.removeEventListener("abort", onAbort);
+      const onAbort = () => {
+        cleanup();
+        image.src = "";
+        reject(abortErrorFromSignal(signal));
+      };
+      image.onload = () => {
+        cleanup();
+        resolve();
+      };
+      image.onerror = () => {
+        cleanup();
+        reject(new Error("Image decode failed"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      else image.src = url;
+    });
+    return { source: image, close: () => URL.revokeObjectURL(url) };
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  }
 }
 
-async function loadTileData(
-  z: number,
-  x: number,
-  y: number,
-  signal?: AbortSignal,
+async function decodeTerrainResponse(
+  response: Response,
+  signal: AbortSignal,
 ): Promise<Float32Array> {
-  const cached = await getTile(z, x, y);
-  if (cached) return cached;
+  const blob = await response.blob();
+  if (signal.aborted) throw abortErrorFromSignal(signal);
 
-  const url = tileUrl(z, x, y);
-  const bitmap = await loadTileBitmapWithRetry(url, signal);
+  let decoded: { source: CanvasImageSource; close: () => void };
   try {
+    decoded = await decodeTerrainImage(blob, signal);
+  } catch (error) {
+    if (signal.aborted) throw abortErrorFromSignal(signal);
+    throw new RequestPolicyError("decode", "Terrain tile image could not be decoded", {
+      cause: error,
+    });
+  }
+
+  try {
+    if (signal.aborted) throw abortErrorFromSignal(signal);
     const canvas = document.createElement("canvas");
     canvas.width = TILE_SIZE;
     canvas.height = TILE_SIZE;
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      throw new Error("Could not get canvas context");
+      throw new RequestPolicyError("decode", "Could not get canvas context for terrain tile");
     }
-    ctx.drawImage(bitmap, 0, 0);
-    const imageData = ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE);
-    const pixels = imageData.data;
+    ctx.drawImage(decoded.source, 0, 0);
+    const pixels = ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE).data;
     const data = new Float32Array(TILE_SIZE * TILE_SIZE);
     for (let i = 0, j = 0; i < pixels.length; i += 4, j++) {
       data[j] = decodeElevation(pixels[i], pixels[i + 1], pixels[i + 2]);
     }
-    await setTile(z, x, y, data);
     return data;
   } finally {
-    bitmap.close();
+    decoded.close();
   }
 }
 
-/**
- * In-flight tile loads keyed z/x/y so concurrent fetches share one request.
- * The underlying fetch runs on its OWN controller: each caller gets a
- * subscriber view that rejects on that caller's abort, and the shared fetch
- * is aborted only when its last live subscriber has gone. Without this, a
- * preview fetch aborted by a map move would poison an overlapping export
- * that had innocently joined the same tile promise.
- */
+function isCircuitFailure(error: RequestPolicyError): boolean {
+  return (
+    error.kind === "network" ||
+    error.kind === "attempt-timeout" ||
+    error.kind === "rate-limited" ||
+    error.kind === "http-server"
+  );
+}
+
+export type ProxyCircuitBreakerOptions = {
+  failureThreshold?: number;
+  cooldownMs?: number;
+  runtime?: RequestPolicyRuntime;
+};
+
+/** Short process-local breaker that protects the proxy without reacting to caller cancellation. */
+export class ProxyCircuitBreaker {
+  private readonly failureThreshold: number;
+  private readonly cooldownMs: number;
+  private readonly runtime: RequestPolicyRuntime;
+  private failures = 0;
+  private openUntil = 0;
+
+  constructor(options: ProxyCircuitBreakerOptions = {}) {
+    this.failureThreshold = options.failureThreshold ?? PROXY_FAILURE_THRESHOLD;
+    this.cooldownMs = options.cooldownMs ?? PROXY_COOLDOWN_MS;
+    this.runtime = options.runtime ?? systemRequestPolicyRuntime;
+  }
+
+  canRequest(): boolean {
+    if (this.openUntil === 0) return true;
+    if (this.runtime.now() < this.openUntil) return false;
+    this.openUntil = 0;
+    this.failures = 0;
+    return true;
+  }
+
+  recordSuccess(): void {
+    this.failures = 0;
+    this.openUntil = 0;
+  }
+
+  recordFailure(error: RequestPolicyError): void {
+    if (!isCircuitFailure(error)) return;
+    this.failures++;
+    if (this.failures >= this.failureThreshold) {
+      this.openUntil = this.runtime.now() + this.cooldownMs;
+    }
+  }
+
+  snapshot(): { failures: number; open: boolean; openUntil: number } {
+    return {
+      failures: this.failures,
+      open: this.openUntil > this.runtime.now(),
+      openUntil: this.openUntil,
+    };
+  }
+}
+
 export type SharedLoad<T> = {
   promise: Promise<T>;
   controller: AbortController;
   subscribers: number;
 };
 
-/** Caller-scoped view of a shared load (exported for tests). */
+/** Caller-scoped view: one subscriber abort never poisons another live subscriber. */
 export function attachSubscriber<T>(
   shared: SharedLoad<T>,
   signal?: AbortSignal,
 ): Promise<T> {
   shared.subscribers++;
-  if (!signal) return shared.promise;
+  let active = true;
+  const release = (abortUnderlying: boolean, reason?: RequestPolicyError) => {
+    if (!active) return;
+    active = false;
+    shared.subscribers--;
+    if (abortUnderlying && shared.subscribers <= 0 && !shared.controller.signal.aborted) {
+      shared.controller.abort(reason);
+    }
+  };
+
+  if (!signal) {
+    return shared.promise.then(
+      (value) => {
+        release(false);
+        return value;
+      },
+      (error) => {
+        release(false);
+        throw error;
+      },
+    );
+  }
+
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
-      shared.subscribers--;
-      if (shared.subscribers <= 0) shared.controller.abort();
-      reject(new Error("Aborted"));
+      const error = abortErrorFromSignal(signal);
+      release(true, error);
+      reject(error);
     };
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
+    // Attach upstream settlement handlers before observing an already-aborted
+    // subscriber. Otherwise aborting the only subscriber can reject the shared
+    // load without any rejection handler, surfacing as page-level noise.
     shared.promise.then(
       (value) => {
         signal.removeEventListener("abort", onAbort);
+        release(false);
         resolve(value);
       },
-      (err) => {
+      (error) => {
         signal.removeEventListener("abort", onAbort);
-        reject(err instanceof Error ? err : new Error(String(err)));
+        release(false);
+        reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
-const inflightTiles = new Map<string, SharedLoad<Float32Array>>();
+export type TerrainTileLoader = {
+  getTileData: (
+    z: number,
+    x: number,
+    y: number,
+    signal?: AbortSignal,
+  ) => Promise<Float32Array>;
+  circuit: ProxyCircuitBreaker;
+};
 
-function getTileData(
-  z: number,
-  x: number,
-  y: number,
-  signal?: AbortSignal,
-): Promise<Float32Array> {
-  const key = `${z}/${x}/${y}`;
-  let shared = inflightTiles.get(key);
-  if (!shared) {
-    const controller = new AbortController();
-    const load: SharedLoad<Float32Array> = {
-      controller,
-      subscribers: 0,
-      promise: loadTileData(z, x, y, controller.signal).finally(() => {
-        inflightTiles.delete(key);
-      }),
-    };
-    inflightTiles.set(key, load);
-    shared = load;
-  }
-  return attachSubscriber(shared, signal);
+export type TerrainFetch = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export type TerrainTileLoaderDependencies = {
+  proxyUrl?: string;
+  directUrl?: string;
+  runtime?: RequestPolicyRuntime;
+  fetch?: TerrainFetch;
+  getCachedTile?: typeof getTile;
+  setCachedTile?: typeof setTile;
+  decodeResponse?: (response: Response, signal: AbortSignal) => Promise<Float32Array>;
+  isOnline?: () => boolean;
+  circuit?: ProxyCircuitBreaker;
+};
+
+/** Provider-aware, cache-first tile loader with one shared in-flight request per z/x/y. */
+export function createTerrainTileLoader(
+  dependencies: TerrainTileLoaderDependencies = {},
+): TerrainTileLoader {
+  const runtime = dependencies.runtime ?? systemRequestPolicyRuntime;
+  const proxyUrl = dependencies.proxyUrl?.trim() || undefined;
+  const directUrl = dependencies.directUrl ?? DIRECT_TERRAIN_TILE_URL;
+  const fetchImpl: TerrainFetch =
+    dependencies.fetch ?? ((input, init) => fetch(input, init));
+  const getCachedTile = dependencies.getCachedTile ?? getTile;
+  const setCachedTile = dependencies.setCachedTile ?? setTile;
+  const decodeResponse = dependencies.decodeResponse ?? decodeTerrainResponse;
+  const isOnline =
+    dependencies.isOnline ??
+    (() => typeof navigator === "undefined" || navigator.onLine !== false);
+  const circuit = dependencies.circuit ?? new ProxyCircuitBreaker({ runtime });
+  const inflightTiles = new Map<string, SharedLoad<Float32Array>>();
+
+  const requestProvider = async (
+    provider: TerrainProviderName,
+    template: string,
+    z: number,
+    x: number,
+    y: number,
+    operation: ReturnType<typeof createRequestOperation>,
+    budget: AttemptBudget,
+  ): Promise<Float32Array> => {
+    const url = tileUrl(template, z, x, y);
+    return runRequestAttempt({
+      operation,
+      budget,
+      timeoutMs: TILE_ATTEMPT_TIMEOUT_MS,
+      provider,
+      run: async ({ signal }) => {
+        const response = await fetchImpl(url, { signal });
+        if (!response.ok) {
+          discardResponseBody(response);
+          throw requestFailureFromResponse(response, url, {
+            provider,
+            nowMs: runtime.now(),
+          });
+        }
+        try {
+          return await decodeResponse(response, signal);
+        } catch (error) {
+          if (signal.aborted) throw abortErrorFromSignal(signal);
+          if (error instanceof RequestPolicyError) throw error;
+          throw new RequestPolicyError("decode", "Terrain tile image could not be decoded", {
+            provider,
+            cause: error,
+          });
+        }
+      },
+    });
+  };
+
+  const loadUncachedTile = async (
+    z: number,
+    x: number,
+    y: number,
+    signal: AbortSignal,
+  ): Promise<Float32Array> => {
+    const operation = createRequestOperation({
+      signal,
+      timeoutMs: TILE_OPERATION_TIMEOUT_MS,
+      runtime,
+      label: "Terrain tile",
+    });
+    const budget = new AttemptBudget(TILE_ATTEMPT_LIMIT);
+    let provider: TerrainProviderName = proxyUrl && circuit.canRequest() ? "proxy" : "direct";
+    let proxyAttempts = 0;
+    let retryIndex = 0;
+    let lastFailure: RequestPolicyError | undefined;
+
+    try {
+      while (budget.remaining > 0) {
+        operation.throwIfAborted();
+        const template = provider === "proxy" ? proxyUrl : directUrl;
+        if (!template) {
+          provider = "direct";
+          continue;
+        }
+
+        if (provider === "proxy" && !circuit.canRequest()) {
+          provider = "direct";
+          continue;
+        }
+
+        try {
+          const data = await requestProvider(
+            provider,
+            template,
+            z,
+            x,
+            y,
+            operation,
+            budget,
+          );
+          if (provider === "proxy") circuit.recordSuccess();
+          return data;
+        } catch (error) {
+          const failure =
+            error instanceof RequestPolicyError
+              ? error
+              : new RequestPolicyError("unknown", String(error), {
+                  provider,
+                  cause: error,
+                });
+          lastFailure = failure;
+          if (isAbortFailure(failure) || failure.kind === "attempt-budget") throw failure;
+
+          if (provider === "proxy") {
+            proxyAttempts++;
+            circuit.recordFailure(failure);
+            const retryProxy =
+              failure.retryable &&
+              proxyAttempts < 2 &&
+              budget.remaining > 0 &&
+              circuit.canRequest();
+            if (retryProxy) {
+              try {
+                await waitForRetry({
+                  operation,
+                  failure,
+                  retryIndex: retryIndex++,
+                  baseBackoffMs: BASE_BACKOFF_MS,
+                  maxBackoffMs: MAX_BACKOFF_MS,
+                });
+                continue;
+              } catch (retryError) {
+                const retryDeadlineExceeded =
+                  retryError instanceof RequestPolicyError &&
+                  retryError.kind === "operation-deadline" &&
+                  !operation.signal.aborted;
+                if (!retryDeadlineExceeded) throw retryError;
+              }
+            }
+            provider = "direct";
+            continue;
+          }
+
+          if (!failure.retryable || budget.remaining <= 0) throw failure;
+          await waitForRetry({
+            operation,
+            failure,
+            retryIndex: retryIndex++,
+            baseBackoffMs: BASE_BACKOFF_MS,
+            maxBackoffMs: MAX_BACKOFF_MS,
+          });
+        }
+      }
+      throw (
+        lastFailure ??
+        new RequestPolicyError("attempt-budget", "Terrain tile attempt budget exhausted")
+      );
+    } finally {
+      operation.dispose();
+    }
+  };
+
+  const loadTileData = async (
+    z: number,
+    x: number,
+    y: number,
+    signal: AbortSignal,
+  ): Promise<Float32Array> => {
+    if (signal.aborted) throw abortErrorFromSignal(signal);
+    const cached = await getCachedTile(z, x, y);
+    if (signal.aborted) throw abortErrorFromSignal(signal);
+    if (cached) return cached;
+    if (!isOnline()) {
+      throw new RequestPolicyError(
+        "offline",
+        "Offline and terrain tile is not available in cache",
+      );
+    }
+
+    const data = await loadUncachedTile(z, x, y, signal);
+    await setCachedTile(z, x, y, data);
+    return data;
+  };
+
+  const getTileData = (
+    z: number,
+    x: number,
+    y: number,
+    signal?: AbortSignal,
+  ): Promise<Float32Array> => {
+    if (signal?.aborted) return Promise.reject(abortErrorFromSignal(signal));
+
+    const key = `${z}/${x}/${y}`;
+    let shared = inflightTiles.get(key);
+    // The last subscriber aborts the underlying request synchronously, while
+    // its promise/map cleanup settles in a later microtask. A new caller in
+    // that window must start fresh instead of inheriting the prior abort.
+    if (shared?.controller.signal.aborted) {
+      if (inflightTiles.get(key) === shared) inflightTiles.delete(key);
+      shared = undefined;
+    }
+    if (!shared) {
+      const controller = new AbortController();
+      let load!: SharedLoad<Float32Array>;
+      const promise = loadTileData(z, x, y, controller.signal).finally(() => {
+        // An older aborted load must not delete a replacement installed before
+        // this cleanup callback runs.
+        if (inflightTiles.get(key) === load) inflightTiles.delete(key);
+      });
+      load = { controller, subscribers: 0, promise };
+      inflightTiles.set(key, load);
+      shared = load;
+    }
+    return attachSubscriber(shared, signal);
+  };
+
+  return { getTileData, circuit };
 }
+
+const terrainTileLoader = createTerrainTileLoader({
+  proxyUrl: CONFIGURED_TERRAIN_PROXY_URL,
+});
 
 /** Run async tasks with a concurrency cap. */
 async function runWithConcurrency<T>(
@@ -241,7 +538,23 @@ async function runWithConcurrency<T>(
   return results;
 }
 
-function selectZoom(bounds: GeoBounds, gridSize: number): number {
+export type TerrainGridDimensions = number | { width: number; height: number };
+
+function normalizeGridDimensions(dimensions: TerrainGridDimensions): {
+  width: number;
+  height: number;
+  longest: number;
+} {
+  const width =
+    typeof dimensions === "number" ? dimensions : dimensions.width;
+  const height =
+    typeof dimensions === "number" ? dimensions : dimensions.height;
+  const safeWidth = Number.isFinite(width) ? Math.max(1, Math.round(width)) : 1;
+  const safeHeight = Number.isFinite(height) ? Math.max(1, Math.round(height)) : 1;
+  return { width: safeWidth, height: safeHeight, longest: Math.max(safeWidth, safeHeight) };
+}
+
+function selectZoom(bounds: GeoBounds, longestDimension: number): number {
   let selected = 0;
   for (let z = 0; z <= MAX_ZOOM; z++) {
     const west = lngToPixelX(bounds.west, z);
@@ -250,7 +563,7 @@ function selectZoom(bounds: GeoBounds, gridSize: number): number {
     const south = latToPixelY(bounds.south, z);
     const width = Math.abs(east - west);
     const height = Math.abs(south - north);
-    if (Math.max(width, height) >= gridSize) {
+    if (Math.max(width, height) >= longestDimension) {
       selected = z;
       break;
     }
@@ -272,9 +585,10 @@ interface TileRange {
   maxTy: number;
 }
 
-function computeTileRange(bounds: GeoBounds, gridSize: number): TileRange {
+function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions): TileRange {
   const normalized = normalizeBounds(bounds);
-  const zoom = selectZoom(normalized, gridSize);
+  const { longest } = normalizeGridDimensions(dimensions);
+  const zoom = selectZoom(normalized, longest);
   const westPx = lngToPixelX(normalized.west, zoom);
   const eastPx = lngToPixelX(normalized.east, zoom);
   const northPx = latToPixelY(normalized.north, zoom);
@@ -299,9 +613,12 @@ function computeTileRange(bounds: GeoBounds, gridSize: number): TileRange {
   };
 }
 
-/** Number of tiles fetchTerrain would request for the given bounds and grid size. */
-export function tileCountForFetch(bounds: GeoBounds, gridSize: number): number {
-  const { minTx, maxTx, minTy, maxTy } = computeTileRange(bounds, gridSize);
+/** Number of tiles fetchTerrain would request for the given bounds and grid dimensions. */
+export function tileCountForFetch(
+  bounds: GeoBounds,
+  dimensions: TerrainGridDimensions,
+): number {
+  const { minTx, maxTx, minTy, maxTy } = computeTileRange(bounds, dimensions);
   return (maxTx - minTx + 1) * (maxTy - minTy + 1);
 }
 
@@ -331,72 +648,106 @@ function sampleBilinear(tile: Float32Array, px: number, py: number): number {
   );
 }
 
+export type TerrainFetchOptions = {
+  onDiagnostics?: (diagnostics: { totalTiles: number; failedTiles: number }) => void;
+  operationTimeoutMs?: number;
+  runtime?: RequestPolicyRuntime;
+  tileLoader?: Pick<TerrainTileLoader, "getTileData">;
+};
+
+export class TerrainLoadError extends Error {
+  readonly kind = "all-tiles-failed";
+
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "TerrainLoadError";
+  }
+}
+
 export async function fetchTerrain(
   bounds: GeoBounds,
-  gridSize: number,
+  dimensions: TerrainGridDimensions,
   signal?: AbortSignal,
-  opts?: {
-    onDiagnostics?: (d: { totalTiles: number; failedTiles: number }) => void;
-  },
+  options: TerrainFetchOptions = {},
 ): Promise<ElevationGrid> {
-  const { normalized, zoom, minX, maxX, minY, maxY, minTx, maxTx, minTy, maxTy } =
-    computeTileRange(bounds, gridSize);
+  const operation = createRequestOperation({
+    signal,
+    timeoutMs: options.operationTimeoutMs ?? DEFAULT_FETCH_DEADLINE_MS,
+    runtime: options.runtime,
+    label: "Terrain fetch",
+  });
+  const loader = options.tileLoader ?? terrainTileLoader;
 
-  const tileCache = new Map<string, Float32Array>();
-  const tileKeys: { key: string; tx: number; ty: number }[] = [];
-  let failedCount = 0;
-  let totalTiles = 0;
+  try {
+    // Reject pre-aborted/zero-deadline operations before constructing tile
+    // tasks or shared loads.
+    operation.throwIfAborted();
+    const grid = normalizeGridDimensions(dimensions);
+    const { normalized, zoom, minX, maxX, minY, maxY, minTx, maxTx, minTy, maxTy } =
+      computeTileRange(bounds, grid);
 
-  for (let ty = minTy; ty <= maxTy; ty++) {
-    for (let tx = minTx; tx <= maxTx; tx++) {
-      tileKeys.push({ key: `${zoom}/${tx}/${ty}`, tx, ty });
-      totalTiles++;
-    }
-  }
+    const tileCache = new Map<string, Float32Array>();
+    const tileKeys: { key: string; tx: number; ty: number }[] = [];
+    let failedCount = 0;
+    let firstFailure: unknown;
 
-  const tileTasks = tileKeys.map(
-    ({ key, tx, ty }) =>
-      () =>
-        getTileData(zoom, tx, ty, signal)
-          .then((data) => {
-            tileCache.set(key, data);
-          })
-          .catch(() => {
-            failedCount++;
-            const fallback = new Float32Array(TILE_SIZE * TILE_SIZE);
-            tileCache.set(key, fallback);
-          }),
-  );
-
-  await runWithConcurrency(tileTasks, MAX_CONCURRENCY);
-
-  opts?.onDiagnostics?.({ totalTiles, failedTiles: failedCount });
-
-  if (failedCount > 0 && failedCount === totalTiles) {
-    throw new Error("All terrain tiles failed to load");
-  }
-
-  const data = new Float32Array(gridSize * gridSize);
-  const width = maxX - minX;
-  const height = maxY - minY;
-
-  for (let row = 0; row < gridSize; row++) {
-    const y = minY + (row / (gridSize - 1 || 1)) * height;
-    const ty = tileYForPixel(y, zoom);
-    for (let col = 0; col < gridSize; col++) {
-      const x = minX + (col / (gridSize - 1 || 1)) * width;
-      const tx = tileXForPixel(x, zoom);
-      const key = `${zoom}/${tx}/${ty}`;
-      const tile = tileCache.get(key);
-      if (!tile) {
-        data[row * gridSize + col] = 0;
-        continue;
+    for (let ty = minTy; ty <= maxTy; ty++) {
+      for (let tx = minTx; tx <= maxTx; tx++) {
+        tileKeys.push({ key: `${zoom}/${tx}/${ty}`, tx, ty });
       }
-      const px = Math.min(Math.max(x - tx * TILE_SIZE, 0), TILE_SIZE - 0.001);
-      const py = Math.min(Math.max(y - ty * TILE_SIZE, 0), TILE_SIZE - 0.001);
-      data[row * gridSize + col] = sampleBilinear(tile, px, py);
     }
-  }
 
-  return { width: gridSize, height: gridSize, bounds: normalized, data };
+    const tileTasks = tileKeys.map(
+      ({ key, tx, ty }) =>
+        async () => {
+          try {
+            const data = await loader.getTileData(zoom, tx, ty, operation.signal);
+            tileCache.set(key, data);
+          } catch (error) {
+            if (operation.signal.aborted) {
+              throw abortErrorFromSignal(operation.signal);
+            }
+            firstFailure ??= error;
+            failedCount++;
+            tileCache.set(key, new Float32Array(TILE_SIZE * TILE_SIZE));
+          }
+        },
+    );
+
+    await runWithConcurrency(tileTasks, MAX_CONCURRENCY);
+
+    const totalTiles = tileKeys.length;
+    options.onDiagnostics?.({ totalTiles, failedTiles: failedCount });
+
+    if (failedCount > 0 && failedCount === totalTiles) {
+      throw new TerrainLoadError("All terrain tiles failed to load", firstFailure);
+    }
+
+    const data = new Float32Array(grid.width * grid.height);
+    const sourceWidth = maxX - minX;
+    const sourceHeight = maxY - minY;
+
+    for (let row = 0; row < grid.height; row++) {
+      const y = minY + (row / (grid.height - 1 || 1)) * sourceHeight;
+      const ty = tileYForPixel(y, zoom);
+      for (let col = 0; col < grid.width; col++) {
+        const x = minX + (col / (grid.width - 1 || 1)) * sourceWidth;
+        const tx = tileXForPixel(x, zoom);
+        const key = `${zoom}/${tx}/${ty}`;
+        const tile = tileCache.get(key);
+        const index = row * grid.width + col;
+        if (!tile) {
+          data[index] = 0;
+          continue;
+        }
+        const px = Math.min(Math.max(x - tx * TILE_SIZE, 0), TILE_SIZE - 0.001);
+        const py = Math.min(Math.max(y - ty * TILE_SIZE, 0), TILE_SIZE - 0.001);
+        data[index] = sampleBilinear(tile, px, py);
+      }
+    }
+
+    return { width: grid.width, height: grid.height, bounds: normalized, data };
+  } finally {
+    operation.dispose();
+  }
 }
