@@ -72,7 +72,7 @@ function successResponse(): Response {
 
 describe("overpass endpoint contract", () => {
   test("without a proxy, all endpoints are direct public mirrors", () => {
-    const endpoints = overpassEndpoints(undefined);
+    const endpoints = overpassEndpoints("");
     expect(endpoints.map((endpoint) => endpoint.url)).toEqual(OVERPASS_MIRRORS);
     expect(endpoints.every((endpoint) => endpoint.kind === "direct")).toBe(true);
   });
