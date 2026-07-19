@@ -1,68 +1,144 @@
-import { useCallback, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { CapabilityMatrix } from "./capabilities.ts";
+import type { PngArtifact } from "./useExports.ts";
+import { shareFileName } from "./shareSpec.ts";
+export { SHARE_LONG_EDGE, shareFileName } from "./shareSpec.ts";
 
-/** Filename for the shared artwork PNG. */
-export function shareFileName(styleId: string, seed: string): string {
-  return `strata-${styleId}-${seed}.png`;
+export type NativeShareMode = "copy" | "url" | "file";
+
+export function resolveNativeShareMode(capabilities: CapabilityMatrix): NativeShareMode {
+  if (!capabilities.nativeShare) return "copy";
+  return capabilities.fileShare && capabilities.pngExport ? "file" : "url";
 }
 
-/**
- * navigator.share flow with graceful degradation:
- *
- *   1. Canvas → PNG File share when navigator.canShare({ files }) allows it.
- *   2. Plain navigator.share({ title, url }) otherwise.
- *   3. The caller's copy-link fallback when share() itself fails
- *      (user cancellations are not failures and are swallowed).
- *
- * `shareSupported` is false where navigator.share doesn't exist (e.g. Chrome
- * desktop) — callers hide the button entirely rather than show a dead one.
- */
+export type ShareStatus =
+  | { phase: "idle" }
+  | { phase: "preparing"; message: string }
+  | { phase: "sharing"; message: string }
+  | { phase: "cancelled"; message: string }
+  | { phase: "error"; message: string };
+
+function isShareCancellation(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+/** Native share with a standard attributed export and URL/copy fallbacks. */
 export function useShare({
-  canvasRef,
   styleId,
   seed,
   label,
+  capabilities,
+  createSharePng,
   onFallbackCopy,
 }: {
-  canvasRef: RefObject<HTMLCanvasElement | null>;
   styleId: string;
   seed: string;
   label: string;
-  /** Last-resort fallback (the existing copy-link flow). */
-  onFallbackCopy: () => void;
+  capabilities: CapabilityMatrix;
+  createSharePng: (signal: AbortSignal) => Promise<PngArtifact>;
+  onFallbackCopy: () => boolean | Promise<boolean>;
 }) {
-  // Feature-detected once; navigator.share never appears mid-session.
-  const [shareSupported] = useState(
-    () => typeof navigator !== "undefined" && typeof navigator.share === "function",
-  );
+  const [status, setStatus] = useState<ShareStatus>({ phase: "idle" });
+  const controllerRef = useRef<AbortController | null>(null);
 
-  const share = useCallback(async () => {
-    if (!shareSupported) {
-      onFallbackCopy();
-      return;
+  const cancelShare = useCallback(() => {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    controller.abort(new DOMException("Share cancelled", "AbortError"));
+    if (controllerRef.current === controller) {
+      controllerRef.current = null;
+      setStatus({ phase: "cancelled", message: "Share cancelled." });
     }
+  }, []);
+
+  useEffect(() => () => controllerRef.current?.abort(), []);
+
+  const fallbackToCopy = useCallback(async (controller: AbortController): Promise<void> => {
+    if (controllerRef.current !== controller) return;
+    setStatus({ phase: "sharing", message: "Sharing unavailable; copying the composition link…" });
+    let copied = false;
+    try {
+      copied = await onFallbackCopy();
+    } catch {
+      copied = false;
+    }
+    if (controllerRef.current !== controller) return;
+    setStatus(
+      copied
+        ? { phase: "idle" }
+        : {
+            phase: "error",
+            message: "Sharing failed and the link could not be copied. Copy it from the address bar.",
+          },
+    );
+  }, [onFallbackCopy]);
+
+  const share = useCallback(async (): Promise<void> => {
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     const title = label ? `Strata Studio — ${label}` : "Strata Studio";
     const url = window.location.href;
-    try {
-      const canvas = canvasRef.current;
-      if (canvas && typeof navigator.canShare === "function") {
-        const blob = await new Promise<Blob | null>((resolve) =>
-          canvas.toBlob(resolve, "image/png"),
-        );
-        if (blob) {
-          const file = new File([blob], shareFileName(styleId, seed), { type: "image/png" });
-          if (navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title, url });
-            return;
-          }
-        }
-      }
-      await navigator.share({ title, url });
-    } catch (err) {
-      // The user closing the share sheet is not an error.
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      onFallbackCopy();
-    }
-  }, [shareSupported, canvasRef, styleId, seed, label, onFallbackCopy]);
 
-  return { shareSupported, share };
+    try {
+      const mode = resolveNativeShareMode(capabilities);
+      if (mode === "copy" || typeof navigator.share !== "function") {
+        await fallbackToCopy(controller);
+        return;
+      }
+
+      if (mode === "url") {
+        setStatus({ phase: "sharing", message: "Sharing composition link…" });
+        await navigator.share({ title, url });
+        if (controllerRef.current === controller) setStatus({ phase: "idle" });
+        return;
+      }
+
+      setStatus({ phase: "preparing", message: "Preparing attributed 1024px image…" });
+      const artifact = await createSharePng(controller.signal);
+      if (controller.signal.aborted) throw new DOMException("Share cancelled", "AbortError");
+      if (controllerRef.current !== controller) return;
+      const file = new File(
+        [artifact.blob],
+        shareFileName(styleId, seed, artifact.width, artifact.height),
+        { type: "image/png" },
+      );
+
+      if (typeof navigator.canShare !== "function" || !navigator.canShare({ files: [file] })) {
+        setStatus({ phase: "sharing", message: "Image sharing unavailable; sharing link…" });
+        await navigator.share({ title, url });
+      } else {
+        setStatus({
+          phase: "sharing",
+          message: `Sharing ${artifact.width}×${artifact.height} attributed image…`,
+        });
+        await navigator.share({ files: [file], title, url });
+      }
+      if (controllerRef.current === controller) setStatus({ phase: "idle" });
+    } catch (error) {
+      if (controllerRef.current !== controller) return;
+      if (isShareCancellation(error) || controller.signal.aborted) {
+        setStatus({ phase: "cancelled", message: "Share cancelled." });
+        return;
+      }
+      await fallbackToCopy(controller);
+    } finally {
+      if (controllerRef.current === controller) controllerRef.current = null;
+    }
+  }, [
+    capabilities,
+    createSharePng,
+    fallbackToCopy,
+    label,
+    seed,
+    styleId,
+  ]);
+
+  return {
+    shareSupported: capabilities.nativeShare,
+    share,
+    shareStatus: status,
+    isSharing: status.phase === "preparing" || status.phase === "sharing",
+    cancelShare,
+  };
 }

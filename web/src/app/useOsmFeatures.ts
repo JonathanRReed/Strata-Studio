@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchOsmFeatures,
   isBboxSmallEnough,
@@ -8,22 +8,19 @@ import {
 import type { GeoBounds, GeoFeatureCollection } from "../engine/types.ts";
 import { classifyError, type OsmStatus } from "./status.ts";
 
-/**
- * Dedupe key for a fetch: the snapped query bbox (the same quantization the
- * Overpass cache uses), so nearby selections collapse onto one request.
- */
-function queryKey(bounds: GeoBounds): string {
-  const s = snapBoundsForQuery(bounds);
-  return `${s.south.toFixed(4)},${s.west.toFixed(4)},${s.north.toFixed(4)},${s.east.toFixed(4)}`;
+/** Snapped query key shared by request dedupe, memory state, and cache reuse. */
+export function osmQueryKey(bounds: GeoBounds): string {
+  const snapped = snapBoundsForQuery(bounds);
+  return `${snapped.south.toFixed(4)},${snapped.west.toFixed(4)},${snapped.north.toFixed(4)},${snapped.east.toFixed(4)}`;
 }
 
 function summarizeFeatures(collected: GeoFeatureCollection): string {
   const counts = { building: 0, road: 0, water: 0 };
   const waterCounts = { ocean: 0, lake: 0, river: 0 };
-  for (const f of collected.features) {
-    counts[f.properties.strataType]++;
-    if (f.properties.strataType === "water") {
-      waterCounts[f.properties.waterType ?? "lake"]++;
+  for (const feature of collected.features) {
+    counts[feature.properties.strataType]++;
+    if (feature.properties.strataType === "water") {
+      waterCounts[feature.properties.waterType ?? "lake"]++;
     }
   }
   const waterDetail =
@@ -33,87 +30,175 @@ function summarizeFeatures(collected: GeoFeatureCollection): string {
   return `Loaded ${counts.building} buildings, ${counts.road} roads, ${counts.water} water features${waterDetail}`;
 }
 
-/** OSM feature state plus the fetch flow and its status channel. */
-export function useOsmFeatures({ bounds }: { bounds: GeoBounds }) {
-  const [features, setFeatures] = useState<GeoFeatureCollection | undefined>();
-  const [status, setStatus] = useState<OsmStatus>({ phase: "idle" });
-  const [featureInfo, setFeatureInfo] = useState<string | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
+type OsmEntry = {
+  features?: GeoFeatureCollection;
+  status: OsmStatus;
+  featureInfo: string | null;
+  retryCount: number;
+};
+
+const IDLE_ENTRY: OsmEntry = {
+  status: { phase: "idle" },
+  featureInfo: null,
+  retryCount: 0,
+};
+
+export const OSM_MEMORY_ENTRY_LIMIT = 8;
+
+function withRecentEntry(
+  previous: Record<string, OsmEntry>,
+  key: string,
+  entry: OsmEntry,
+): Record<string, OsmEntry> {
+  const next: Record<string, OsmEntry> = {};
+  for (const [existingKey, existingEntry] of Object.entries(previous)) {
+    if (existingKey !== key) next[existingKey] = existingEntry;
+  }
+  next[key] = entry;
+  const staleKeys = Object.keys(next).slice(0, -OSM_MEMORY_ENTRY_LIMIT);
+  for (const staleKey of staleKeys) delete next[staleKey];
+  return next;
+}
+
+type FetchOsm = (
+  bounds: GeoBounds,
+  signal?: AbortSignal,
+) => Promise<GeoFeatureCollection>;
+
+/** OSM feature state keyed to the active snapped query bounds. */
+export function useOsmFeatures({
+  bounds,
+  fetcher = fetchOsmFeatures,
+}: {
+  bounds: GeoBounds;
+  /** Test/runtime injection; production uses the IndexedDB-backed fetcher. */
+  fetcher?: FetchOsm;
+}) {
+  const activeKey = useMemo(() => osmQueryKey(bounds), [bounds]);
+  const [entries, setEntries] = useState<Record<string, OsmEntry>>({});
   const abortRef = useRef<AbortController | null>(null);
-  // Dedupe bookkeeping: what's currently being fetched, and what the loaded
-  // features correspond to. Lets auto-generate call fetchFeatures freely
-  // without stacking redundant requests for the same snapped bbox.
   const inFlightKeyRef = useRef<string | null>(null);
-  const loadedKeyRef = useRef<string | null>(null);
+
+  const updateEntry = useCallback(
+    (key: string, update: (entry: OsmEntry) => OsmEntry) => {
+      setEntries((previous) =>
+        withRecentEntry(
+          previous,
+          key,
+          update(previous[key] ?? IDLE_ENTRY),
+        ),
+      );
+    },
+    [],
+  );
 
   const fetchFeatures = useCallback(
     async (isRetry = false) => {
+      const key = activeKey;
       if (!isBboxSmallEnough(bounds)) {
-        setStatus({
-          phase: "error",
-          error: {
-            kind: "area-too-large",
-            message: `Selected area is too large for OSM queries. Please zoom in (max ~${MAX_BBOX_KM2} km²).`,
+        updateEntry(key, (entry) => ({
+          ...entry,
+          featureInfo: null,
+          status: {
+            phase: "error",
+            error: {
+              kind: "area-too-large",
+              message: `Selected area is too large for OSM queries. Please zoom in (max ~${MAX_BBOX_KM2} km²).`,
+            },
           },
-        });
+        }));
         return;
       }
-      const key = queryKey(bounds);
+
+      const existing = entries[key];
       if (!isRetry) {
-        // Reuse: features for this snapped bbox are already loaded. Abort
-        // any stray fetch for other bounds so it can't overwrite them later.
-        if (loadedKeyRef.current === key) {
+        if (existing?.features) {
           abortRef.current?.abort();
           inFlightKeyRef.current = null;
-          setStatus({ phase: "done" });
+          updateEntry(key, (entry) => ({ ...entry, status: { phase: "done" } }));
           return;
         }
-        // Coalesce: an identical fetch is already in flight.
         if (inFlightKeyRef.current === key) return;
       }
-      if (isRetry) {
-        setRetryCount((c) => c + 1);
-      } else {
-        setRetryCount(0);
-      }
+
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
       inFlightKeyRef.current = key;
-      setStatus({ phase: "fetching" });
+      updateEntry(key, (entry) => ({
+        ...entry,
+        retryCount: isRetry ? entry.retryCount + 1 : 0,
+        status: { phase: "fetching" },
+      }));
+
       try {
-        const collected = await fetchOsmFeatures(bounds, controller.signal);
+        const collected = await fetcher(bounds, controller.signal);
         if (controller.signal.aborted) return;
-        setFeatures(collected);
-        setFeatureInfo(summarizeFeatures(collected));
-        loadedKeyRef.current = key;
-        setStatus({ phase: "done" });
-      } catch (err) {
+        updateEntry(key, (entry) => ({
+          ...entry,
+          features: collected,
+          featureInfo: summarizeFeatures(collected),
+          status: { phase: "done" },
+        }));
+      } catch (error) {
         if (controller.signal.aborted) return;
-        const error = classifyError(err);
-        if (error.kind === "aborted") return;
-        setFeatureInfo(null);
-        setStatus({ phase: "error", error });
+        const classified = classifyError(error);
+        if (classified.kind === "aborted") return;
+        updateEntry(key, (entry) => ({
+          ...entry,
+          featureInfo: null,
+          status: { phase: "error", error: classified },
+        }));
       } finally {
-        // Only clear if a newer call hasn't taken over the slot.
-        if (abortRef.current === controller) inFlightKeyRef.current = null;
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          inFlightKeyRef.current = null;
+        }
       }
     },
-    [bounds],
+    [activeKey, bounds, entries, fetcher, updateEntry],
   );
 
-  /** Bounds changed: abort any in-flight fetch but keep loaded features. */
+  /** Abort the old key and detach its transient status without deleting data. */
   const cancel = useCallback(() => {
     abortRef.current?.abort();
+    abortRef.current = null;
+    const key = inFlightKeyRef.current;
     inFlightKeyRef.current = null;
-    setStatus((prev) =>
-      prev.phase === "fetching" || prev.phase === "error" ? { phase: "idle" } : prev,
-    );
-  }, []);
+    if (!key) return;
+    updateEntry(key, (entry) => ({
+      ...entry,
+      status:
+        entry.status.phase === "fetching" || entry.status.phase === "error"
+          ? { phase: "idle" }
+          : entry.status,
+    }));
+  }, [updateEntry]);
+
+  // Bounds can change outside App's normal map callback (tests/future state
+  // restores). Abort any request that no longer belongs to the active key.
+  useEffect(() => {
+    if (inFlightKeyRef.current && inFlightKeyRef.current !== activeKey) cancel();
+  }, [activeKey, cancel]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const dismissError = useCallback(() => {
-    setStatus((prev) => (prev.phase === "error" ? { phase: "idle" } : prev));
-  }, []);
+    updateEntry(activeKey, (entry) => ({
+      ...entry,
+      status: entry.status.phase === "error" ? { phase: "idle" } : entry.status,
+    }));
+  }, [activeKey, updateEntry]);
 
-  return { features, status, featureInfo, retryCount, fetchFeatures, cancel, dismissError };
+  const activeEntry = entries[activeKey] ?? IDLE_ENTRY;
+  return {
+    activeKey,
+    features: activeEntry.features,
+    status: activeEntry.status,
+    featureInfo: activeEntry.featureInfo,
+    retryCount: activeEntry.retryCount,
+    fetchFeatures,
+    cancel,
+    dismissError,
+  };
 }

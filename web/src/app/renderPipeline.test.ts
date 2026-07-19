@@ -1,6 +1,13 @@
 import { describe, it, expect } from "bun:test";
 import { buildArtworkInput, createPlaceholderGrid, getMaskDimensions, MASK_SIZE } from "./renderPipeline.ts";
-import { ASPECT_RATIOS, getExportDimensions, getPreviewDimensions, PREVIEW_SIZE } from "./aspect.ts";
+import {
+  ASPECT_RATIOS,
+  getCenteredFrameRect,
+  getContainedFrameDimensions,
+  getExportDimensions,
+  getPreviewDimensions,
+  PREVIEW_SIZE,
+} from "./aspect.ts";
 import { defaultStyleParams } from "../presets/stylePresets.ts";
 import type { ElevationGrid, GeoBounds } from "../engine/types.ts";
 
@@ -29,6 +36,20 @@ describe("aspect dimensions", () => {
       const { width, height } = getPreviewDimensions(aspect);
       expect(Math.max(width, height)).toBe(PREVIEW_SIZE);
     }
+  });
+
+  it("uses the same centered rectangle for the visible frame and bounds sampling", () => {
+    const dimensions = getContainedFrameDimensions(240, 240, "16:9");
+    const rect = getCenteredFrameRect(120, 120, 240, 240, "16:9");
+    expect(dimensions).toEqual({ width: 168, height: 94.5 });
+    expect(rect).toEqual({
+      width: 168,
+      height: 94.5,
+      left: 36,
+      right: 204,
+      top: 72.75,
+      bottom: 167.25,
+    });
   });
 });
 
@@ -90,6 +111,19 @@ describe("buildArtworkInput", () => {
     expect(input.bounds).toEqual(input.elevationGrid.bounds);
   });
 
+  it("does not center-crop new rectangular terrain inputs a second time", () => {
+    const grid: ElevationGrid = {
+      width: 64,
+      height: 36,
+      bounds: BOUNDS,
+      data: new Float32Array(64 * 36),
+    };
+    const input = buildArtworkInput({ grid, params, width: 512, height: 288 });
+    expect(input.elevationGrid).toBe(grid);
+    expect(input.bounds).toBe(BOUNDS);
+    expect(input.masks!.meta!.bounds).toBe(BOUNDS);
+  });
+
   it("skips mask rasterization when skipMasks is set (meta-only carrier)", () => {
     const grid = makeGrid(16);
     const features = { type: "FeatureCollection" as const, features: [] };
@@ -102,6 +136,14 @@ describe("buildArtworkInput", () => {
 });
 
 describe("createPlaceholderGrid", () => {
+  it("supports rectangular preview dimensions", () => {
+    const grid = createPlaceholderGrid({ width: 32, height: 18 }, "wide", BOUNDS);
+    expect(grid.width).toBe(32);
+    expect(grid.height).toBe(18);
+    expect(grid.data).toHaveLength(32 * 18);
+    expect(grid.bounds).toBe(BOUNDS);
+  });
+
   it("is deterministic for a given seed and stays in [0, 1]", () => {
     const a = createPlaceholderGrid(32, "seed-a", BOUNDS);
     const b = createPlaceholderGrid(32, "seed-a", BOUNDS);

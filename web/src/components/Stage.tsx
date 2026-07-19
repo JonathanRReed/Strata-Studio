@@ -1,10 +1,23 @@
-import { lazy, Suspense, type RefObject } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { Artboard } from "./Artboard.tsx";
 import type { AspectRatio, GeoBounds } from "../engine/types.ts";
 import type { CuratedPlace } from "../data/places.ts";
-import type { FlyToRequest } from "./MapSelector.tsx";
-
-const MapSelector = lazy(() => import("./MapSelector.tsx"));
+import type {
+  FlyToRequest,
+  MapSelectionCause,
+  MapSelectionProps,
+} from "./mapSelectionTypes.ts";
+import { NoMapFallback } from "./NoMapFallback.tsx";
+import { MapErrorBoundary } from "./ErrorBoundaries.tsx";
+import { OrientationCard } from "./OrientationCard.tsx";
 
 type Props = {
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -13,6 +26,7 @@ type Props = {
   artworkLabel: string;
   /** Active palette background; tints the museum wall at ~6% over ground. */
   wallColor: string;
+  backgroundInert: boolean;
   hasArtwork: boolean;
   isGenerating: boolean;
   /** Loading pill text while generating ("Loading tiles", "Rendering", retry notes). */
@@ -24,6 +38,7 @@ type Props = {
   label: string;
   /** Opens the variations overlay (desktop ghost button by the caption). */
   onOpenVariations: () => void;
+  variationsReady: boolean;
   terrainInfo: string | null;
   warning: string | null;
   errorMessage: string | null;
@@ -32,10 +47,21 @@ type Props = {
   terrainRetryCount: number;
   onRetryTerrain: () => void;
   onCanvasResized: () => void;
+  orientation: {
+    place: string;
+    style: string;
+    onChoosePlace: (opener: HTMLElement) => void;
+    onCustomizeArtwork: (opener: HTMLElement) => void;
+    onDismiss: () => void;
+  } | null;
   // Viewfinder wiring
   bounds: GeoBounds;
   mapZoom: number;
-  onBoundsChange: (bounds: GeoBounds, zoom: number) => void;
+  onBoundsChange: (
+    bounds: GeoBounds,
+    zoom: number,
+    cause: MapSelectionCause,
+  ) => void;
   initialCenter: [number, number];
   initialZoom: number;
   initialBounds: GeoBounds | null;
@@ -44,7 +70,7 @@ type Props = {
   onSelectPlace: (place: CuratedPlace) => void;
   /** Viewfinder overlay state — owned by App so the mobile sheet can open it. */
   mapExpanded: boolean;
-  onToggleMapExpand: () => void;
+  onToggleMapExpand: (opener?: HTMLElement) => void;
   /** Imperative fly-to channel (mobile sheet place picks); null = none requested. */
   mapFlyTo: FlyToRequest | null;
 };
@@ -88,6 +114,7 @@ export function Stage({
   aspectRatio,
   artworkLabel,
   wallColor,
+  backgroundInert,
   hasArtwork,
   isGenerating,
   statusText,
@@ -96,6 +123,7 @@ export function Stage({
   seed,
   label,
   onOpenVariations,
+  variationsReady,
   terrainInfo,
   warning,
   errorMessage,
@@ -104,6 +132,7 @@ export function Stage({
   terrainRetryCount,
   onRetryTerrain,
   onCanvasResized,
+  orientation,
   bounds,
   mapZoom,
   onBoundsChange,
@@ -123,15 +152,92 @@ export function Stage({
   // was suppressed (animation export in progress).
   const showStale = boundsDirty && hasArtwork && !isGenerating && !errorMessage;
   const caption = formatCaption(bounds, terrainInfo, seed, label);
+  const [mapAttempt, setMapAttempt] = useState(0);
+  const mapDialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!mapExpanded) return;
+    const dialog = mapDialogRef.current;
+    if (!dialog) return;
+
+    dialog.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onToggleMapExpand();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], canvas[tabindex="0"], [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.closest("[inert]") && element.offsetParent !== null);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (
+        event.shiftKey &&
+        (active === dialog || active === first || !dialog.contains(active))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (active === dialog || active === last || !dialog.contains(active))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", handleKeyDown);
+    return () => dialog.removeEventListener("keydown", handleKeyDown);
+  }, [mapExpanded, onToggleMapExpand]);
+
+  // React.lazy caches a rejected import. Recreating the lazy component on retry
+  // gives a recovered network/session a real second chunk-load attempt.
+  const MapSelector = useMemo(() => {
+    const retryAttempt = mapAttempt;
+    return lazy(() => {
+      void retryAttempt;
+      return import("./MapSelector.tsx");
+    });
+  }, [mapAttempt]);
+  const mapProps: MapSelectionProps = {
+    onChange: onBoundsChange,
+    initialCenter,
+    initialZoom,
+    initialBounds,
+    aspectRatio,
+    bounds,
+    zoom: mapZoom,
+    expanded: mapExpanded,
+    onToggleExpand: onToggleMapExpand,
+    activePlaceId,
+    onSelectPlace,
+    flyTo: mapFlyTo,
+  };
 
   return (
     <main
+      inert={backgroundInert ? true : undefined}
       className="relative flex min-w-0 flex-1 flex-col"
       style={{ backgroundColor: `color-mix(in srgb, ${wallColor} 6%, var(--color-ground))` }}
     >
       {/* Viewfinder — floating PiP at every size: ~120px locator bottom-left on
           mobile (tap to expand to the fullscreen overlay), 240px instrument at lg. */}
       <div
+        ref={mapDialogRef}
+        role={mapExpanded ? "dialog" : undefined}
+        aria-modal={mapExpanded || undefined}
+        aria-labelledby={mapExpanded ? "map-dialog-title" : undefined}
+        aria-describedby={mapExpanded ? "map-keyboard-instructions" : undefined}
+        tabIndex={mapExpanded ? -1 : undefined}
         className={
           mapExpanded
             ? "fixed inset-0 z-40 flex bg-ground/60 p-4 sm:p-8 lg:absolute lg:p-[7%]"
@@ -141,6 +247,14 @@ export function Stage({
           if (mapExpanded && e.target === e.currentTarget) onToggleMapExpand();
         }}
       >
+        <h2 id="map-dialog-title" className="sr-only">
+          Choose artwork area
+        </h2>
+        <p id="map-keyboard-instructions" className="sr-only">
+          Pan with the arrow keys and zoom with plus or minus when the map is focused.
+          Changes apply automatically. The outlined frame is the exported area. Press
+          Escape to close the expanded map.
+        </p>
         <div
           className={
             mapExpanded
@@ -148,21 +262,27 @@ export function Stage({
               : "h-full w-full"
           }
         >
-          <Suspense fallback={<div className="h-full w-full bg-surface" />}>
-            <MapSelector
-              onChange={onBoundsChange}
-              initialCenter={initialCenter}
-              initialZoom={initialZoom}
-              initialBounds={initialBounds}
-              bounds={bounds}
-              zoom={mapZoom}
-              expanded={mapExpanded}
-              onToggleExpand={onToggleMapExpand}
-              activePlaceId={activePlaceId}
-              onSelectPlace={onSelectPlace}
-              flyTo={mapFlyTo}
-            />
-          </Suspense>
+          <MapErrorBoundary
+            key={mapAttempt}
+            onRetry={() => setMapAttempt((attempt) => attempt + 1)}
+            fallback={(error, retry) => (
+              <NoMapFallback
+                {...mapProps}
+                reason={`The interactive map code could not load: ${error.message}`}
+                onRetry={retry}
+              />
+            )}
+          >
+            <Suspense
+              fallback={
+                <div className="flex h-full w-full items-center justify-center bg-surface">
+                  <span className="instrument-label status-live text-ink-muted">Loading map</span>
+                </div>
+              }
+            >
+              <MapSelector {...mapProps} />
+            </Suspense>
+          </MapErrorBoundary>
         </div>
       </div>
 
@@ -171,7 +291,11 @@ export function Stage({
           reserves a left column for the floating viewfinder so it never
           occludes the frame or caption; at 2xl+ the artwork is fully centered
           museum-style and the (larger) viewfinder floats clear of the caption. */}
-      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-[144px] pt-12 lg:h-auto lg:min-h-0 lg:flex-1 lg:pb-8 lg:pl-[296px] lg:pr-10 lg:pt-14 2xl:pl-10">
+      <div
+        inert={mapExpanded ? true : undefined}
+        className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-[144px] pt-12 lg:h-auto lg:min-h-0 lg:flex-1 lg:pb-8 lg:pl-[296px] lg:pr-10 lg:pt-14 2xl:pl-10"
+      >
+        {orientation && <OrientationCard {...orientation} />}
         {/* Status pill rail — top-center of the artwork area, so it never
             covers the stacked viewfinder or the caption plate. */}
         <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex flex-col items-center gap-2 px-4 lg:top-6">
@@ -190,7 +314,7 @@ export function Stage({
                 onClick={onRegenerate}
                 className="instrument-label flex h-8 items-center rounded-sm bg-amber px-3 text-ground transition-opacity hover:opacity-85"
               >
-                Regenerate
+                Regenerate now
               </button>
             </div>
           )}
@@ -245,7 +369,7 @@ export function Stage({
         >
           <p className="instrument-label text-center text-ink-faint">{caption}</p>
           {/* Variations ghost button — desktop only; the mobile STYLE tab has its own. */}
-          {hasArtwork && (
+          {variationsReady && (
             <button
               type="button"
               onClick={onOpenVariations}
@@ -255,6 +379,9 @@ export function Stage({
             </button>
           )}
         </div>
+        <p className="mt-2 text-center font-mono text-[11px] leading-snug text-ink-muted">
+          Map pan and zoom apply automatically · outlined frame = exported area
+        </p>
       </div>
     </main>
   );

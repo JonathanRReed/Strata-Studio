@@ -8,35 +8,49 @@ import type { MaskMode } from "../../engine/types.ts";
  */
 
 export const selectClass =
-  "min-h-11 rounded-sm border border-hairline bg-surface-2 px-2.5 text-[13px] text-ink outline-none transition-colors focus:border-signal";
+  "min-h-11 rounded-sm border border-hairline-2 bg-surface-2 px-2.5 text-[13px] text-ink outline-none transition-colors focus:border-signal";
 export const textInputClass =
-  "min-h-11 rounded-sm border border-hairline bg-surface-2 px-2.5 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-signal";
+  "min-h-11 rounded-sm border border-hairline-2 bg-surface-2 px-2.5 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-muted focus:border-signal";
 export const secondaryButtonClass =
   "flex min-h-11 items-center justify-center rounded-sm border border-hairline-2 px-3 text-[13px] text-ink transition-colors hover:bg-surface-2 disabled:opacity-50";
 export const primaryButtonClass =
   "display flex h-11 w-full items-center justify-center rounded-sm bg-signal text-[13px] tracking-[0.08em] text-ground transition-colors hover:bg-signal/90 disabled:opacity-50";
 
-export function InfoDot({ text }: { text: string }) {
-  const id = useId();
+export function InfoDot({
+  text,
+  label,
+  tooltipId,
+}: {
+  text: string;
+  label: string;
+  tooltipId?: string;
+}) {
+  const generatedId = useId();
+  const id = tooltipId ?? `${generatedId}-help`;
   return (
     <span className="group relative inline-flex">
       <button
         type="button"
-        aria-label="More info"
+        aria-label={`${label} help`}
         aria-describedby={id}
-        className="instrument-label flex h-4 w-4 cursor-help select-none items-center justify-center rounded-full border border-hairline bg-surface-2 text-ink-faint"
+        className="instrument-label flex h-5 w-5 cursor-help select-none items-center justify-center rounded-full border border-hairline-2 bg-surface-2 text-ink-muted"
       >
         ?
       </button>
       <span
         id={id}
         role="tooltip"
-        className="absolute left-5 top-0 z-50 hidden w-48 rounded-sm border border-hairline-2 bg-ground px-2 py-1.5 text-[12px] leading-snug text-ink-muted shadow-lg group-focus-within:block group-hover:block"
+        className="absolute left-6 top-0 z-50 hidden w-48 rounded-sm border border-hairline-2 bg-ground px-2 py-1.5 text-[12px] leading-snug text-ink-muted shadow-lg group-focus-within:block group-hover:block"
       >
         {text}
       </span>
     </span>
   );
+}
+
+function formatSliderValue(value: number, step: number): string {
+  const precision = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
+  return Number(value.toFixed(precision)).toString();
 }
 
 export function Slider({
@@ -56,32 +70,37 @@ export function Slider({
   onChange: (v: number) => void;
   tooltip?: string;
 }) {
+  const controlId = `${useId()}-slider`;
+  const helpId = `${controlId}-help`;
   const fill = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  const displayValue = formatSliderValue(value, step);
   return (
-    <label className="flex flex-col gap-1.5">
-      <span className="flex items-center justify-between text-[13px] text-ink-muted">
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between text-[13px] text-ink-muted">
         <span className="flex items-center gap-1.5">
-          {label}
-          {tooltip && <InfoDot text={tooltip} />}
+          <label htmlFor={controlId}>{label}</label>
+          {tooltip && <InfoDot text={tooltip} label={label} tooltipId={helpId} />}
         </span>
-        <span
+        <output
+          htmlFor={controlId}
           className="w-[6ch] text-right font-mono text-[12px] tabular-nums text-ink"
-          aria-live="polite"
         >
-          {value.toFixed(step < 1 ? 2 : 0)}
-        </span>
-      </span>
+          {displayValue}
+        </output>
+      </div>
       <input
+        id={controlId}
         type="range"
         min={min}
         max={max}
         step={step}
         value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
+        aria-describedby={tooltip ? helpId : undefined}
+        onChange={(event) => onChange(parseFloat(event.target.value))}
         style={{ "--fader-fill": `${fill}%` } as CSSProperties}
         className="w-full"
       />
-    </label>
+    </div>
   );
 }
 
@@ -96,15 +115,19 @@ export function ModeSelector({
   onChange: (v: MaskMode) => void;
   tooltip?: string;
 }) {
+  const controlId = `${useId()}-mode`;
+  const helpId = `${controlId}-help`;
   return (
-    <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
+    <div className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
       <span className="flex items-center gap-1.5">
-        {label}
-        {tooltip && <InfoDot text={tooltip} />}
+        <label htmlFor={controlId}>{label}</label>
+        {tooltip && <InfoDot text={tooltip} label={label} tooltipId={helpId} />}
       </span>
       <select
+        id={controlId}
         value={value}
-        onChange={(e) => onChange(e.target.value as MaskMode)}
+        aria-describedby={tooltip ? helpId : undefined}
+        onChange={(event) => onChange(event.target.value as MaskMode)}
         className={selectClass}
       >
         <option value="interrupt">Interrupt</option>
@@ -114,7 +137,7 @@ export function ModeSelector({
         <option value="outline">Outline</option>
         <option value="invert">Invert</option>
       </select>
-    </label>
+    </div>
   );
 }
 
@@ -123,26 +146,34 @@ export function Section({
   children,
   defaultOpen = true,
   badge,
+  id,
 }: {
   title: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
   badge?: string;
+  id?: string;
 }) {
+  const generatedId = useId();
+  const sectionId = id ?? `${generatedId}-section`;
+  const toggleId = `${sectionId}-toggle`;
+  const bodyId = `${sectionId}-body`;
   const [open, setOpen] = useState(defaultOpen);
   // Sync with defaultOpen when it changes (e.g., when OSM features load or animation mode changes)
   useEffect(() => {
     setOpen(defaultOpen);
   }, [defaultOpen]);
   return (
-    <section className="border-b border-hairline">
+    <section id={sectionId} aria-labelledby={toggleId} className="border-b border-hairline">
       <button
+        id={toggleId}
         type="button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
+        aria-controls={bodyId}
         className="group flex min-h-11 w-full items-center justify-between text-left"
       >
-        <span className="instrument-label flex items-center gap-2 text-ink-faint transition-colors group-hover:text-ink-muted">
+        <span className="instrument-label flex items-center gap-2 text-ink-muted transition-colors group-hover:text-ink">
           {title}
           {badge && <span className="instrument-label text-ok">{badge}</span>}
         </span>
@@ -154,12 +185,16 @@ export function Section({
           stroke="currentColor"
           strokeWidth="2"
           aria-hidden="true"
-          className={`text-ink-faint transition-transform ${open ? "rotate-180" : ""}`}
+          className={`text-ink-muted transition-transform ${open ? "rotate-180" : ""}`}
         >
           <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open && <div className="flex flex-col gap-3.5 pb-4">{children}</div>}
+      {open && (
+        <div id={bodyId} className="flex flex-col gap-3.5 pb-4">
+          {children}
+        </div>
+      )}
     </section>
   );
 }

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import type {
   AnimationMode,
   AspectRatio,
@@ -13,6 +21,7 @@ import type {
 import { presets, defaultStyleParams, applyPreset, type Preset } from "../../presets/stylePresets.ts";
 import { stylesByStudio, getStyle } from "../../studios/registry.ts";
 import { cacheStats, clearCache, type CacheStats } from "../../data/cache.ts";
+import { MAX_LABEL_LENGTH, MAX_SEED_LENGTH } from "../../app/stateSafety.ts";
 import { PalettePicker } from "../PalettePicker.tsx";
 import { ThumbGrid, type ThumbGridItem } from "../ThumbGrid.tsx";
 import {
@@ -135,7 +144,7 @@ export function StyleSection({
     [studio],
   );
   return (
-    <Section title="Style" defaultOpen={true}>
+    <Section id="style-controls-section" title="Style" defaultOpen={true}>
       <ThumbGrid
         items={styleItems}
         selectedId={styleId}
@@ -508,15 +517,23 @@ export function AnimationSection({
   isAnimating: boolean;
   onToggleAnimation: () => void;
 }) {
+  const animationStyleId = `${useId()}-animation-style`;
+  const animationHelpId = `${animationStyleId}-help`;
   return (
     <Section title="Animation" defaultOpen={params.animationMode !== "none"}>
-      <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
+      <div className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
         <span className="flex items-center gap-1.5">
-          Animation style
-          <InfoDot text="Add motion to your artwork. Drift breathes, draw reveals lines stroke by stroke, parallax separates depth layers." />
+          <label htmlFor={animationStyleId}>Animation style</label>
+          <InfoDot
+            label="Animation style"
+            tooltipId={animationHelpId}
+            text="Add motion to your artwork. Drift breathes, draw reveals lines stroke by stroke, parallax separates depth layers."
+          />
         </span>
         <select
+          id={animationStyleId}
           value={params.animationMode}
+          aria-describedby={animationHelpId}
           onChange={(e) => update({ animationMode: e.target.value as AnimationMode })}
           className={selectClass}
         >
@@ -525,7 +542,7 @@ export function AnimationSection({
           <option value="draw">Draw-in — stroke reveal</option>
           <option value="parallax">Parallax — depth layers</option>
         </select>
-      </label>
+      </div>
       {params.animationMode !== "none" && (
         <>
           <p className="text-[12px] leading-snug text-ink-faint">
@@ -566,6 +583,10 @@ export function CompositionSection({
   controls: Set<ControlKey>;
   update: ParamsUpdate;
 }) {
+  const labelId = `${useId()}-label`;
+  const labelStyleHelpId = `${useId()}-label-style-help`;
+  const labelStyleName = `${useId()}-label-style`;
+  const aspectId = `${useId()}-aspect`;
   return (
     <Section title="Composition" defaultOpen={false}>
       {controls.has("grain") && (
@@ -590,29 +611,36 @@ export function CompositionSection({
         />
       )}
       {controls.has("label") && (
-        <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
+        <label htmlFor={labelId} className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
           Label
           <input
+            id={labelId}
             type="text"
             value={params.label}
             onChange={(e) => update({ label: e.target.value })}
+            maxLength={MAX_LABEL_LENGTH}
             placeholder="Optional place name"
             className={textInputClass}
           />
         </label>
       )}
       {controls.has("label") && (
-        <fieldset className="flex flex-col gap-1.5">
-          <legend className="instrument-label flex items-center gap-1.5 text-ink-faint">
-            Label style
-            <InfoDot text="Poster renders the label as a letterspaced-caps title block with coordinates and elevation range." />
-          </legend>
-          <div className="grid grid-cols-2 overflow-hidden rounded-sm border border-hairline">
+        <fieldset aria-describedby={labelStyleHelpId} className="flex flex-col gap-1.5">
+          <legend className="sr-only">Label style</legend>
+          <div className="instrument-label flex items-center gap-1.5 text-ink-muted">
+            <span aria-hidden="true">Label style</span>
+            <InfoDot
+              label="Label style"
+              tooltipId={labelStyleHelpId}
+              text="Poster renders the label as a letterspaced-caps title block with coordinates and elevation range."
+            />
+          </div>
+          <div className="grid grid-cols-2 overflow-hidden rounded-sm border border-hairline-2">
             {(["plain", "poster"] as LabelStyle[]).map((style) => (
               <label key={style}>
                 <input
                   type="radio"
-                  name="label-style"
+                  name={labelStyleName}
                   value={style}
                   checked={params.labelStyle === style}
                   onChange={() => update({ labelStyle: style })}
@@ -633,9 +661,10 @@ export function CompositionSection({
         </fieldset>
       )}
       {controls.has("aspectRatio") && (
-        <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
+        <label htmlFor={aspectId} className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
           Aspect ratio
           <select
+            id={aspectId}
             value={params.aspectRatio}
             onChange={(e) => update({ aspectRatio: e.target.value as AspectRatio })}
             className={selectClass}
@@ -666,15 +695,18 @@ export function SeedPaletteSection({
   onSavePalette: (id: string, name: string, palette: Palette) => void;
   onDeletePalette: (id: string) => void;
 }) {
+  const seedId = `${useId()}-seed`;
   return (
     <Section title="Seed & Palette" defaultOpen={false}>
-      <label className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
-        Seed
+      <div className="flex flex-col gap-1.5 text-[13px] text-ink-muted">
+        <label htmlFor={seedId}>Seed</label>
         <div className="flex gap-2">
           <input
+            id={seedId}
             type="text"
             value={params.seed}
             onChange={(e) => update({ seed: e.target.value })}
+            maxLength={MAX_SEED_LENGTH}
             className={`${textInputClass} min-w-0 flex-1 font-mono text-[12px]`}
           />
           <button
@@ -692,7 +724,7 @@ export function SeedPaletteSection({
             </svg>
           </button>
         </div>
-      </label>
+      </div>
 
       <PalettePicker
         selectedId={params.palette}

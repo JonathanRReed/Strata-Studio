@@ -3,15 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Caching proxy Worker for Strata Studio (terrain tiles, Overpass API, OG cards)",
+  "description": "Hardened caching proxy Worker for Strata Studio terrain and Overpass data",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "check:config": "bun test test/config.test.ts",
+    "check:bundle": "bun run check:config && wrangler deploy --dry-run --outdir .wrangler/dry-run --metafile && bun run scripts/assert-bundle.ts .wrangler/dry-run",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "workers-og": "^0.0.27"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260710.1",

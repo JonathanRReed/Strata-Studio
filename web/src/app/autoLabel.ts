@@ -33,3 +33,10 @@ export function boundsCenter(bounds: GeoBounds): { lat: number; lng: number } {
 export function centerCacheKey(lat: number, lng: number): string {
   return `${lat.toFixed(2)},${lng.toFixed(2)}`;
 }
+
+/** Stable no-network fallback used when reverse geocoding returns no name. */
+export function coordinateLabel(lat: number, lng: number): string {
+  const northSouth = lat >= 0 ? "N" : "S";
+  const eastWest = lng >= 0 ? "E" : "W";
+  return `${Math.abs(lat).toFixed(4)}°${northSouth}, ${Math.abs(lng).toFixed(4)}°${eastWest}`;
+}

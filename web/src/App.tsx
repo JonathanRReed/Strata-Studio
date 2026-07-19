@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { ControlsPanel } from "./components/ControlsPanel.tsx";
 import { MobileSheet } from "./components/MobileSheet.tsx";
 import { Stage } from "./components/Stage.tsx";
@@ -6,13 +6,16 @@ import { ExportDialog } from "./components/ExportDialog.tsx";
 import { VariationsDialog } from "./components/VariationsDialog.tsx";
 import { EggToast } from "./components/EggToast.tsx";
 import { useIsDesktop } from "./components/useIsDesktop.ts";
-import type { FlyToRequest } from "./components/MapSelector.tsx";
+import type {
+  FlyToRequest,
+  MapSelectionCause,
+} from "./components/mapSelectionTypes.ts";
 import { getStyle } from "./studios/registry.ts";
 import { isBboxSmallEnough, bboxAreaKm2 } from "./data/osmOverpass.ts";
 import { defaultPalette } from "./presets/palettes.ts";
 import { applyPreset, presets, type Preset } from "./presets/stylePresets.ts";
 import type { GeoBounds, Palette, StyleParams } from "./engine/types.ts";
-import { PREVIEW_SIZE } from "./app/aspect.ts";
+import { getPreviewDimensions } from "./app/aspect.ts";
 import { createPlaceholderGrid } from "./app/renderPipeline.ts";
 import { isRetryableError } from "./app/status.ts";
 import { useTerrain } from "./app/useTerrain.ts";
@@ -32,10 +35,23 @@ import {
   urlLocksInfluence,
 } from "./app/autopilot.ts";
 import type { CuratedPlace } from "./data/places.ts";
-
-const DEFAULT_BOUNDS: GeoBounds = { west: -122.5, north: 37.85, east: -122.35, south: 37.7 };
-const DEFAULT_CENTER: [number, number] = [-122.4194, 37.7749];
-const DEFAULT_ZOOM = 11;
+import {
+  claimInitialGeneration,
+  mapSelectionAcknowledgesFlyTo,
+  reconcileMapSelection,
+  resolveBootSelection,
+} from "./app/bootSelection.ts";
+import { normalizeStyleParams } from "./app/stateSafety.ts";
+import { detectCapabilities } from "./app/capabilities.ts";
+import {
+  prepareImportedComposition,
+  readCompositionFile,
+  type CompositionImportStatus,
+} from "./app/composition.ts";
+import {
+  readOrientationDismissed,
+  writeOrientationDismissed,
+} from "./app/orientation.ts";
 
 /** One-time boot decision: share-URL restore vs the daily curated place. */
 function readBootState() {
@@ -43,42 +59,82 @@ function readBootState() {
   const url = readInitialUrlState();
   const place = firstRunPlace(search);
   const preset = place ? (presets.find((p) => p.id === place.presetId) ?? null) : null;
-  return { url, place, preset, urlLocksInfluence: urlLocksInfluence(search) };
+  const initialParams = preset
+    ? applyPreset(preset, getStyle(preset.styleId).defaultParams)
+    : url.params;
+  const selection = resolveBootSelection(url, place, initialParams.aspectRatio);
+  return { url, place, preset, selection, urlLocksInfluence: urlLocksInfluence(search) };
 }
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [boot] = useState(readBootState);
+  const [capabilities] = useState(detectCapabilities);
 
   const [styleId, setStyleId] = useState(
     boot.preset ? boot.preset.styleId : boot.url.styleId,
   );
-  const [params, setParams] = useState<StyleParams>(() =>
-    boot.preset ? applyPreset(boot.preset, getStyle(boot.preset.styleId).defaultParams) : boot.url.params,
-  );
-  const [bounds, setBounds] = useState<GeoBounds>(boot.url.bounds ?? DEFAULT_BOUNDS);
-  const [mapZoom, setMapZoom] = useState(boot.url.zoom ?? boot.place?.zoom ?? DEFAULT_ZOOM);
+  const [params, setParamsState] = useState<StyleParams>(() => {
+    const initial = boot.preset
+      ? applyPreset(boot.preset, getStyle(boot.preset.styleId).defaultParams)
+      : boot.url.params;
+    return normalizeStyleParams(
+      boot.place ? { ...initial, label: boot.place.name } : initial,
+      initial,
+    );
+  });
+  const setParams = useCallback((next: SetStateAction<StyleParams>) => {
+    setParamsState((previous) => {
+      const candidate = typeof next === "function" ? next(previous) : next;
+      return normalizeStyleParams(candidate, previous);
+    });
+  }, []);
+  const [bounds, setBounds] = useState<GeoBounds>(boot.selection.bounds);
+  const boundsRef = useRef(bounds);
+  boundsRef.current = bounds;
+  const [mapZoom, setMapZoom] = useState(boot.selection.zoom);
   const [isAnimating, setIsAnimating] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [importStatus, setImportStatus] = useState<CompositionImportStatus>({ phase: "idle" });
   const [variationsOpen, setVariationsOpen] = useState(false);
   const [activePlaceId, setActivePlaceId] = useState<string | null>(boot.place?.id ?? null);
   // Viewfinder overlay + fly-to live here so the mobile sheet can drive the
   // map (Stage/MapSelector render them; behavior at lg is unchanged).
   const [mapExpanded, setMapExpanded] = useState(false);
+  const mapExpandedRef = useRef(false);
+  mapExpandedRef.current = mapExpanded;
+  const mapOpenerRef = useRef<HTMLElement | null>(null);
   const [mapFlyTo, setMapFlyTo] = useState<FlyToRequest | null>(null);
+  const mapFlyToRef = useRef<FlyToRequest | null>(mapFlyTo);
+  mapFlyToRef.current = mapFlyTo;
   const flyToKeyRef = useRef(0);
   const isDesktop = useIsDesktop();
+  const [showOrientation, setShowOrientation] = useState(
+    () => !readOrientationDismissed(),
+  );
+  const [customizeRequest, setCustomizeRequest] = useState(0);
+  const [mobileSheetModal, setMobileSheetModal] = useState(false);
+  const dismissOrientation = useCallback(() => {
+    setShowOrientation(false);
+    writeOrientationDismissed();
+  }, []);
 
-  // Autopilot state: `booted` flips when the first generate fires (map's
-  // first bounds report), `autoGen` schedules pending auto-generation.
-  // "first" fires immediately; "live" debounces after map movement.
+  // The first generation starts after mount from deterministic boot bounds;
+  // later real map movements schedule debounced live regeneration.
   const [booted, setBooted] = useState(false);
-  const [autoGen, setAutoGen] = useState<{ mode: "first" | "live"; tick: number } | null>(null);
+  const [autoGen, setAutoGen] = useState<{ tick: number } | null>(null);
   const bootedRef = useRef(false);
   const influenceBumpedRef = useRef(boot.urlLocksInfluence);
 
-  const { allPalettes, allPaletteNames, savePalette, deletePalette } = usePalettes();
-  const terrain = useTerrain({ bounds });
+  const {
+    allPalettes,
+    allPaletteNames,
+    customPalettes,
+    savePalette,
+    installPalette,
+    deletePalette,
+  } = usePalettes(boot.url.customPalette);
+  const terrain = useTerrain({ bounds, aspectRatio: params.aspectRatio });
   const osm = useOsmFeatures({ bounds });
   const { generate: generateTerrain, invalidate: invalidateTerrain, retry: retryTerrain } = terrain;
   const { cancel: cancelOsm, fetchFeatures } = osm;
@@ -97,11 +153,17 @@ export default function App() {
   const backgroundColor = (allPalettes[params.palette] ?? allPalettes[defaultPalette]).background;
   const exports = useExports({
     bounds,
+    terrainGrid: terrain.boundsDirty ? null : terrain.grid,
+    previewInput: terrain.boundsDirty ? null : previewInput,
     features: osm.features,
+    featureKey: osm.activeKey,
     params,
     styleId,
+    mapZoom,
     allPalettes,
+    selectedCustomPalette: customPalettes[params.palette] ?? null,
     backgroundColor,
+    capabilities,
   });
   const { dismissErrors: dismissExportErrors } = exports;
   const { copiedUrl, copyUrl, copyError, dismissCopyError } = useUrlState({
@@ -109,6 +171,7 @@ export default function App() {
     styleId,
     bounds,
     mapZoom,
+    selectedCustomPalette: customPalettes[params.palette] ?? null,
   });
 
   // Landmark easter eggs: each completed generate (fresh grid) is checked;
@@ -116,23 +179,31 @@ export default function App() {
   const { eggToast, dismissEggToast } = useEasterEggs({ grid: terrain.grid, savePalette });
 
   // Native share (artwork PNG attached where supported; hidden elsewhere).
-  const { shareSupported, share } = useShare({
-    canvasRef,
+  const {
+    shareSupported,
+    share,
+    shareStatus,
+    isSharing,
+    cancelShare,
+  } = useShare({
     styleId,
     seed: params.seed,
     label: params.label,
-    onFallbackCopy: () => void copyUrl(),
+    capabilities,
+    createSharePng: exports.createSharePng,
+    onFallbackCopy: copyUrl,
   });
 
   // Auto-named poster labels: generate settles resolve a place name that
   // fills the label unless the user typed their own (see useAutoLabel).
   const handleAutoLabel = useCallback((name: string) => {
     setParams((prev) => (prev.label === name ? prev : { ...prev, label: name }));
-  }, []);
+  }, [setParams]);
   const { applyCuratedName } = useAutoLabel({
     grid: terrain.grid,
     label: params.label,
     initialCuratedName: boot.place?.name ?? null,
+    initialCuratedCenter: boot.place?.center ?? null,
     onAutoLabel: handleAutoLabel,
   });
 
@@ -153,26 +224,72 @@ export default function App() {
     bootedRef.current = true;
     // Render placeholder noise artwork immediately for feedback (instant —
     // this also cancels any reveal a previous generate left running).
-    renderArtwork(createPlaceholderGrid(PREVIEW_SIZE, params.seed, bounds), { skipMasks: true });
+    void renderArtwork(
+      createPlaceholderGrid(
+        getPreviewDimensions(params.aspectRatio),
+        params.seed,
+        bounds,
+      ),
+      { skipMasks: true },
+    );
     // Real terrain lands with the one-shot draw-in reveal.
     void generateTerrain((grid) => renderArtwork(grid, { reveal: true }));
     if (isBboxSmallEnough(bounds)) void fetchFeatures(false);
-  }, [renderArtwork, generateTerrain, fetchFeatures, params.seed, bounds]);
+  }, [
+    renderArtwork,
+    generateTerrain,
+    fetchFeatures,
+    params.seed,
+    params.aspectRatio,
+    bounds,
+  ]);
 
   // Latest generate for the auto-gen timer: by the time a timer fires, React
   // has committed the bounds change, so this ref points at a closure over the
   // fresh bounds (the inline handleGenerate above would be stale).
   const handleGenerateRef = useRef(handleGenerate);
   handleGenerateRef.current = handleGenerate;
+  const initialGenerateStartedRef = useRef(false);
+
+  // StrictMode replays mount effects in development; the ref keeps the boot
+  // placeholder, terrain request, and optional OSM request exactly once.
+  useEffect(() => {
+    if (!claimInitialGeneration(initialGenerateStartedRef)) return;
+    handleGenerateRef.current();
+  }, []);
 
   const handleRetry = useCallback(() => {
     retryTerrain(() => handleGenerateRef.current());
   }, [retryTerrain]);
 
   const handleBoundsChange = useCallback(
-    (newBounds: GeoBounds, zoom: number) => {
-      setBounds(newBounds);
-      setMapZoom(zoom);
+    (newBounds: GeoBounds, zoom: number, cause: MapSelectionCause) => {
+      const selection = reconcileMapSelection(
+        boundsRef.current,
+        newBounds,
+        zoom,
+        boot.selection.zoom,
+      );
+      if (!selection) return;
+      const pendingFlyTo = mapFlyToRef.current;
+      if (pendingFlyTo && mapSelectionAcknowledgesFlyTo(selection, pendingFlyTo)) {
+        // Keep the request alive through stale resize/move reports; clear it
+        // only after the requested center and zoom actually land.
+        mapFlyToRef.current = null;
+        setMapFlyTo(null);
+      }
+      setMapZoom(selection.zoom);
+      // MapLibre fits to the already-active boot bounds on load. Its first
+      // floating-point echo must synchronize the camera without invalidating
+      // or generating the same selection a second time.
+      if (!selection.changed) return;
+      if (cause === "manual" || cause === "search") {
+        setActivePlaceId(null);
+        dismissOrientation();
+      }
+
+      boundsRef.current = selection.bounds;
+      setBounds(selection.bounds);
       // Abort in-flight fetches so stale results don't overwrite state, stop
       // the animation, and mark the preview stale (the artwork is preserved
       // so small camera movements don't lose it).
@@ -180,31 +297,30 @@ export default function App() {
       cancelOsm();
       dismissExportErrors();
       setIsAnimating(false);
-      // Autopilot: the map's first bounds report triggers the initial
-      // generate immediately (fresh visits and share-URL restores alike);
-      // afterwards every settle schedules a debounced regenerate — except
-      // while an animation export is rendering frames.
-      if (!bootedRef.current) {
-        setAutoGen((prev) => ({ mode: "first", tick: (prev?.tick ?? 0) + 1 }));
-      } else if (!isExportingAnimationRef.current) {
-        setAutoGen((prev) => ({ mode: "live", tick: (prev?.tick ?? 0) + 1 }));
+      if (bootedRef.current && !isExportingAnimationRef.current) {
+        setAutoGen((prev) => ({ tick: (prev?.tick ?? 0) + 1 }));
       }
     },
-    [invalidateTerrain, cancelOsm, dismissExportErrors],
+    [
+      boot.selection.zoom,
+      invalidateTerrain,
+      cancelOsm,
+      dismissExportErrors,
+      dismissOrientation,
+    ],
   );
 
-  // Fires the scheduled auto-generation. Every bounds change replaces
-  // `autoGen`, so the cleanup restarts the timer — that's the debounce.
+  // Fires scheduled live regeneration. Every bounds change replaces
+  // `autoGen`, so the cleanup restarts the debounce timer.
   useEffect(() => {
     if (!autoGen) return;
-    const delay = autoGen.mode === "first" ? 0 : AUTO_REGEN_DEBOUNCE_MS;
     const timer = setTimeout(() => {
       if (isExportingAnimationRef.current) {
         setAutoGen(null);
         return;
       }
       handleGenerateRef.current();
-    }, delay);
+    }, AUTO_REGEN_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [autoGen]);
 
@@ -223,11 +339,11 @@ export default function App() {
       influenceBumpedRef.current = true;
       return { ...prev, ...bump };
     });
-  }, [osm.features]);
+  }, [osm.features, setParams]);
 
   const handleStyleChange = useCallback((newStyleId: string) => {
-    setStyleId(newStyleId);
     const style = getStyle(newStyleId);
+    setStyleId(style.id);
     // Stop animation when switching styles — the new style may not support the current mode
     setIsAnimating(false);
     setParams((prev) => ({
@@ -243,51 +359,121 @@ export default function App() {
       // Reset animation to none — let the user re-enable it for the new style
       animationMode: "none",
     }));
-  }, []);
+  }, [setParams]);
 
   const handleApplyPreset = useCallback(
     (preset: Preset) => {
-      setStyleId(preset.styleId);
-      setParams(applyPreset(preset, getStyle(preset.styleId).defaultParams));
+      const style = getStyle(preset.styleId);
+      setStyleId(style.id);
+      setParams((previous) => ({
+        ...applyPreset(preset, style.defaultParams),
+        // Labels are composition provenance, not preset styling. Keeping the
+        // previous value lets useAutoLabel preserve user-authored text while
+        // replacing an auto-authored place name when appropriate.
+        label: previous.label,
+      }));
       // A preset is a fresh composition baseline: re-arm the influence bump
       // (unless the share URL pinned influence values for this session).
       influenceBumpedRef.current = boot.urlLocksInfluence;
     },
-    [boot.urlLocksInfluence],
+    [boot.urlLocksInfluence, setParams],
   );
 
   /** Curated place chosen (chip strip or Surprise Me): apply its preset and
    * remember it; the map flies there and live regeneration does the rest. */
   const handleSelectPlace = useCallback(
     (place: CuratedPlace) => {
+      dismissOrientation();
       setActivePlaceId(place.id);
+      const request = {
+        center: place.center,
+        zoom: place.zoom,
+        key: ++flyToKeyRef.current,
+      };
+      mapFlyToRef.current = request;
+      setMapFlyTo(request);
       const preset = presets.find((p) => p.id === place.presetId);
       if (preset) handleApplyPreset(preset);
       // Curated names label the poster instantly — no geocode round-trip.
       // After the preset so its functional setParams lands on preset params.
-      applyCuratedName(place.name);
+      applyCuratedName(place.name, place.center);
     },
-    [handleApplyPreset, applyCuratedName],
+    [handleApplyPreset, applyCuratedName, dismissOrientation],
   );
 
   /** Place chosen from the mobile sheet: the map isn't the click target
    * there, so request the fly-to explicitly, then run the shared flow. */
   const handleSelectPlaceFromSheet = useCallback(
     (place: CuratedPlace) => {
-      setMapFlyTo({ center: place.center, zoom: place.zoom, key: ++flyToKeyRef.current });
       handleSelectPlace(place);
     },
     [handleSelectPlace],
   );
 
-  const toggleMapExpand = useCallback(() => setMapExpanded((prev) => !prev), []);
+  const toggleMapExpand = useCallback((opener?: HTMLElement) => {
+    if (!mapExpandedRef.current) {
+      const active = document.activeElement;
+      mapOpenerRef.current =
+        opener ?? (active instanceof HTMLElement ? active : null);
+      mapExpandedRef.current = true;
+      setMapExpanded(true);
+      return;
+    }
+
+    mapExpandedRef.current = false;
+    setMapExpanded(false);
+    const restore = mapOpenerRef.current;
+    mapOpenerRef.current = null;
+    window.requestAnimationFrame(() => {
+      if (restore?.isConnected) {
+        restore.focus();
+        return;
+      }
+      const fallback = Array.from(
+        document.querySelectorAll<HTMLElement>('button[aria-label="Expand map"]'),
+      ).find((element) => element.offsetParent !== null);
+      fallback?.focus();
+    });
+  }, []);
+
+  const handleCustomizeArtwork = useCallback(
+    (_opener: HTMLElement) => {
+      if (!isDesktop) {
+        setCustomizeRequest((request) => request + 1);
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        const target = document.getElementById("style-controls-section-toggle");
+        if (target instanceof HTMLElement) {
+          target.scrollIntoView({ block: "nearest" });
+          target.focus();
+        }
+      });
+    },
+    [isDesktop],
+  );
+
+  const handleOrientationChoosePlace = useCallback(
+    (opener: HTMLElement) => {
+      toggleMapExpand(opener);
+      dismissOrientation();
+    },
+    [dismissOrientation, toggleMapExpand],
+  );
+  const handleOrientationCustomizeArtwork = useCallback(
+    (opener: HTMLElement) => {
+      dismissOrientation();
+      handleCustomizeArtwork(opener);
+    },
+    [dismissOrientation, handleCustomizeArtwork],
+  );
 
   const handleSavePalette = useCallback(
     (id: string, name: string, palette: Palette) => {
       savePalette(id, name, palette);
       setParams((prev) => (prev.palette === id ? prev : { ...prev, palette: id }));
     },
-    [savePalette],
+    [savePalette, setParams],
   );
 
   const handleDeletePalette = useCallback(
@@ -295,8 +481,69 @@ export default function App() {
       deletePalette(id);
       setParams((prev) => (prev.palette === id ? { ...prev, palette: defaultPalette } : prev));
     },
-    [deletePalette],
+    [deletePalette, setParams],
   );
+
+  const handleImportComposition = useCallback(
+    async (file: File) => {
+      setImportStatus({ phase: "reading" });
+      try {
+        // Read and validate the entire document before touching any live state.
+        const next = prepareImportedComposition(await readCompositionFile(file));
+        if (next.customPalette) {
+          installPalette(next.customPalette.id, next.customPalette.entry);
+        }
+
+        boundsRef.current = next.bounds;
+        setStyleId(next.styleId);
+        setParams(next.params);
+        setBounds(next.bounds);
+        setMapZoom(next.mapZoom);
+        setActivePlaceId(null);
+        setIsAnimating(false);
+        influenceBumpedRef.current = true;
+        invalidateTerrain();
+        cancelOsm();
+        dismissExportErrors();
+
+        const request: FlyToRequest = {
+          center: [
+            (next.bounds.west + next.bounds.east) / 2,
+            (next.bounds.south + next.bounds.north) / 2,
+          ],
+          zoom: next.mapZoom,
+          bounds: next.bounds,
+          key: ++flyToKeyRef.current,
+        };
+        mapFlyToRef.current = request;
+        setMapFlyTo(request);
+        setBooted(true);
+        bootedRef.current = true;
+        setAutoGen((previous) => ({ tick: (previous?.tick ?? 0) + 1 }));
+        setImportStatus({
+          phase: "success",
+          message: `Imported ${file.name || "composition"}. The artwork will regenerate with the validated settings.`,
+        });
+      } catch (error) {
+        setImportStatus({
+          phase: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The composition could not be imported.",
+        });
+      }
+    },
+    [
+      cancelOsm,
+      dismissExportErrors,
+      installPalette,
+      invalidateTerrain,
+      setParams,
+    ],
+  );
+
+  const dismissImportStatus = useCallback(() => setImportStatus({ phase: "idle" }), []);
 
   const handleToggleAnimation = useCallback(() => setIsAnimating((prev) => !prev), []);
 
@@ -305,26 +552,27 @@ export default function App() {
   const handleAdoptVariation = useCallback((seed: string) => {
     setParams((prev) => ({ ...prev, seed }));
     setVariationsOpen(false);
-  }, []);
+  }, [setParams]);
 
   // Derived UI state from the per-operation statuses
   const terrainBusy = terrain.status.phase === "fetching" || terrain.status.phase === "rendering";
   const regenPending = autoGen !== null;
-  // The stage treats "about to regenerate" and "waiting for the map's first
-  // bounds" as generating too, so the stale banner and the empty state never
-  // flash during the happy path.
+  // The stage treats the brief post-mount boot effect and pending live
+  // regeneration as generating so the empty/stale states never flash.
   const isGenerating = terrainBusy || regenPending || !booted;
+  const variationsReady =
+    !!terrain.grid && !terrain.boundsDirty && !isGenerating;
   const statusText =
     terrain.status.phase === "fetching"
       ? terrain.status.note.startsWith("Loading")
-        ? "Loading tiles"
+        ? "Loading tiles…"
         : terrain.status.note
       : terrain.status.phase === "rendering"
-        ? "Rendering"
+        ? "Rendering…"
         : !booted
-          ? "Locating"
+          ? "Preparing…"
           : regenPending
-            ? "Regenerating"
+            ? "Regenerating…"
             : null;
   const isExporting = exports.status.phase === "fetching" || exports.status.phase === "rendering";
 
@@ -355,7 +603,7 @@ export default function App() {
     onGenerate: handleGenerate,
     onOpenExport: () => setExportOpen(true),
     onFetchFeatures: osm.fetchFeatures,
-    isLoading: terrainBusy,
+    isLoading: isGenerating,
     isExporting,
     isExportingAnimation,
     isFeatureLoading: osm.status.phase === "fetching",
@@ -370,6 +618,7 @@ export default function App() {
     onDeletePalette: handleDeletePalette,
     isAnimating,
     onToggleAnimation: handleToggleAnimation,
+    backgroundInert: mapExpanded,
   };
 
   return (
@@ -380,6 +629,7 @@ export default function App() {
         aspectRatio={params.aspectRatio}
         artworkLabel={artworkLabel}
         wallColor={backgroundColor}
+        backgroundInert={mobileSheetModal && !mapExpanded}
         hasArtwork={terrain.hasGenerated}
         isGenerating={isGenerating}
         statusText={statusText}
@@ -388,6 +638,7 @@ export default function App() {
         seed={params.seed}
         label={params.label}
         onOpenVariations={openVariations}
+        variationsReady={variationsReady}
         terrainInfo={terrain.terrainInfo}
         warning={terrain.warning}
         errorMessage={errorMessage}
@@ -396,12 +647,25 @@ export default function App() {
         terrainRetryCount={terrain.retryCount}
         onRetryTerrain={handleRetry}
         onCanvasResized={notifyCanvasResized}
+        orientation={
+          showOrientation
+            ? {
+                place:
+                  params.label ||
+                  `${centerLat.toFixed(4)}, ${centerLng.toFixed(4)}`,
+                style: getStyle(styleId).name,
+                onChoosePlace: handleOrientationChoosePlace,
+                onCustomizeArtwork: handleOrientationCustomizeArtwork,
+                onDismiss: dismissOrientation,
+              }
+            : null
+        }
         bounds={bounds}
         mapZoom={mapZoom}
         onBoundsChange={handleBoundsChange}
-        initialCenter={boot.url.center ?? boot.place?.center ?? DEFAULT_CENTER}
-        initialZoom={boot.url.zoom ?? boot.place?.zoom ?? DEFAULT_ZOOM}
-        initialBounds={boot.url.bounds}
+        initialCenter={boot.selection.center}
+        initialZoom={boot.selection.zoom}
+        initialBounds={boot.selection.bounds}
         activePlaceId={activePlaceId}
         onSelectPlace={handleSelectPlace}
         mapExpanded={mapExpanded}
@@ -415,14 +679,16 @@ export default function App() {
           mapZoom={mapZoom}
           activePlaceId={activePlaceId}
           onSelectPlace={handleSelectPlaceFromSheet}
-          onOpenMap={() => setMapExpanded(true)}
+          onOpenMap={toggleMapExpand}
           onCopyUrl={() => void copyUrl()}
           copiedUrl={copiedUrl}
           mapExpanded={mapExpanded}
           onOpenVariations={openVariations}
-          variationsReady={!!terrain.grid}
+          variationsReady={variationsReady}
           onShare={() => void share()}
           shareSupported={shareSupported}
+          customizeRequest={customizeRequest}
+          onModalStateChange={setMobileSheetModal}
         />
       )}
       <ExportDialog
@@ -432,15 +698,25 @@ export default function App() {
         onExportSvg={exports.exportSvg}
         onExportAnimation={exports.exportAnimation}
         onExportJson={exports.exportJson}
+        onImportComposition={handleImportComposition}
+        importStatus={importStatus}
+        onDismissImportStatus={dismissImportStatus}
         onCopyUrl={copyUrl}
         copiedUrl={copiedUrl}
-        onShare={() => void share()}
+        onShare={share}
         shareSupported={shareSupported}
+        shareStatus={shareStatus}
         exportStatus={exports.status}
         animationStatus={exports.animationStatus}
         isExporting={isExporting}
         isExportingAnimation={isExportingAnimation}
+        isSharing={isSharing}
         animationAvailable={params.animationMode !== "none"}
+        capabilities={capabilities}
+        onCancel={() => {
+          exports.cancelExport();
+          cancelShare();
+        }}
         onDismissErrors={dismissExportErrors}
       />
       <VariationsDialog
@@ -451,9 +727,16 @@ export default function App() {
         params={params}
         styleId={styleId}
         allPalettes={allPalettes}
+        supportsNativeDialog={capabilities.dialog}
         onAdopt={handleAdoptVariation}
       />
-      {eggToast && <EggToast text={eggToast} onDismiss={dismissEggToast} />}
+      {eggToast && (
+        <EggToast
+          text={eggToast}
+          onDismiss={dismissEggToast}
+          backgroundInert={mapExpanded}
+        />
+      )}
     </div>
   );
 }

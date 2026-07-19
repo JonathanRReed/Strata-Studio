@@ -9,6 +9,13 @@ import {
 import { defaultStyleParams, presets, applyPreset } from "../presets/stylePresets.ts";
 import { DEFAULT_STYLE_ID, getStyle } from "../studios/registry.ts";
 import type { GeoBounds, StyleParams } from "../engine/types.ts";
+import {
+  MAX_LABEL_LENGTH,
+  MAX_SEED_LENGTH,
+  MAX_SHARE_PAYLOAD_LENGTH,
+  WEB_MERCATOR_MAX_LAT,
+} from "./stateSafety.ts";
+import { COMPOSITION_QUERY_KEY, decodeCompositionFromUrl } from "./composition.ts";
 
 const BOUNDS: GeoBounds = { west: -122.51234, south: 37.70123, east: -122.35678, north: 37.85001 };
 
@@ -60,6 +67,12 @@ describe("urlState round-trip", () => {
     expect(parsed.bounds).toEqual(state.bounds);
   });
 
+  it("round-trips an intentionally empty seed", () => {
+    const state = makeState({ params: { seed: "" } });
+    const query = serializeShareState(state);
+    expect(parseShareParams(query).params.seed).toBe("");
+  });
+
   it("round-trips a non-default style with its own defaults", () => {
     const styleId = "contour";
     const state = makeState({ styleId, params: { spacing: 11, seed: "topoX" } });
@@ -68,10 +81,14 @@ describe("urlState round-trip", () => {
     expect(parsed.params).toEqual(state.params);
   });
 
-  it("uses b as the source of truth for bounds, at 5-decimal precision", () => {
-    const state = makeState({ bounds: { west: -0.1234, south: 51.5, east: -0.10001, north: 51.52 } });
+  it("uses the versioned document as the exact bounds source of truth", () => {
+    const state = makeState({
+      bounds: { west: -0.1234567, south: 51.5000001, east: -0.1000109, north: 51.5200002 },
+    });
     const query = serializeShareState(state);
-    expect(new URLSearchParams(query).get("b")).toBe("-0.12340,51.50000,-0.10001,51.52000");
+    const encoded = new URLSearchParams(query).get(COMPOSITION_QUERY_KEY);
+    expect(encoded).not.toBeNull();
+    expect(decodeCompositionFromUrl(encoded!).bounds).toEqual(state.bounds);
     expect(parseShareParams(query).bounds).toEqual(state.bounds);
   });
 
@@ -80,15 +97,11 @@ describe("urlState round-trip", () => {
     expect(new URLSearchParams(query).has("p")).toBe(false);
   });
 
-  it("excludes seed and palette from the p diff (they are explicit params)", () => {
+  it("stores the complete normalized params inside the versioned document", () => {
     const state = makeState({ params: { seed: "s1", palette: "cream", amplitude: 99 } });
     const query = new URLSearchParams(serializeShareState(state));
-    expect(query.get("seed")).toBe("s1");
-    expect(query.get("palette")).toBe("cream");
-    const decoded = JSON.parse(
-      Buffer.from(query.get("p")!.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"),
-    );
-    expect(decoded).toEqual({ amplitude: 99 });
+    const document = decodeCompositionFromUrl(query.get(COMPOSITION_QUERY_KEY)!);
+    expect(document.params).toEqual(state.params);
   });
 });
 
@@ -135,9 +148,57 @@ describe("urlState parse precedence", () => {
 });
 
 describe("urlState robustness", () => {
-  it("ignores malformed p payloads", () => {
-    const parsed = parseShareParams("p=!!!not-base64!!!");
-    expect(parsed.params).toEqual(resolveDefaultParams(DEFAULT_STYLE_ID));
+  it("ignores malformed and oversized p payloads", () => {
+    expect(parseShareParams("p=!!!not-base64!!!").params).toEqual(
+      resolveDefaultParams(DEFAULT_STYLE_ID),
+    );
+    expect(
+      parseShareParams(`p=${"A".repeat(MAX_SHARE_PAYLOAD_LENGTH + 1)}`).params,
+    ).toEqual(resolveDefaultParams(DEFAULT_STYLE_ID));
+  });
+
+  it("clamps URL numbers, caps text, and validates all enum families", () => {
+    const payload = {
+      amplitude: 99999,
+      spacing: -999,
+      label: "L".repeat(MAX_LABEL_LENGTH + 20),
+      labelStyle: "billboard",
+      aspectRatio: "100:1",
+      animationMode: "warp",
+      buildingMode: "erase",
+      roadMode: "erase",
+      waterMode: "erase",
+      oceanMode: "erase",
+      lakeMode: "erase",
+      riverMode: "erase",
+    };
+    const p = Buffer.from(JSON.stringify(payload), "utf8")
+      .toString("base64url");
+    const parsed = parseShareParams(
+      `seed=${"S".repeat(MAX_SEED_LENGTH + 20)}&p=${p}`,
+    );
+    expect(parsed.params.amplitude).toBe(120);
+    expect(parsed.params.spacing).toBe(1);
+    expect(parsed.params.seed).toHaveLength(MAX_SEED_LENGTH);
+    expect(parsed.params.label).toHaveLength(MAX_LABEL_LENGTH);
+    expect(parsed.params.labelStyle).toBe(defaultStyleParams.labelStyle);
+    expect(parsed.params.aspectRatio).toBe(defaultStyleParams.aspectRatio);
+    expect(parsed.params.animationMode).toBe(defaultStyleParams.animationMode);
+    expect(parsed.params.buildingMode).toBe(defaultStyleParams.buildingMode);
+    expect(parsed.params.roadMode).toBe(defaultStyleParams.roadMode);
+    expect(parsed.params.waterMode).toBe(defaultStyleParams.waterMode);
+    expect(parsed.params.oceanMode).toBe(defaultStyleParams.oceanMode);
+    expect(parsed.params.lakeMode).toBe(defaultStyleParams.lakeMode);
+    expect(parsed.params.riverMode).toBe(defaultStyleParams.riverMode);
+  });
+
+  it("normalizes extreme center/zoom and rejects non-Mercator bounds", () => {
+    const parsed = parseShareParams(
+      "lat=999&lng=1000000000&z=999&b=-1,-90,1,90",
+    );
+    expect(parsed.bounds).toBeNull();
+    expect(parsed.center).toEqual([-80, WEB_MERCATOR_MAX_LAT]);
+    expect(parsed.zoom).toBe(22);
   });
 
   it("drops unknown keys, wrong types, and invalid enum values from p", () => {
@@ -163,9 +224,16 @@ describe("urlState robustness", () => {
   it("ignores invalid b values", () => {
     expect(parseShareParams("b=1,2,3").bounds).toBeNull();
     expect(parseShareParams("b=a,b,c,d").bounds).toBeNull();
+    expect(parseShareParams("b=-1,,1,2").bounds).toBeNull();
     // west >= east
     expect(parseShareParams("b=10,0,-10,5").bounds).toBeNull();
     expect(parseShareParams("").bounds).toBeNull();
+  });
+
+  it("does not coerce blank legacy coordinates or zoom to zero", () => {
+    const parsed = parseShareParams("lat=&lng=&z=");
+    expect(parsed.center).toBeNull();
+    expect(parsed.zoom).toBeNull();
   });
 
   it("reads legacy lat/lng/z URLs without b (center + zoom only)", () => {

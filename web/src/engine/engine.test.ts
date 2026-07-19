@@ -1,4 +1,4 @@
-import { describe, it, expect, spyOn } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import {
   lngToPixelX,
   latToPixelY,
@@ -14,7 +14,7 @@ import {
   overpassToGeoJSON,
   bboxAreaKm2,
   isBboxSmallEnough,
-  fetchOsmFeatures,
+  createOsmFeatureFetcher,
 } from "../data/osmOverpass.ts";
 import { sampleGrid, clamp, normalizeGrid, projectGeoPoint, cropGridToAspect } from "./grid.ts";
 import {
@@ -1121,56 +1121,52 @@ describe("transparent rendering", () => {
 });
 
 describe("OSM retry", () => {
-  it("fetchOsmFeatures retries on 504 and succeeds", async () => {
+  const bounds = { west: 0, east: 0.001, north: 0.001, south: 0 };
+
+  it("falls back after a retryable 504 and succeeds", async () => {
     let callCount = 0;
-    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((() => {
-      callCount++;
-      if (callCount === 1) {
-        return Promise.resolve(new Response("Gateway Timeout", { status: 504 }));
-      }
-      return Promise.resolve(
-        new Response(JSON.stringify({ elements: [] }), {
+    const fetcher = createOsmFeatureFetcher({
+      endpoints: [
+        { url: "https://proxy.test/overpass", kind: "proxy" },
+        { url: "https://direct.test/interpreter", kind: "direct" },
+      ],
+      fetch: async () => {
+        callCount++;
+        if (callCount === 1) {
+          return new Response("Gateway Timeout", {
+            status: 504,
+            headers: { "Retry-After": "0" },
+          });
+        }
+        return new Response(JSON.stringify({ elements: [] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        }),
-      );
-    }) as unknown as typeof fetch);
+        });
+      },
+      getCached: async () => undefined,
+      setCached: async () => {},
+    });
 
-    const cacheModule = await import("../data/cache.ts");
-    const getOsmSpy = spyOn(cacheModule, "getOsm").mockResolvedValue(undefined);
-    const setOsmSpy = spyOn(cacheModule, "setOsm").mockResolvedValue(undefined);
-
-    try {
-      const bounds = { west: 0, east: 0.001, north: 0.001, south: 0 };
-      const result = await fetchOsmFeatures(bounds);
-      expect(result.features.length).toBe(0);
-      expect(callCount).toBe(2); // First failed, second succeeded
-    } finally {
-      fetchSpy.mockRestore();
-      getOsmSpy.mockRestore();
-      setOsmSpy.mockRestore();
-    }
+    const result = await fetcher(bounds);
+    expect(result.features.length).toBe(0);
+    expect(callCount).toBe(2);
   });
 
-  it("fetchOsmFeatures does not retry on non-retryable errors (400)", async () => {
+  it("does not retry a non-retryable direct 400", async () => {
     let callCount = 0;
-    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((() => {
-      callCount++;
-      return Promise.resolve(new Response("Bad Request", { status: 400 }));
-    }) as unknown as typeof fetch);
+    const fetcher = createOsmFeatureFetcher({
+      endpoints: [
+        { url: "https://direct.test/interpreter", kind: "direct" },
+      ],
+      fetch: async () => {
+        callCount++;
+        return new Response("Bad Request", { status: 400 });
+      },
+      getCached: async () => undefined,
+      setCached: async () => {},
+    });
 
-    const cacheModule = await import("../data/cache.ts");
-    const getOsmSpy = spyOn(cacheModule, "getOsm").mockResolvedValue(undefined);
-    const setOsmSpy = spyOn(cacheModule, "setOsm").mockResolvedValue(undefined);
-
-    try {
-      const bounds = { west: 0, east: 0.001, north: 0.001, south: 0 };
-      await expect(fetchOsmFeatures(bounds)).rejects.toThrow();
-      expect(callCount).toBe(1); // No retry
-    } finally {
-      fetchSpy.mockRestore();
-      getOsmSpy.mockRestore();
-      setOsmSpy.mockRestore();
-    }
+    await expect(fetcher(bounds)).rejects.toThrow();
+    expect(callCount).toBe(1);
   });
 });

@@ -1,11 +1,20 @@
 # Dependencies
+node_modules/
 web/node_modules/
+workers/proxy/node_modules/
 
 # Build output
 web/dist/
 
-# Playwright CLI artifacts
+# Cloudflare and Wrangler local state
+.wrangler/
+web/.wrangler/
+workers/proxy/.wrangler/
+
+# Playwright artifacts
 .playwright-cli/
+playwright-report/
+test-results/
 
 # Debug logs
 console-*.log

@@ -1,93 +1,161 @@
 import { useCallback, useEffect, useRef } from "react";
 import { reverseGeocodeName } from "../data/geocode.ts";
 import type { ElevationGrid } from "../engine/types.ts";
-import { boundsCenter, centerCacheKey, shouldAutoFill } from "./autoLabel.ts";
+import { MAX_LABEL_LENGTH } from "./stateSafety.ts";
+import {
+  boundsCenter,
+  centerCacheKey,
+  coordinateLabel,
+  shouldAutoFill,
+} from "./autoLabel.ts";
+
+type ReverseGeocode = (
+  lat: number,
+  lng: number,
+  signal?: AbortSignal,
+) => Promise<string | null>;
+
+function normalizeResolvedLabel(name: string): string {
+  return name.trim().slice(0, MAX_LABEL_LENGTH);
+}
 
 /**
- * Auto-named poster labels: when a generate settles (a fresh terrain grid
- * lands), resolve the selection center to a short place name and fill the
- * label — but only while the label is empty or still holds the previous
- * auto-fill (user-typed labels are never overwritten; see shouldAutoFill).
- *
- * Throttling: at most one reverse-geocode request per generate settle, each
- * new settle aborting the previous in-flight request, with an in-session
- * cache per ~1 km center bucket. Curated place picks apply their display
- * name instantly and the settle they trigger skips the geocode round-trip.
+ * Auto-named poster labels with explicit provenance and center-key ownership.
+ * Every transition aborts prior work; late completions must still match the
+ * active center key, and user-authored labels are never overwritten.
  */
 export function useAutoLabel({
   grid,
   label,
   initialCuratedName,
+  initialCuratedCenter,
   onAutoLabel,
+  reverseGeocode = reverseGeocodeName,
 }: {
-  /** Latest generated terrain grid; each successful generate is a new object. */
   grid: ElevationGrid | null;
-  /** Current params.label, for the overwrite rules. */
   label: string;
-  /** Boot-time curated place (Daily Strata) — names the first settle for free. */
   initialCuratedName?: string | null;
+  initialCuratedCenter?: [number, number] | null;
   onAutoLabel: (name: string) => void;
+  /** Hook-test/runtime injection; production uses the one-shot Nominatim call. */
+  reverseGeocode?: ReverseGeocode;
 }) {
-  const lastAutoRef = useRef<string | null>(null);
-  const pendingCuratedRef = useRef<string | null>(initialCuratedName ?? null);
-  const cacheRef = useRef(new Map<string, string>());
+  const initialName = initialCuratedName
+    ? normalizeResolvedLabel(initialCuratedName)
+    : null;
+  // App seeds a fresh curated boot with this same label, so provenance starts
+  // as auto-authored rather than accidentally treating it as user text.
+  const lastAutoRef = useRef<string | null>(initialName);
+  const pendingCuratedRef = useRef<{ name: string; key: string } | null>(
+    initialName && initialCuratedCenter
+      ? {
+          name: initialName,
+          key: centerCacheKey(initialCuratedCenter[1], initialCuratedCenter[0]),
+        }
+      : null,
+  );
+  // `null` is a negative geocode result. Map.has distinguishes it from a miss.
+  const cacheRef = useRef(new Map<string, string | null>());
   const abortRef = useRef<AbortController | null>(null);
+  const activeCenterKeyRef = useRef<string | null>(null);
   const labelRef = useRef(label);
   labelRef.current = label;
   const onAutoLabelRef = useRef(onAutoLabel);
   onAutoLabelRef.current = onAutoLabel;
 
-  const apply = useCallback((name: string) => {
-    if (!shouldAutoFill(labelRef.current, lastAutoRef.current)) return;
+  const abortActive = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    activeCenterKeyRef.current = null;
+  }, []);
+
+  const apply = useCallback((rawName: string, expectedCenterKey?: string) => {
+    if (
+      expectedCenterKey &&
+      activeCenterKeyRef.current !== expectedCenterKey
+    ) {
+      return;
+    }
+    const name = normalizeResolvedLabel(rawName);
+    if (!name || !shouldAutoFill(labelRef.current, lastAutoRef.current)) return;
     lastAutoRef.current = name;
     onAutoLabelRef.current(name);
   }, []);
 
   /**
-   * Curated place picked (chip strip / Surprise Me / sheet): adopt its
-   * display name instantly and let the generate it triggers skip the
-   * geocode round-trip.
-   *
-   * The adopt is FORCED, bypassing shouldAutoFill: the caller applies the
-   * place's preset in the same event, which resets params.label — but that
-   * setParams hasn't flushed yet, so the gate would compare against the
-   * stale pre-reset label and refuse, leaving the poster blank (any typed
-   * label is already gone via the preset reset either way; the place name
-   * is strictly better than empty). The label update below is queued after
-   * the preset's own setParams, so it lands last in the same batch.
+   * Curated choices are an atomic transition: cancel the old geocode, mark the
+   * next terrain settle as curated-owned, and apply immediately only if label
+   * provenance is still empty/auto. User-authored text remains untouched.
    */
-  const applyCuratedName = useCallback((name: string) => {
-    pendingCuratedRef.current = name;
-    lastAutoRef.current = name;
-    onAutoLabelRef.current(name);
-  }, []);
+  const applyCuratedName = useCallback(
+    (rawName: string, center: [number, number]) => {
+      abortActive();
+      const name = normalizeResolvedLabel(rawName);
+      pendingCuratedRef.current = name
+        ? { name, key: centerCacheKey(center[1], center[0]) }
+        : null;
+      if (name) apply(name);
+    },
+    [abortActive, apply],
+  );
 
   useEffect(() => {
+    // A user claiming the label makes any outstanding result irrelevant now,
+    // rather than merely ignoring it after network completion.
+    if (!shouldAutoFill(label, lastAutoRef.current)) abortActive();
+  }, [abortActive, label]);
+
+  useEffect(() => {
+    // Abort first even on early-return paths (null grid, curated, cache hit).
+    abortActive();
     if (!grid) return;
-    // A curated pick owns this settle — its name is already the label.
-    if (pendingCuratedRef.current) {
-      apply(pendingCuratedRef.current);
-      pendingCuratedRef.current = null;
-      return;
-    }
+
     const { lat, lng } = boundsCenter(grid.bounds);
     const key = centerCacheKey(lat, lng);
-    const cached = cacheRef.current.get(key);
-    if (cached) {
-      apply(cached);
+    const pendingCurated = pendingCuratedRef.current;
+    pendingCuratedRef.current = null;
+    if (pendingCurated?.key === key) {
+      apply(pendingCurated.name);
       return;
     }
-    abortRef.current?.abort();
+    if (!shouldAutoFill(labelRef.current, lastAutoRef.current)) return;
+
+    activeCenterKeyRef.current = key;
+    const fallback = coordinateLabel(lat, lng);
+
+    if (cacheRef.current.has(key)) {
+      apply(cacheRef.current.get(key) ?? fallback, key);
+      return;
+    }
+
     const controller = new AbortController();
     abortRef.current = controller;
-    void reverseGeocodeName(lat, lng, controller.signal).then((name) => {
-      if (!name || controller.signal.aborted) return;
-      cacheRef.current.set(key, name);
-      apply(name);
-    });
-  }, [grid, apply]);
+    void reverseGeocode(lat, lng, controller.signal)
+      .then((resolved) => {
+        if (
+          controller.signal.aborted ||
+          activeCenterKeyRef.current !== key
+        ) {
+          return;
+        }
+        const name = resolved ? normalizeResolvedLabel(resolved) : null;
+        cacheRef.current.set(key, name);
+        apply(name ?? fallback, key);
+      })
+      .catch(() => {
+        if (
+          controller.signal.aborted ||
+          activeCenterKeyRef.current !== key
+        ) {
+          return;
+        }
+        // Transient provider failures should show a useful fallback now without
+        // becoming a permanent negative cache entry for this center.
+        apply(fallback, key);
+      });
+  }, [abortActive, apply, grid, reverseGeocode]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => abortActive, [abortActive]);
 
   return { applyCuratedName };
 }

@@ -123,6 +123,8 @@ type RevealState = {
   source: RevealSource;
   /** Replaces the default closing frame (features arrived mid-reveal). */
   followUp: (() => void) | null;
+  complete: () => void;
+  fail: (error: unknown) => void;
 };
 
 /** What the debounced preview should do while a reveal may be running. */
@@ -150,9 +152,11 @@ export function useRevealAnimation({
   const latestParamsRef = useRef<StyleParams | null>(null);
 
   const cancelReveal = useCallback(() => {
-    if (!stateRef.current) return;
-    cancelAnimationFrame(stateRef.current.raf);
+    const current = stateRef.current;
+    if (!current) return;
+    cancelAnimationFrame(current.raf);
     stateRef.current = null;
+    current.complete();
   }, []);
 
   // The looping animation owns the canvas — stop any reveal when it starts.
@@ -202,12 +206,13 @@ export function useRevealAnimation({
   );
 
   /**
-   * Starts the reveal for a fresh render input. Returns false (after
-   * cancelling any running reveal) when the reveal should not play — the
-   * caller then paints instantly, exactly as before this feature.
+   * Starts the reveal for a fresh render input. The promise resolves after the
+   * closing frame (or after an intentional cancellation), so Generate remains
+   * truthfully busy for the complete visual render. `false` means the caller
+   * should paint instantly because reduced motion/animation/no strokes apply.
    */
   const playReveal = useCallback(
-    (input: ArtworkInput, source: RevealSource): boolean => {
+    async (input: ArtworkInput, source: RevealSource): Promise<boolean> => {
       cancelReveal();
       if (!shouldReveal({ prefersReducedMotion: prefersReducedMotion(), isAnimating })) {
         return false;
@@ -219,57 +224,82 @@ export function useRevealAnimation({
       if (scene.strokes.length === 0) return false;
       const palette = allPalettes[params.palette] ?? allPalettes[defaultPalette];
 
-      const state: RevealState = { raf: 0, source, followUp: null };
-      stateRef.current = state;
-      // Reveal time accumulates in clamped frame deltas (see MAX_FRAME_STEP_MS)
-      // rather than wall-clock, so main-thread stalls pause the reveal instead
-      // of ending it; the clock also starts at the FIRST frame, not play time.
-      let elapsed = 0;
-      let lastFrameAt = 0;
+      return await new Promise<boolean>((resolve, reject) => {
+        let settled = false;
+        const complete = () => {
+          if (settled) return;
+          settled = true;
+          resolve(true);
+        };
+        const fail = (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        };
+        const state: RevealState = {
+          raf: 0,
+          source,
+          followUp: null,
+          complete,
+          fail,
+        };
+        stateRef.current = state;
+        // Reveal time accumulates in clamped frame deltas (see MAX_FRAME_STEP_MS)
+        // rather than wall-clock, so main-thread stalls pause the reveal instead
+        // of ending it; the clock also starts at the FIRST frame, not play time.
+        let elapsed = 0;
+        let lastFrameAt = 0;
 
-      const frame = (now: number) => {
-        if (stateRef.current !== state) return; // cancelled or superseded
-        if (lastFrameAt !== 0) {
-          elapsed += Math.min(now - lastFrameAt, MAX_FRAME_STEP_MS);
-        }
-        lastFrameAt = now;
-        if (elapsed >= REVEAL_DURATION_MS) {
-          stateRef.current = null;
-          if (state.followUp) {
-            // Features arrived while revealing: close on the enhanced render.
-            state.followUp();
-            return;
+        const frame = (now: number) => {
+          if (stateRef.current !== state) return; // cancelled or superseded
+          try {
+            if (lastFrameAt !== 0) {
+              elapsed += Math.min(now - lastFrameAt, MAX_FRAME_STEP_MS);
+            }
+            lastFrameAt = now;
+            if (elapsed >= REVEAL_DURATION_MS) {
+              stateRef.current = null;
+              if (state.followUp) {
+                // Features arrived while revealing: close on the enhanced render.
+                state.followUp();
+                state.complete();
+                return;
+              }
+              const latest = latestParamsRef.current;
+              const finalParams =
+                latest && paramsEqualExceptLabel(latest, params) ? latest : params;
+              renderSceneCanvas(
+                ctx,
+                scene,
+                finalParams,
+                palette,
+                input.width,
+                input.height,
+                false,
+                input.masks,
+              );
+              state.complete();
+              return;
+            }
+            const partial = sceneWithDrawProgress(scene, revealProgress(elapsed));
+            renderSceneCanvas(
+              ctx,
+              partial,
+              params,
+              palette,
+              input.width,
+              input.height,
+              false,
+              input.masks,
+            );
+            state.raf = requestAnimationFrame(frame);
+          } catch (error) {
+            stateRef.current = null;
+            state.fail(error);
           }
-          const latest = latestParamsRef.current;
-          const finalParams =
-            latest && paramsEqualExceptLabel(latest, params) ? latest : params;
-          renderSceneCanvas(
-            ctx,
-            scene,
-            finalParams,
-            palette,
-            input.width,
-            input.height,
-            false,
-            input.masks,
-          );
-          return;
-        }
-        const partial = sceneWithDrawProgress(scene, revealProgress(elapsed));
-        renderSceneCanvas(
-          ctx,
-          partial,
-          params,
-          palette,
-          input.width,
-          input.height,
-          false,
-          input.masks,
-        );
+        };
         state.raf = requestAnimationFrame(frame);
-      };
-      state.raf = requestAnimationFrame(frame);
-      return true;
+      });
     },
     [canvasRef, cancelReveal, isAnimating],
   );

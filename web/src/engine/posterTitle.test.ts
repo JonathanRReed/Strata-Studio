@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from "bun:test";
 import {
+  fitLabelText,
   posterLayout,
   posterMetaLine,
   renderSceneCanvas,
@@ -274,6 +275,20 @@ describe("poster title block (SVG parity)", () => {
     expect(svg).toContain(">37.77°N 122.42°W · ELEV −110–282 M</text>");
     expect(svg).toContain(`letter-spacing="${n(L.subTracking)}"`);
     expect(svg).toContain(`fill="${PALETTE.foreground}"`);
+  });
+
+  it("uses the same fitted title size in Canvas and SVG for long validated labels", () => {
+    const longLabel = "A VERY LONG MOUNTAIN LANDSCAPE TITLE ".repeat(6).trim();
+    const fitted = fitLabelText(longLabel.toUpperCase(), posterLayout(W, H).titleSize, 0.28, W * 0.88);
+    expect(fitted.estimatedWidth).toBeLessThanOrEqual(W * 0.88 + 0.0001);
+
+    const canvas = render(new StubCtx(W, H, true), posterParams(longLabel), metaMasks(META));
+    expect(canvas.fillTexts[0].font).toBe(`600 ${fitted.fontSize}px sans-serif`);
+    expect(canvas.fillTexts[0].letterSpacing).toBe(`${fitted.tracking}px`);
+
+    const svg = svgOf(posterParams(longLabel), metaMasks(META));
+    expect(svg).toContain(`font-size="${+fitted.fontSize.toFixed(2)}"`);
+    expect(svg).toContain(`letter-spacing="${+fitted.tracking.toFixed(2)}"`);
   });
 
   it("keeps the layout in logical viewBox units at export size (scales with the artwork)", () => {

@@ -47,13 +47,32 @@ export function useArtworkRenderer({
     useRevealAnimation({ canvasRef, isAnimating });
   // Keep the reveal's closing frame current (label auto-fill mid-reveal).
   latestParamsRef.current = params;
+  const immediateInputRef = useRef<{
+    grid: ElevationGrid;
+    features: GeoFeatureCollection | undefined;
+    seed: string;
+    width: number;
+    height: number;
+    input: ArtworkInput;
+  } | null>(null);
 
-  const previewInput = useMemo<ArtworkInput | null>(
-    () => (grid ? buildArtworkInput({ grid, features, params, width, height }) : null),
+  const previewInput = useMemo<ArtworkInput | null>(() => {
+    if (!grid) return null;
+    const immediate = immediateInputRef.current;
+    if (
+      immediate &&
+      immediate.grid === grid &&
+      immediate.features === features &&
+      immediate.seed === params.seed &&
+      immediate.width === width &&
+      immediate.height === height
+    ) {
+      return immediate.input;
+    }
+    return buildArtworkInput({ grid, features, params, width, height });
     // params is only read for seed (masks depend on features + cropped bounds).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [grid, features, params.seed, width, height],
-  );
+  }, [grid, features, params.seed, width, height]);
 
   // Latest render state for the canvas-resize repaint, which must not retrigger
   // effects or change identity when params tweak.
@@ -85,7 +104,7 @@ export function useArtworkRenderer({
    * a running reveal, so a second generate's placeholder wipes it cleanly.
    */
   const renderArtwork = useCallback(
-    (g: ElevationGrid, opts?: { skipMasks?: boolean; reveal?: boolean }) => {
+    async (g: ElevationGrid, opts?: { skipMasks?: boolean; reveal?: boolean }) => {
       const ctx = canvasRef.current?.getContext("2d");
       if (!ctx) return;
       const input = buildArtworkInput({
@@ -96,7 +115,20 @@ export function useArtworkRenderer({
         height,
         skipMasks: opts?.skipMasks,
       });
-      if (opts?.reveal && playReveal(input, { grid: g, features, params, styleId, allPalettes })) {
+      if (!opts?.skipMasks) {
+        immediateInputRef.current = {
+          grid: g,
+          features,
+          seed: params.seed,
+          width,
+          height,
+          input,
+        };
+      }
+      if (
+        opts?.reveal &&
+        (await playReveal(input, { grid: g, features, params, styleId, allPalettes }))
+      ) {
         return;
       }
       cancelReveal();

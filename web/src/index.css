@@ -12,11 +12,11 @@
   --color-ground: #0b0b0d;
   --color-surface: #131318;
   --color-surface-2: #17171d;
-  --color-hairline: #232329;
-  --color-hairline-2: #2e2e36;
+  --color-hairline: #3d3d45;
+  --color-hairline-2: #6b6a75;
   --color-ink: #e9e7e2;
   --color-ink-muted: #8e8d96;
-  --color-ink-faint: #63626b;
+  --color-ink-faint: #85848e;
   --color-signal: #5fb0d4;
   --color-signal-deep: #2a6e92;
   --color-alarm: #e06055;
@@ -86,8 +86,9 @@ body {
   }
 }
 
-.maplibregl-canvas {
-  outline: none;
+.maplibregl-canvas:focus {
+  outline: 3px solid var(--color-signal);
+  outline-offset: -4px;
 }
 
 /* Keep MapLibre's attribution readable but instrument-quiet. */
@@ -221,8 +222,21 @@ input[type="text"]:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+
   .status-live::after {
-    animation: none;
+    animation: none !important;
   }
 }
 

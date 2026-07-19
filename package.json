@@ -1,0 +1,38 @@
+{
+  "name": "strata-studio-launch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "engines": {
+    "bun": "1.3.14"
+  },
+  "scripts": {
+    "install:frozen": "bun install --frozen-lockfile && bun install --cwd web --frozen-lockfile && bun install --cwd workers/proxy --frozen-lockfile",
+    "lint": "bun run lint:web",
+    "lint:web": "bun run --cwd web lint",
+    "typecheck": "bun run typecheck:web && bun run typecheck:proxy",
+    "typecheck:web": "bun run --cwd web typecheck",
+    "typecheck:proxy": "bun run --cwd workers/proxy typecheck",
+    "test:unit": "bun run test:unit:web && bun run test:unit:proxy",
+    "test:unit:web": "bun run --cwd web test",
+    "test:unit:proxy": "bun run --cwd workers/proxy test",
+    "build": "bun run --cwd web build",
+    "build:fixture": "VITE_APP_ORIGIN=https://strata-studio.example VITE_TERRAIN_TILE_URL=https://strata-proxy.example/terrain VITE_OVERPASS_URL=https://strata-proxy.example/overpass VITE_BUILD_CONTEXT=fixture bun run build",
+    "dev:web": "VITE_APP_ORIGIN=http://localhost:5173 VITE_TERRAIN_TILE_URL=http://localhost:8787/terrain VITE_OVERPASS_URL=http://localhost:8787/overpass bun run --cwd web dev",
+    "dev:proxy": "bun run --cwd workers/proxy dev",
+    "preview:test": "VITE_APP_ORIGIN=https://strata-studio.example VITE_TERRAIN_TILE_URL=https://strata-proxy.example/terrain VITE_OVERPASS_URL=https://strata-proxy.example/overpass bun run --cwd web preview --host 127.0.0.1 --port 4173 --strictPort",
+    "check:proxy-config": "bun run --cwd workers/proxy check:config",
+    "check:wrangler": "bun run --cwd workers/proxy check:bundle",
+    "test:launch": "bun run build:fixture && bun run test:launch:built",
+    "test:launch:built": "playwright test --project=chromium --grep @smoke",
+    "test:launch:a11y": "playwright test --project=chromium --grep @a11y",
+    "test:launch:browsers": "playwright test --project=firefox --project=webkit --grep @smoke",
+    "test:launch:all": "playwright test",
+    "verify:launch": "bun run install:frozen && bun run lint && bun run typecheck:proxy && bun run test:unit && bun run build:fixture && bun run check:wrangler && bun run test:launch:built"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1"
+  }
+}

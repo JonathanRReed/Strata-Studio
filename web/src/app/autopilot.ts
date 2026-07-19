@@ -18,7 +18,18 @@ import { dailyPlace, type CuratedPlace } from "../data/places.ts";
 export const AUTO_REGEN_DEBOUNCE_MS = 800;
 
 /** Query keys that mark a URL as carrying share state (see urlState.ts). */
-const SHARE_KEYS = ["lat", "lng", "z", "b", "style", "seed", "palette", "p", "preset"] as const;
+const SHARE_KEYS = [
+  "composition",
+  "lat",
+  "lng",
+  "z",
+  "b",
+  "style",
+  "seed",
+  "palette",
+  "p",
+  "preset",
+] as const;
 
 export const INFLUENCE_KEYS = [
   "buildingInfluence",
@@ -65,6 +76,9 @@ export function firstRunPlace(
  */
 export function urlLocksInfluence(search: string | URLSearchParams): boolean {
   const sp = new URLSearchParams(typeof search === "string" ? search : search.toString());
+  // Versioned documents encode the complete normalized composition, including
+  // deliberate zero influences, so automatic bumps must never alter them.
+  if (sp.has("composition")) return true;
   if (!sp.has("p")) return false;
   const withDiff = parseShareParams(sp).params;
   const noDiffSp = new URLSearchParams(sp);

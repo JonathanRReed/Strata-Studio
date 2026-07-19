@@ -40,6 +40,7 @@ export type ControlsPanelProps = {
   onDeletePalette: (id: string) => void;
   isAnimating: boolean;
   onToggleAnimation: () => void;
+  backgroundInert?: boolean;
 };
 
 /**
@@ -71,6 +72,7 @@ export function ControlsPanel({
   onDeletePalette,
   isAnimating,
   onToggleAnimation,
+  backgroundInert = false,
 }: ControlsPanelProps) {
   const update = (patch: Partial<StyleParams>) => {
     onChange({ ...params, ...patch });
@@ -83,6 +85,7 @@ export function ControlsPanel({
   return (
     <aside
       id="controls-panel"
+      inert={backgroundInert ? true : undefined}
       className="flex w-full flex-col border-b border-hairline bg-surface lg:h-full lg:w-[340px] lg:shrink-0 lg:border-b-0 lg:border-r"
     >
       {/* Header block: wordmark + studio switcher */}
@@ -139,7 +142,7 @@ export function ControlsPanel({
           aria-busy={isLoading}
           className={primaryButtonClass}
         >
-          {isLoading ? <span className="status-live">Generating</span> : "Generate"}
+          {isLoading ? <span className="status-live">Regenerating…</span> : "Regenerate now"}
         </button>
         <button type="button" onClick={onOpenExport} className={secondaryButtonClass}>
           Export…

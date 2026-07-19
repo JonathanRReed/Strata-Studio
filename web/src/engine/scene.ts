@@ -209,6 +209,46 @@ const POSTER_RULE_OPACITY = 0.5;
 const POSTER_META_OPACITY = 0.62;
 const POSTER_TITLE_FONT_WEIGHT = 600;
 
+export type FittedLabelText = {
+  fontSize: number;
+  tracking: number;
+  estimatedWidth: number;
+};
+
+function glyphWidthEm(character: string): number {
+  if (/\s/u.test(character)) return 0.38;
+  if (/[MW@#%&]/u.test(character)) return 1;
+  if (/[Iil1|!.,:'`]/u.test(character)) return 0.4;
+  if (/[A-Z0-9]/u.test(character)) return 0.75;
+  if (/[a-z]/u.test(character)) return 0.68;
+  // Emoji/CJK/unknown glyphs are conservatively treated as full-em.
+  return 1;
+}
+
+/**
+ * Deterministic label fitting shared by Canvas and SVG. The conservative
+ * glyph-width model avoids relying on browser-only SVG measurement while still
+ * guaranteeing both renderers choose the same font size and tracking.
+ */
+export function fitLabelText(
+  text: string,
+  targetFontSize: number,
+  trackingRatio: number,
+  maxWidth: number,
+): FittedLabelText {
+  const characters = [...text];
+  const emWidth = characters.reduce((sum, character) => sum + glyphWidthEm(character), 0);
+  const trackedEm = emWidth + Math.max(0, characters.length - 1) * trackingRatio;
+  const targetWidth = trackedEm * targetFontSize;
+  const scale = targetWidth > maxWidth && targetWidth > 0 ? maxWidth / targetWidth : 1;
+  const fontSize = Math.max(1, targetFontSize * scale);
+  return {
+    fontSize,
+    tracking: fontSize * trackingRatio,
+    estimatedWidth: trackedEm * fontSize,
+  };
+}
+
 /** Minus sign (U+2212) reads better than a hyphen in the elevation figures. */
 const MINUS = "−";
 
@@ -282,17 +322,21 @@ function drawPosterTitleBlock(
   const L = posterLayout(width, height);
   ctx.fillStyle = palette.foreground;
 
+  const title = label.toUpperCase();
+  const fittedTitle = fitLabelText(title, L.titleSize, 0.28, width * 0.88);
   ctx.globalAlpha = POSTER_TITLE_OPACITY;
-  ctx.font = `${POSTER_TITLE_FONT_WEIGHT} ${L.titleSize}px sans-serif`;
-  fillTextTracked(ctx, label.toUpperCase(), L.cx, L.titleBaseline, L.titleTracking);
+  ctx.font = `${POSTER_TITLE_FONT_WEIGHT} ${fittedTitle.fontSize}px sans-serif`;
+  fillTextTracked(ctx, title, L.cx, L.titleBaseline, fittedTitle.tracking);
 
   ctx.globalAlpha = POSTER_RULE_OPACITY;
   ctx.fillRect(L.cx - L.ruleHalf, L.ruleY - L.ruleThickness / 2, L.ruleHalf * 2, L.ruleThickness);
 
   if (meta) {
+    const metaText = posterMetaLine(meta);
+    const fittedMeta = fitLabelText(metaText, L.subSize, 0.12, width * 0.88);
     ctx.globalAlpha = POSTER_META_OPACITY;
-    ctx.font = `${L.subSize}px sans-serif`;
-    fillTextTracked(ctx, posterMetaLine(meta), L.cx, L.subBaseline, L.subTracking);
+    ctx.font = `${fittedMeta.fontSize}px sans-serif`;
+    fillTextTracked(ctx, metaText, L.cx, L.subBaseline, fittedMeta.tracking);
   }
   ctx.globalAlpha = 1;
 }
@@ -388,7 +432,13 @@ export function renderSceneCanvas(
     if (params.labelStyle === "poster") {
       drawPosterTitleBlock(ctx, params.label, palette, width, height, masks?.meta);
     } else {
-      ctx.font = `${Math.max(12, Math.round(width / 36))}px sans-serif`;
+      const fitted = fitLabelText(
+        params.label,
+        Math.max(12, Math.round(width / 36)),
+        0,
+        Math.max(1, width - 32),
+      );
+      ctx.font = `${fitted.fontSize}px sans-serif`;
       ctx.fillStyle = palette.foreground;
       ctx.globalAlpha = 0.6;
       ctx.textAlign = "left";
@@ -473,13 +523,17 @@ function posterTitleSvg(
   const L = posterLayout(width, height);
   const fg = palette.foreground;
   const n = (v: number) => +v.toFixed(2);
+  const title = label.toUpperCase();
+  const fittedTitle = fitLabelText(title, L.titleSize, 0.28, width * 0.88);
   const parts = [
-    `<text x="${n(L.cx + L.titleTracking / 2)}" y="${n(L.titleBaseline)}" text-anchor="middle" font-family="sans-serif" font-weight="${POSTER_TITLE_FONT_WEIGHT}" font-size="${n(L.titleSize)}" letter-spacing="${n(L.titleTracking)}" fill="${fg}" opacity="${POSTER_TITLE_OPACITY}">${escapeXml(label.toUpperCase())}</text>`,
+    `<text x="${n(L.cx + fittedTitle.tracking / 2)}" y="${n(L.titleBaseline)}" text-anchor="middle" font-family="sans-serif" font-weight="${POSTER_TITLE_FONT_WEIGHT}" font-size="${n(fittedTitle.fontSize)}" letter-spacing="${n(fittedTitle.tracking)}" fill="${fg}" opacity="${POSTER_TITLE_OPACITY}">${escapeXml(title)}</text>`,
     `<rect x="${n(L.cx - L.ruleHalf)}" y="${n(L.ruleY - L.ruleThickness / 2)}" width="${n(L.ruleHalf * 2)}" height="${n(L.ruleThickness)}" fill="${fg}" opacity="${POSTER_RULE_OPACITY}"/>`,
   ];
   if (meta) {
+    const metaText = posterMetaLine(meta);
+    const fittedMeta = fitLabelText(metaText, L.subSize, 0.12, width * 0.88);
     parts.push(
-      `<text x="${n(L.cx + L.subTracking / 2)}" y="${n(L.subBaseline)}" text-anchor="middle" font-family="sans-serif" font-size="${n(L.subSize)}" letter-spacing="${n(L.subTracking)}" fill="${fg}" opacity="${POSTER_META_OPACITY}">${escapeXml(posterMetaLine(meta))}</text>`,
+      `<text x="${n(L.cx + fittedMeta.tracking / 2)}" y="${n(L.subBaseline)}" text-anchor="middle" font-family="sans-serif" font-size="${n(fittedMeta.fontSize)}" letter-spacing="${n(fittedMeta.tracking)}" fill="${fg}" opacity="${POSTER_META_OPACITY}">${escapeXml(metaText)}</text>`,
     );
   }
   return `\n  ${parts.join("\n  ")}`;
@@ -540,11 +594,16 @@ export function sceneToSvg(
     ? ` transform="rotate(${params.rotation} ${width / 2} ${height / 2})"`
     : "";
 
-  const fontSize = Math.max(12, Math.round(width / 36));
+  const plainLabelFit = fitLabelText(
+    params.label,
+    Math.max(12, Math.round(width / 36)),
+    0,
+    Math.max(1, width - 32),
+  );
   const label = params.label
     ? params.labelStyle === "poster"
       ? posterTitleSvg(params.label, palette, width, height, masks?.meta)
-      : `\n  <text x="16" y="${height - 16}" font-size="${fontSize}" font-family="sans-serif" fill="${palette.foreground}" opacity="0.6">${escapeXml(params.label)}</text>`
+      : `\n  <text x="16" y="${height - 16}" font-size="${+plainLabelFit.fontSize.toFixed(2)}" font-family="sans-serif" fill="${palette.foreground}" opacity="0.6">${escapeXml(params.label)}</text>`
     : "";
 
   const grainRect = params.grain > 0

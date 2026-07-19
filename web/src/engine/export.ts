@@ -96,8 +96,14 @@ export function insertPhysChunk(
 }
 
 /** PNG blob → the same PNG with a pHYs chunk declaring `dpi`. */
-export async function withPngDpi(blob: Blob, dpi: number): Promise<Blob> {
+export async function withPngDpi(
+  blob: Blob,
+  dpi: number,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  throwIfExportAborted(signal);
   const bytes = new Uint8Array(await blob.arrayBuffer());
+  throwIfExportAborted(signal);
   const spliced = insertPhysChunk(bytes, dpi);
   if (spliced === bytes) return blob;
   return new Blob([spliced], { type: "image/png" });
@@ -105,24 +111,77 @@ export async function withPngDpi(blob: Blob, dpi: number): Promise<Blob> {
 
 // --- Download helpers -----------------------------------------------------
 
-function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+function abortError(signal?: AbortSignal): DOMException {
+  const reason = signal?.reason;
+  if (reason instanceof DOMException && reason.name === "AbortError") return reason;
+  return new DOMException("Export was cancelled", "AbortError");
+}
+
+export function throwIfExportAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+export function canvasToPngBlob(
+  canvas: HTMLCanvasElement,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  throwIfExportAborted(signal);
   return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error("Failed to create PNG blob"))),
-      "image/png",
-    );
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(abortError(signal)));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      canvas.toBlob((blob) => {
+        finish(() => {
+          if (!blob) reject(new Error("Canvas returned no PNG data"));
+          else resolve(blob);
+        });
+      }, "image/png");
+    } catch (error) {
+      finish(() => reject(error));
+    }
   });
 }
 
-function downloadBlob(blob: Blob, filename: string) {
+export type DownloadReceipt = {
+  filename: string;
+  mimeType: string;
+  dispose: () => void;
+};
+
+/** Starts a browser download and owns the object URL until disposal/auto-cleanup. */
+export function startBlobDownload(blob: Blob, filename: string): DownloadReceipt {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.download = filename;
-  link.href = url;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  let disposed = false;
+  let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    if (cleanupTimer) clearTimeout(cleanupTimer);
+    cleanupTimer = null;
+    URL.revokeObjectURL(url);
+  };
+
+  try {
+    link.download = filename;
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+  } catch (error) {
+    dispose();
+    throw error;
+  } finally {
+    link.remove();
+  }
+  cleanupTimer = setTimeout(dispose, 2000);
+  return { filename, mimeType: blob.type, dispose };
 }
 
 export async function downloadPng(
@@ -130,18 +189,19 @@ export async function downloadPng(
   filename: string,
   /** When set, a pHYs chunk declaring this density is spliced into the PNG. */
   dpi?: number,
-) {
-  try {
-    let blob = await canvasToPngBlob(canvas);
-    if (dpi) blob = await withPngDpi(blob, dpi);
-    downloadBlob(blob, filename);
-  } catch (err) {
-    console.error("PNG export failed:", err);
-  }
+  signal?: AbortSignal,
+): Promise<DownloadReceipt> {
+  let blob = await canvasToPngBlob(canvas, signal);
+  if (dpi) blob = await withPngDpi(blob, dpi, signal);
+  throwIfExportAborted(signal);
+  return startBlobDownload(blob, filename);
 }
 
-export function downloadSvg(svgString: string, filename: string) {
-  downloadBlob(new Blob([svgString], { type: "image/svg+xml" }), filename);
+export function downloadSvg(svgString: string, filename: string): DownloadReceipt {
+  return startBlobDownload(
+    new Blob([svgString], { type: "image/svg+xml" }),
+    filename,
+  );
 }
 
 export function createOffscreenCanvas(
@@ -187,25 +247,23 @@ function fitFontSize(
   return Math.max(1, target * (maxWidth / width));
 }
 
-export function downloadPngWithAttribution(
+export async function pngBlobWithAttribution(
   canvas: HTMLCanvasElement,
-  filename: string,
   attribution: string,
   backgroundColor = "#000000",
   /** Device pixels per logical pixel, so attribution text scales with exports. */
   scale = 1,
   /** When set, a pHYs chunk declaring this print density is spliced in. */
   dpi?: number,
-) {
+  signal?: AbortSignal,
+): Promise<Blob> {
+  throwIfExportAborted(signal);
   // Draw onto a copy so the source canvas (e.g. the live preview) is untouched.
   const copy = document.createElement("canvas");
   copy.width = canvas.width;
   copy.height = canvas.height;
   const ctx = copy.getContext("2d");
-  if (!ctx) {
-    void downloadPng(canvas, filename, dpi);
-    return;
-  }
+  if (!ctx) throw new Error("Could not create attribution canvas context");
   ctx.drawImage(canvas, 0, 0);
   const fontSize = fitFontSize(ctx, attribution, 10 * scale, copy.width - 16 * scale);
   ctx.font = `${fontSize}px sans-serif`;
@@ -214,7 +272,30 @@ export function downloadPngWithAttribution(
     : "rgba(255,255,255,0.4)";
   ctx.textAlign = "right";
   ctx.fillText(attribution, copy.width - 8 * scale, copy.height - 8 * scale);
-  void downloadPng(copy, filename, dpi);
+  let blob = await canvasToPngBlob(copy, signal);
+  if (dpi) blob = await withPngDpi(blob, dpi, signal);
+  return blob;
+}
+
+export async function downloadPngWithAttribution(
+  canvas: HTMLCanvasElement,
+  filename: string,
+  attribution: string,
+  backgroundColor = "#000000",
+  scale = 1,
+  dpi?: number,
+  signal?: AbortSignal,
+): Promise<DownloadReceipt> {
+  const blob = await pngBlobWithAttribution(
+    canvas,
+    attribution,
+    backgroundColor,
+    scale,
+    dpi,
+    signal,
+  );
+  throwIfExportAborted(signal);
+  return startBlobDownload(blob, filename);
 }
 
 function escapeXml(str: string): string {
@@ -271,7 +352,9 @@ export function downloadSvgWithAttribution(
   filename: string,
   attribution: string,
   backgroundColor = "#000000",
-) {
+  signal?: AbortSignal,
+): DownloadReceipt {
+  throwIfExportAborted(signal);
   let modified = svgString;
   const escaped = escapeXml(attribution);
   const openTag = svgString.match(/<svg([^>]*)>/i);
@@ -299,5 +382,6 @@ export function downloadSvgWithAttribution(
   } else {
     modified += textEl;
   }
-  downloadSvg(modified, filename);
+  throwIfExportAborted(signal);
+  return downloadSvg(modified, filename);
 }
