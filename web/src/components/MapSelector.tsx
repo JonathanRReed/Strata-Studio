@@ -168,10 +168,18 @@ export default function MapSelector({
         // jumpTo is safe before style load and emits the target bounds immediately.
         map.jumpTo(pending);
       }
+      // Camera mutations are synchronous, but WebKit can delay or omit the
+      // matching moveend event under load. Commit the landed selection now so
+      // curated places and searches cannot update their label while leaving
+      // terrain and OSM requests on the previous bounds. The later debounced
+      // moveend report is harmless because the parent ignores equal bounds.
+      const landedBounds = getFramedBounds(map, activeAspectRef.current);
+      lastSelectionRef.current = landedBounds;
+      onChange(landedBounds, map.getZoom(), pending.cause);
     } catch (error) {
       failCurrentMap(error);
     }
-  }, [failCurrentMap]);
+  }, [failCurrentMap, onChange]);
 
   const requestFlyTo = useCallback(
     (
