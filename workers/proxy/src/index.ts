@@ -595,7 +595,7 @@ async function handleTerrain(
     const lease = await fetchWithDeadline(
       runtime,
       terrainUpstreamUrl(tile),
-      { method: "GET", redirect: "error" },
+      { method: "GET", redirect: "manual" },
       route.signal,
       runtime.terrainUpstreamTimeoutMs,
     );
@@ -713,7 +713,7 @@ async function handleOverpass(
               "Content-Type": "application/x-www-form-urlencoded",
             },
             body: new URLSearchParams({ data: query }).toString(),
-            redirect: "error",
+            redirect: "manual",
           },
           route.signal,
           runtime.overpassUpstreamTimeoutMs,

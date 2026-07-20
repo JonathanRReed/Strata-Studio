@@ -323,6 +323,7 @@ describe("terrain handler", () => {
     expect(calls[0]!.url).toBe(
       "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/10/163/395.png",
     );
+    expect(calls[0]!.init?.redirect).toBe("manual");
     expect(calls[0]!.init?.signal).toBeInstanceOf(AbortSignal);
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe(CACHE_TERRAIN_OK);
@@ -430,6 +431,7 @@ describe("overpass handler", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe(OVERPASS_PRIMARY);
     expect(calls[0]!.init?.method).toBe("POST");
+    expect(calls[0]!.init?.redirect).toBe("manual");
     const body = String(calls[0]!.init?.body);
     const query = new URLSearchParams(body).get("data")!;
     expect(query).toContain("[timeout:15][maxsize:16777216]");
