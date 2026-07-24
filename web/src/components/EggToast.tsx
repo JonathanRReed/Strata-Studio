@@ -26,7 +26,7 @@ export function EggToast({
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss notification"
-          className="flex h-8 w-8 items-center justify-center text-ink-muted transition-colors hover:text-ink"
+          className="flex h-8 w-8 items-center justify-center text-ink-muted press hover:text-ink"
         >
           <span aria-hidden="true">✕</span>
         </button>

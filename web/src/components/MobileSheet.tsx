@@ -371,7 +371,7 @@ export function MobileSheet({
                 tabIndex={tab === t.id ? 0 : -1}
                 onKeyDown={onTabKeyDown}
                 onClick={() => selectTab(t.id)}
-                className={`instrument-label flex h-11 items-center justify-center border-b-2 transition-colors ${
+                className={`instrument-label flex h-11 items-center justify-center border-b-2 press ${
                   tab === t.id
                     ? "border-signal bg-surface-2 text-ink"
                     : "border-transparent text-ink-muted hover:text-ink"
@@ -435,7 +435,7 @@ export function MobileSheet({
                       onClick={() => onSelectPlace(place)}
                       aria-pressed={active}
                       title={place.blurb}
-                      className={`flex min-h-11 flex-col items-start justify-center rounded-sm border bg-surface px-3 py-1.5 text-left transition-colors ${
+                      className={`flex min-h-11 flex-col items-start justify-center rounded-sm border bg-surface px-3 py-1.5 text-left press ${
                         active
                           ? "border-signal"
                           : "border-hairline hover:border-hairline-2 hover:bg-surface-2"
@@ -470,6 +470,7 @@ export function MobileSheet({
               <StyleSection
                 studio={studio}
                 styleId={styleId}
+                palette={params.palette}
                 onStyleChange={onStyleChange}
                 terrainGrid={terrainGrid}
               />

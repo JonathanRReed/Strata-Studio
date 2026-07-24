@@ -209,6 +209,29 @@ const POSTER_RULE_OPACITY = 0.5;
 const POSTER_META_OPACITY = 0.62;
 const POSTER_TITLE_FONT_WEIGHT = 600;
 
+/*
+ * The poster is set in the same two faces as the app chrome, on a real
+ * contrast axis: a grotesque display for the place name, a monospace for the
+ * coordinate readout. The previous generic `sans-serif` made the exported
+ * artwork the least typographically considered surface in the product, and a
+ * mono coordinate line is what a survey document would actually use.
+ *
+ * Both stacks keep full fallbacks: if the webfont has not loaded, the poster
+ * still sets rather than failing (see ensurePosterFonts in posterFonts.ts,
+ * which exports await before rasterizing).
+ */
+export const POSTER_TITLE_FAMILY = '"Archivo Variable", system-ui, sans-serif';
+export const POSTER_META_FAMILY =
+  '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+
+/** Fraction of the poster width the title aims to occupy (optical measure). */
+const POSTER_TITLE_MEASURE = 0.58;
+/** Hard ceiling for any single title line. */
+const POSTER_TITLE_MAX_MEASURE = 0.88;
+/** Optical sizing bounds, as multiples of the nominal titleSize. */
+const POSTER_TITLE_MIN_SCALE = 0.8;
+const POSTER_TITLE_MAX_SCALE = 1.55;
+
 export type FittedLabelText = {
   fontSize: number;
   tracking: number;
@@ -246,6 +269,179 @@ export function fitLabelText(
     fontSize,
     tracking: fontSize * trackingRatio,
     estimatedWidth: trackedEm * fontSize,
+  };
+}
+
+/**
+ * Tracking tapers as the title lengthens. A fixed 0.28em is a poster
+ * convention for short names but turns a long place name into a smear, and it
+ * was previously applied to every label regardless of length. Short names get
+ * the widest track (they need the air, and they are optically scaled up to
+ * fill the measure); long names tighten toward normal so the line stays a
+ * word rather than a row of letters.
+ */
+export function posterTitleTrackingRatio(characterCount: number): number {
+  if (characterCount <= 6) return 0.3;
+  if (characterCount <= 12) return 0.24;
+  if (characterCount <= 18) return 0.18;
+  if (characterCount <= 26) return 0.13;
+  return 0.09;
+}
+
+/**
+ * Splits an over-long title across at most two lines on a word boundary,
+ * choosing the break that most evenly balances the two lines. Previously a
+ * long place name was shrunk by fitLabelText until it fit on one line, which
+ * drove it toward illegibility; wrapping keeps the type at a readable size.
+ * Single-word labels are never split — they fall back to optical shrinking.
+ */
+export function wrapPosterTitle(text: string, maxLines = 2): string[] {
+  const words = text.split(/\s+/u).filter((word) => word.length > 0);
+  if (words.length < 2 || maxLines < 2) return [text];
+
+  let bestSplit = 1;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  for (let split = 1; split < words.length; split++) {
+    const head = words.slice(0, split).join(" ").length;
+    const tail = words.slice(split).join(" ").length;
+    const delta = Math.abs(head - tail);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestSplit = split;
+    }
+  }
+  return [words.slice(0, bestSplit).join(" "), words.slice(bestSplit).join(" ")];
+}
+
+export type PosterTitleLine = {
+  text: string;
+  fontSize: number;
+  tracking: number;
+  baseline: number;
+};
+
+export type PosterComposition = {
+  cx: number;
+  titleLines: PosterTitleLine[];
+  rule: { x: number; y: number; width: number; height: number };
+  meta: { text: string; fontSize: number; tracking: number; baseline: number } | null;
+  /** Top edge of the legibility scrim behind the lockup. */
+  scrimTop: number;
+  scrimHeight: number;
+};
+
+/**
+ * Resolves the complete poster lockup: optically-sized title lines, the rule,
+ * the coordinate readout, and the legibility scrim behind them. Canvas and SVG
+ * both consume this one function, so parity is structural rather than two
+ * parallel implementations that must be kept in step by hand.
+ *
+ * Optical sizing is the key move: rather than a fixed font size, the title is
+ * scaled so its tracked width lands on POSTER_TITLE_MEASURE. A three-letter
+ * name and a fifteen-letter name therefore occupy the same optical measure,
+ * which is what makes a set of these posters read as a series.
+ */
+export function composePosterTitle(
+  label: string,
+  width: number,
+  height: number,
+  meta?: ArtworkMeta,
+): PosterComposition {
+  const L = posterLayout(width, height);
+  const upper = label.toUpperCase();
+  const maxWidth = width * POSTER_TITLE_MAX_MEASURE;
+
+  // Try one line; wrap only when a single line cannot hold its size.
+  const singleRatio = posterTitleTrackingRatio([...upper].length);
+  const single = fitOpticalTitle(upper, L.titleSize, singleRatio, width, maxWidth);
+  let lineTexts = [upper];
+  if (single.clipped) {
+    const wrapped = wrapPosterTitle(upper);
+    if (wrapped.length > 1) lineTexts = wrapped;
+  }
+
+  const fitted = lineTexts.map((text) => {
+    const ratio = posterTitleTrackingRatio([...text].length);
+    return fitOpticalTitle(text, L.titleSize, ratio, width, maxWidth);
+  });
+  // A wrapped title uses one shared size (the smallest that fits every line)
+  // so the two lines read as one lockup rather than two unrelated headings.
+  const sharedSize = Math.min(...fitted.map((f) => f.fontSize));
+
+  const lineHeight = sharedSize * 1.16;
+  const lastTitleBaseline = L.ruleY - sharedSize * 0.92;
+  const titleLines: PosterTitleLine[] = lineTexts.map((text, index) => {
+    const ratio = posterTitleTrackingRatio([...text].length);
+    const offset = (lineTexts.length - 1 - index) * lineHeight;
+    return {
+      text,
+      fontSize: sharedSize,
+      tracking: sharedSize * ratio,
+      baseline: lastTitleBaseline - offset,
+    };
+  });
+
+  const metaBlock = meta
+    ? (() => {
+        const text = posterMetaLine(meta);
+        const fit = fitLabelText(text, L.subSize, 0.12, maxWidth);
+        return {
+          text,
+          fontSize: fit.fontSize,
+          tracking: fit.tracking,
+          baseline: L.subBaseline,
+        };
+      })()
+    : null;
+
+  // The scrim starts a full line-height above the topmost title so the ramp is
+  // never visible as an edge, and runs to the bottom of the frame.
+  const scrimTop = Math.max(0, titleLines[0].baseline - sharedSize * 2.1);
+  return {
+    cx: L.cx,
+    titleLines,
+    rule: {
+      x: L.cx - L.ruleHalf,
+      y: L.ruleY - L.ruleThickness / 2,
+      width: L.ruleHalf * 2,
+      height: L.ruleThickness,
+    },
+    meta: metaBlock,
+    scrimTop,
+    scrimHeight: height - scrimTop,
+  };
+}
+
+/**
+ * Scales a title toward the target optical measure, clamped so it never grows
+ * absurd or shrinks to illegibility. `clipped` reports that even the minimum
+ * size overruns the hard maximum, which is the caller's signal to wrap.
+ */
+function fitOpticalTitle(
+  text: string,
+  nominalSize: number,
+  trackingRatio: number,
+  width: number,
+  maxWidth: number,
+): { fontSize: number; tracking: number; clipped: boolean } {
+  const target = width * POSTER_TITLE_MEASURE;
+  const probe = fitLabelText(text, nominalSize, trackingRatio, Number.POSITIVE_INFINITY);
+  const naturalWidth = probe.estimatedWidth;
+  const desired = naturalWidth > 0 ? (target / naturalWidth) * nominalSize : nominalSize;
+  const bounded = Math.min(
+    nominalSize * POSTER_TITLE_MAX_SCALE,
+    Math.max(nominalSize * POSTER_TITLE_MIN_SCALE, desired),
+  );
+  const atBounded = fitLabelText(text, bounded, trackingRatio, Number.POSITIVE_INFINITY);
+  if (atBounded.estimatedWidth <= maxWidth) {
+    return { fontSize: bounded, tracking: bounded * trackingRatio, clipped: false };
+  }
+  // Overruns the hard max: shrink to fit and report it so the caller can wrap.
+  const shrunk = fitLabelText(text, bounded, trackingRatio, maxWidth);
+  return {
+    fontSize: shrunk.fontSize,
+    tracking: shrunk.tracking,
+    clipped: shrunk.fontSize < nominalSize * POSTER_TITLE_MIN_SCALE,
   };
 }
 
@@ -306,10 +502,15 @@ function fillTextTracked(
 }
 
 /**
- * The poster title block: letterspaced-caps label, a thin rule, and the
- * coordinates/elevation meta line (when ArtworkMeta is available). Drawn in
- * logical coordinates under the render transform, so exports scale it
- * exactly like the artwork.
+ * The poster title block: optically-sized letterspaced-caps label, a thin
+ * rule, and the coordinates/elevation meta line (when ArtworkMeta is
+ * available). Drawn in logical coordinates under the render transform, so
+ * exports scale it exactly like the artwork. A legibility scrim is laid down
+ * behind the lockup so the type stays readable over dense terrain.
+ *
+ * Geometry comes from composePosterTitle, which the SVG renderer also calls,
+ * so the two outputs share one layout rather than two parallel
+ * implementations.
  */
 function drawPosterTitleBlock(
   ctx: CanvasRenderingContext2D,
@@ -319,24 +520,34 @@ function drawPosterTitleBlock(
   height: number,
   meta?: ArtworkMeta,
 ): void {
-  const L = posterLayout(width, height);
+  const C = composePosterTitle(label, width, height, meta);
   ctx.fillStyle = palette.foreground;
 
-  const title = label.toUpperCase();
-  const fittedTitle = fitLabelText(title, L.titleSize, 0.28, width * 0.88);
+  // Legibility scrim: a soft ramp from transparent at the top to the
+  // background color toward the bottom, so the lockup reads over any terrain
+  // density without a hard card edge.
+  const bgRgb = hexToRgb(palette.background);
+  const scrim = ctx.createLinearGradient(0, C.scrimTop, 0, height);
+  scrim.addColorStop(0, `rgba(${bgRgb[0]},${bgRgb[1]},${bgRgb[2]},0)`);
+  scrim.addColorStop(1, `rgba(${bgRgb[0]},${bgRgb[1]},${bgRgb[2]},0.72)`);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = scrim;
+  ctx.fillRect(0, C.scrimTop, width, C.scrimHeight);
+
+  ctx.fillStyle = palette.foreground;
   ctx.globalAlpha = POSTER_TITLE_OPACITY;
-  ctx.font = `${POSTER_TITLE_FONT_WEIGHT} ${fittedTitle.fontSize}px sans-serif`;
-  fillTextTracked(ctx, title, L.cx, L.titleBaseline, fittedTitle.tracking);
+  for (const line of C.titleLines) {
+    ctx.font = `${POSTER_TITLE_FONT_WEIGHT} ${line.fontSize}px ${POSTER_TITLE_FAMILY}`;
+    fillTextTracked(ctx, line.text, C.cx, line.baseline, line.tracking);
+  }
 
   ctx.globalAlpha = POSTER_RULE_OPACITY;
-  ctx.fillRect(L.cx - L.ruleHalf, L.ruleY - L.ruleThickness / 2, L.ruleHalf * 2, L.ruleThickness);
+  ctx.fillRect(C.rule.x, C.rule.y, C.rule.width, C.rule.height);
 
-  if (meta) {
-    const metaText = posterMetaLine(meta);
-    const fittedMeta = fitLabelText(metaText, L.subSize, 0.12, width * 0.88);
+  if (C.meta) {
     ctx.globalAlpha = POSTER_META_OPACITY;
-    ctx.font = `${fittedMeta.fontSize}px sans-serif`;
-    fillTextTracked(ctx, metaText, L.cx, L.subBaseline, fittedMeta.tracking);
+    ctx.font = `${C.meta.fontSize}px ${POSTER_META_FAMILY}`;
+    fillTextTracked(ctx, C.meta.text, C.cx, C.meta.baseline, C.meta.tracking);
   }
   ctx.globalAlpha = 1;
 }
@@ -394,25 +605,46 @@ export function renderSceneCanvas(
 
   for (const stroke of scene.strokes) {
     if (stroke.points.length === 0) continue;
+    // Background-role strokes are occlusion shapes (they hide strokes behind
+    // them). On a transparent export, painting them in the palette background
+    // would leave opaque blobs — erase to transparency instead.
+    const erase = transparent && stroke.role === "background";
+    ctx.globalAlpha = stroke.opacity ?? 1;
+    const color = strokeColor(stroke, palette);
+
+    // Glow strokes get a two-pass treatment: a wide soft halo (large
+    // shadowBlur, reduced alpha) lays down the bloom, then the crisp stroke
+    // paints on top at full alpha. This reads as luminous emission rather
+    // than a flat shadow ring, and the halo's lower alpha prevents it from
+    // washing out adjacent strokes.
+    if (stroke.glow && !erase) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 14 * renderScale;
+      ctx.globalAlpha = (stroke.opacity ?? 1) * 0.45;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = (stroke.width ?? params.lineWidth) * 1.4;
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      for (let i = 1; i < stroke.points.length; i++) {
+        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      }
+      if (stroke.closed) ctx.closePath();
+      ctx.stroke();
+      // Reset for the crisp pass.
+      ctx.shadowBlur = 5 * renderScale;
+      ctx.globalAlpha = stroke.opacity ?? 1;
+      ctx.lineWidth = stroke.width ?? params.lineWidth;
+    } else {
+      ctx.shadowBlur = stroke.glow ? 5 * renderScale : 0;
+    }
+
     ctx.beginPath();
     ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
     for (let i = 1; i < stroke.points.length; i++) {
       ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
     }
     if (stroke.closed) ctx.closePath();
-    ctx.globalAlpha = stroke.opacity ?? 1;
-    const color = strokeColor(stroke, palette);
-    if (stroke.glow) {
-      ctx.shadowColor = color;
-      // shadowBlur is not affected by the canvas transform: scale it manually.
-      ctx.shadowBlur = 8 * renderScale;
-    } else {
-      ctx.shadowBlur = 0;
-    }
-    // Background-role strokes are occlusion shapes (they hide strokes behind
-    // them). On a transparent export, painting them in the palette background
-    // would leave opaque blobs — erase to transparency instead.
-    const erase = transparent && stroke.role === "background";
+
     if (erase) ctx.globalCompositeOperation = "destination-out";
     if (stroke.fill) {
       ctx.fillStyle = color;
@@ -464,8 +696,9 @@ function applyGrain(
   const rng = mulberry32(hashSeed(params.seed + ":grain"));
   // Tile layout stays in logical pixels (same tiling as the preview), but the
   // noise is generated at device resolution so exports get per-pixel grain
-  // instead of an upscaled, blurry 128px tile.
-  const tileSize = 128;
+  // instead of an upscaled, blurry tile. A smaller tile (96 vs 128) gives
+  // finer, more film-like grain rather than coarse digital noise.
+  const tileSize = 96;
   const deviceTile = Math.max(1, Math.round(tileSize * scale));
   const noiseCanvas = document.createElement("canvas");
   noiseCanvas.width = deviceTile;
@@ -474,14 +707,23 @@ function applyGrain(
   if (!noiseCtx) return;
   const imageData = noiseCtx.createImageData(deviceTile, deviceTile);
   const data = imageData.data;
+  // Two-octave noise: a coarse base + a fine high-frequency layer, so the
+  // grain has texture rather than being uniform static. The fine layer is
+  // weighted lower so it reads as sparkle, not interference.
   for (let i = 0; i < data.length; i += 4) {
-    const n = (rng() - 0.5) * params.grain * 60;
+    const coarse = (rng() - 0.5) * params.grain * 50;
+    const fine = (rng() - 0.5) * params.grain * 30;
+    const n = coarse + fine * 0.4;
     data[i] = data[i + 1] = data[i + 2] = Math.max(0, Math.min(255, 128 + n));
-    data[i + 3] = Math.round(params.grain * 80);
+    // Alpha tapers with grain intensity; the soft cap keeps it from
+    // overwhelming the artwork at high settings.
+    data[i + 3] = Math.round(Math.min(100, params.grain * 75));
   }
   noiseCtx.putImageData(imageData, 0, 0);
   const prev = ctx.globalCompositeOperation;
-  ctx.globalCompositeOperation = "overlay";
+  // "soft-light" is gentler than "overlay" — it reads as photographic grain
+  // rather than a contrast filter, preserving midtones better.
+  ctx.globalCompositeOperation = "soft-light";
   for (let y = 0; y < height; y += tileSize) {
     for (let x = 0; x < width; x += tileSize) {
       ctx.drawImage(noiseCanvas, x, y, tileSize, tileSize);
@@ -509,9 +751,10 @@ function strokeToPath(stroke: Stroke): string {
 }
 
 /**
- * SVG twin of drawPosterTitleBlock: identical layout math (posterLayout),
- * letter-spacing attributes for the tracking, and the same trailing-space
- * centering compensation (+tracking/2 with text-anchor="middle").
+ * SVG twin of drawPosterTitleBlock: identical layout math
+ * (composePosterTitle), letter-spacing attributes for the tracking, and the
+ * same trailing-space centering compensation (+tracking/2 with
+ * text-anchor="middle"). The legibility scrim is a linearGradient rect.
  */
 function posterTitleSvg(
   label: string,
@@ -520,20 +763,25 @@ function posterTitleSvg(
   height: number,
   meta?: ArtworkMeta,
 ): string {
-  const L = posterLayout(width, height);
+  const C = composePosterTitle(label, width, height, meta);
   const fg = palette.foreground;
   const n = (v: number) => +v.toFixed(2);
-  const title = label.toUpperCase();
-  const fittedTitle = fitLabelText(title, L.titleSize, 0.28, width * 0.88);
-  const parts = [
-    `<text x="${n(L.cx + fittedTitle.tracking / 2)}" y="${n(L.titleBaseline)}" text-anchor="middle" font-family="sans-serif" font-weight="${POSTER_TITLE_FONT_WEIGHT}" font-size="${n(fittedTitle.fontSize)}" letter-spacing="${n(fittedTitle.tracking)}" fill="${fg}" opacity="${POSTER_TITLE_OPACITY}">${escapeXml(title)}</text>`,
-    `<rect x="${n(L.cx - L.ruleHalf)}" y="${n(L.ruleY - L.ruleThickness / 2)}" width="${n(L.ruleHalf * 2)}" height="${n(L.ruleThickness)}" fill="${fg}" opacity="${POSTER_RULE_OPACITY}"/>`,
-  ];
-  if (meta) {
-    const metaText = posterMetaLine(meta);
-    const fittedMeta = fitLabelText(metaText, L.subSize, 0.12, width * 0.88);
+  const bgRgb = hexToRgb(palette.background);
+  const scrimId = "strata-poster-scrim";
+  const scrim = `<defs><linearGradient id="${scrimId}" x1="0" y1="${n(C.scrimTop)}" x2="0" y2="${n(height)}" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="rgb(${bgRgb[0]},${bgRgb[1]},${bgRgb[2]})" stop-opacity="0"/><stop offset="1" stop-color="rgb(${bgRgb[0]},${bgRgb[1]},${bgRgb[2]})" stop-opacity="0.72"/></linearGradient></defs>`;
+  const scrimRect = `<rect x="0" y="${n(C.scrimTop)}" width="${n(width)}" height="${n(C.scrimHeight)}" fill="url(#${scrimId})"/>`;
+  const parts = [scrim, scrimRect];
+  for (const line of C.titleLines) {
     parts.push(
-      `<text x="${n(L.cx + fittedMeta.tracking / 2)}" y="${n(L.subBaseline)}" text-anchor="middle" font-family="sans-serif" font-size="${n(fittedMeta.fontSize)}" letter-spacing="${n(fittedMeta.tracking)}" fill="${fg}" opacity="${POSTER_META_OPACITY}">${escapeXml(metaText)}</text>`,
+      `<text x="${n(C.cx + line.tracking / 2)}" y="${n(line.baseline)}" text-anchor="middle" font-family='${POSTER_TITLE_FAMILY}' font-weight="${POSTER_TITLE_FONT_WEIGHT}" font-size="${n(line.fontSize)}" letter-spacing="${n(line.tracking)}" fill="${fg}" opacity="${POSTER_TITLE_OPACITY}">${escapeXml(line.text)}</text>`,
+    );
+  }
+  parts.push(
+    `<rect x="${n(C.rule.x)}" y="${n(C.rule.y)}" width="${n(C.rule.width)}" height="${n(C.rule.height)}" fill="${fg}" opacity="${POSTER_RULE_OPACITY}"/>`,
+  );
+  if (C.meta) {
+    parts.push(
+      `<text x="${n(C.cx + C.meta.tracking / 2)}" y="${n(C.meta.baseline)}" text-anchor="middle" font-family='${POSTER_META_FAMILY}' font-size="${n(C.meta.fontSize)}" letter-spacing="${n(C.meta.tracking)}" fill="${fg}" opacity="${POSTER_META_OPACITY}">${escapeXml(C.meta.text)}</text>`,
     );
   }
   return `\n  ${parts.join("\n  ")}`;
@@ -581,7 +829,10 @@ export function sceneToSvg(
 
   const defs: string[] = [];
   if (hasGlow) {
-    defs.push('<filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>');
+    // Two-stage blur: a wide halo (stdDeviation 5) merged under a tighter
+    // bloom (stdDeviation 2), then the source on top — mirrors the canvas
+    // two-pass glow so SVG exports have the same luminous quality.
+    defs.push('<filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5" result="halo"/><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="bloom"/><feMerge><feMergeNode in="halo"/><feMergeNode in="bloom"/><feMergeNode in="SourceGraphic"/></feMerge></filter>');
   }
   if (params.grain > 0) {
     const turbScale = 0.6 + params.grain * 1.5;

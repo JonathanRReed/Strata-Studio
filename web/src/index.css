@@ -26,6 +26,22 @@
   --font-display: "Archivo Variable", system-ui, sans-serif;
   --font-sans: "Archivo Variable", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /*
+   * Motion language: an instrument settles, it never bounces. Every curve is
+   * an exponential ease-out so movement decelerates hard into its final
+   * position; nothing overshoots. `--ease-press` is the one near-linear curve,
+   * used for sub-100ms tactile feedback where easing would read as lag.
+   */
+  --ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-instrument: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-press: cubic-bezier(0.3, 0, 0.4, 1);
+
+  /* Duration scale. Press is felt, state is read, surfaces are watched. */
+  --dur-press: 90ms;
+  --dur-state: 180ms;
+  --dur-surface: 260ms;
+  --dur-stage: 420ms;
 }
 
 html,
@@ -84,6 +100,139 @@ body {
   to {
     visibility: hidden;
   }
+}
+
+/*
+ * ——— Entrance choreography ———
+ * Surfaces do not fade in place; they arrive. Each keyframe pairs opacity
+ * with a small positional or optical change so the eye is told where the
+ * surface came from. Every animation uses `both` fill so the element is
+ * never rendered in its pre-animation state on a dropped frame, and every
+ * one ends at the element's natural, fully-visible values — so the
+ * reduced-motion blanket below lands on a correct final state rather than
+ * hiding content.
+ */
+
+/* Modal/dialog panels rise and resolve, like a plate seated into a mount. */
+@keyframes strata-panel-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* The scrim ramps its own blur so the stage recedes rather than dimming. */
+@keyframes strata-scrim-in {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0px);
+  }
+  to {
+    opacity: 1;
+    backdrop-filter: blur(3px);
+  }
+}
+
+/* Edge-anchored cards slide in from the edge they are pinned to. */
+@keyframes strata-card-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Status/error banners drop from the top rail. */
+@keyframes strata-banner-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/*
+ * The caption plate under the artwork. A readout does not slide — it
+ * resolves, the way a measurement settles once the instrument stops moving.
+ */
+@keyframes strata-readout-in {
+  from {
+    opacity: 0;
+    letter-spacing: 0.34em;
+  }
+  to {
+    opacity: 1;
+    letter-spacing: 0.12em;
+  }
+}
+
+.enter-panel {
+  animation: strata-panel-in var(--dur-surface) var(--ease-settle) both;
+}
+/* Native dialog backdrop ramps its own blur so the stage recedes. */
+dialog.enter-panel::backdrop {
+  animation: strata-scrim-in var(--dur-state) linear both;
+}
+.enter-scrim {
+  animation: strata-scrim-in var(--dur-state) linear both;
+}
+.enter-card {
+  animation: strata-card-in var(--dur-surface) var(--ease-settle) both;
+}
+.enter-banner {
+  animation: strata-banner-in var(--dur-state) var(--ease-settle) both;
+}
+.enter-readout {
+  animation: strata-readout-in var(--dur-stage) var(--ease-instrument) both;
+}
+
+/*
+ * Indeterminate progress shimmer for single-shot exports (PNG/SVG fetch +
+ * render). The bar sweeps across the track so the user sees motion without a
+ * fake percentage, which would be dishonest for a job with no known total.
+ */
+@keyframes strata-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+.strata-shimmer {
+  animation: strata-shimmer 1.4s var(--ease-instrument) infinite;
+}
+
+/*
+ * Tactile press. Buttons take a 1px seat and darken; the transform is
+ * hardware-composited and the duration is short enough to read as contact
+ * rather than animation. Applied via a class so every control in the app
+ * shares one press feel instead of re-deriving it per component.
+ */
+.press {
+  transition:
+    background-color var(--dur-state) var(--ease-settle),
+    border-color var(--dur-state) var(--ease-settle),
+    color var(--dur-state) var(--ease-settle),
+    transform var(--dur-press) var(--ease-press),
+    opacity var(--dur-state) var(--ease-settle);
+}
+.press:active:not(:disabled) {
+  transform: translateY(1px);
+}
+/* Thumbnail/tile presses seat inward instead of downward. */
+.press-tile:active:not(:disabled) {
+  transform: scale(0.985);
 }
 
 .maplibregl-canvas:focus {

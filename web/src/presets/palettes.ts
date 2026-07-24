@@ -4,7 +4,7 @@ export const palettes: Record<string, Palette> = {
   monochrome: {
     background: "#000000",
     foreground: "#ffffff",
-    accent: "#ffffff",
+    accent: "#888888",
     water: "#9a9a9a",
     ocean: "#7d7d7d",
     lake: "#a8a8a8",
@@ -22,7 +22,7 @@ export const palettes: Record<string, Palette> = {
   blueprint: {
     background: "#0a1f2b",
     foreground: "#a5d8ff",
-    accent: "#ffffff",
+    accent: "#ffd84d",
     water: "#4aa3df",
     ocean: "#2e7fb8",
     lake: "#5db4ea",
@@ -40,7 +40,7 @@ export const palettes: Record<string, Palette> = {
   desert: {
     background: "#1c1410",
     foreground: "#e6c2a0",
-    accent: "#ff8c42",
+    accent: "#ff5722",
     water: "#3f7f8c",
     ocean: "#4a8a93",
     lake: "#4c93a0",
@@ -49,7 +49,7 @@ export const palettes: Record<string, Palette> = {
   glacier: {
     background: "#051a25",
     foreground: "#d6f3ff",
-    accent: "#8fd6ff",
+    accent: "#4d9fff",
     water: "#3d9dc9",
     ocean: "#2478a3",
     lake: "#51aed6",
@@ -58,7 +58,7 @@ export const palettes: Record<string, Palette> = {
   midnight: {
     background: "#0b0f1a",
     foreground: "#8b97c4",
-    accent: "#e0aaff",
+    accent: "#f0b4ff",
     water: "#3b5bdb",
     ocean: "#4a6ce0",
     lake: "#4a6cf0",
@@ -67,7 +67,7 @@ export const palettes: Record<string, Palette> = {
   forest: {
     background: "#101f14",
     foreground: "#b8d8b8",
-    accent: "#e3d26f",
+    accent: "#f0d040",
     water: "#3e8e8c",
     ocean: "#2f716f",
     lake: "#4ba3a0",
@@ -112,7 +112,7 @@ export const palettes: Record<string, Palette> = {
   twilight: {
     background: "#1e1b4b",
     foreground: "#c7d2fe",
-    accent: "#f472b6",
+    accent: "#ff7eb6",
     water: "#38bdf8",
     ocean: "#2196d1",
     lake: "#4fc8fa",
@@ -121,7 +121,7 @@ export const palettes: Record<string, Palette> = {
   copper: {
     background: "#14100c",
     foreground: "#d9a066",
-    accent: "#f2e3c6",
+    accent: "#fff4d6",
     water: "#4c8577",
     ocean: "#3b6a5f",
     lake: "#5c9a8b",
@@ -139,7 +139,7 @@ export const palettes: Record<string, Palette> = {
   aurora: {
     background: "#04121e",
     foreground: "#9be8c8",
-    accent: "#c084fc",
+    accent: "#d4a5ff",
     water: "#2dd4bf",
     ocean: "#14a89a",
     lake: "#3ce0cc",

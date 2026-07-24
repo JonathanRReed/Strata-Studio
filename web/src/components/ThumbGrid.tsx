@@ -120,7 +120,7 @@ export function ThumbGrid({
             onClick={() => onSelect(item.id)}
             aria-pressed={isSelected}
             title={item.label}
-            className={`flex min-h-11 w-full flex-col gap-1.5 rounded-sm border p-1.5 text-left transition-colors ${
+            className={`press press-tile flex min-h-11 w-full flex-col gap-1.5 rounded-sm border p-1.5 text-left ${
               isSelected
                 ? "border-signal bg-surface-2"
                 : "border-hairline bg-surface hover:border-hairline-2 hover:bg-surface-2"

@@ -104,7 +104,7 @@ export function VariationsDialog({
             data-modal-initial-focus
             onClick={onClose}
             aria-label="Close variations"
-            className="-m-2 flex h-11 w-11 items-center justify-center text-ink-muted transition-colors hover:text-ink"
+            className="-m-2 flex h-11 w-11 items-center justify-center text-ink-muted press hover:text-ink"
           >
             <span aria-hidden="true">✕</span>
           </button>
@@ -118,7 +118,7 @@ export function VariationsDialog({
                 type="button"
                 onClick={() => onAdopt(seed)}
                 title={`Use seed ${seed}`}
-                className="group flex flex-col gap-1.5 rounded-sm border border-hairline bg-surface p-1.5 text-left transition-colors hover:border-signal hover:bg-surface-2"
+                className="group flex flex-col gap-1.5 rounded-sm border border-hairline bg-surface p-1.5 text-left press press-tile hover:border-signal hover:bg-surface-2"
               >
                 <canvas
                   ref={(el) => {
@@ -147,7 +147,7 @@ export function VariationsDialog({
           type="button"
           onClick={() => setSeeds(dealSeeds(VARIATION_COUNT, params.seed))}
           disabled={!grid}
-          className="flex min-h-11 items-center justify-center gap-2 rounded-sm border border-hairline-2 px-3 text-[13px] text-ink transition-colors hover:bg-surface-2 disabled:opacity-50"
+          className="flex min-h-11 items-center justify-center gap-2 rounded-sm border border-hairline-2 px-3 text-[13px] text-ink press hover:bg-surface-2 disabled:opacity-50"
         >
           <span aria-hidden="true">⟳</span>
           Deal {VARIATION_COUNT} new seeds

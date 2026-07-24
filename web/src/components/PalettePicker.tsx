@@ -136,7 +136,7 @@ function PaletteEditor({
         <button
           type="button"
           onClick={onCancel}
-          className="text-[12px] text-ink-muted transition-colors hover:text-ink"
+          className="text-[12px] text-ink-muted press hover:text-ink"
           aria-label="Close editor"
         >
           Cancel
@@ -186,7 +186,7 @@ function PaletteEditor({
           <button
             type="button"
             onClick={onCancel}
-            className="flex min-h-11 flex-1 items-center justify-center rounded-sm border border-hairline-2 text-[12px] text-ink transition-colors hover:bg-surface"
+            className="flex min-h-11 flex-1 items-center justify-center rounded-sm border border-hairline-2 text-[12px] text-ink press hover:bg-surface"
           >
             Cancel
           </button>
@@ -236,7 +236,7 @@ export function PalettePicker({
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="flex min-h-9 items-center rounded-sm border border-hairline-2 px-2.5 text-[12px] text-ink transition-colors hover:bg-surface-2"
+          className="flex min-h-9 items-center rounded-sm border border-hairline-2 px-2.5 text-[12px] text-ink press hover:bg-surface-2"
         >
           {isOpen ? "Close" : baseId ? "Edit palette" : "New palette"}
         </button>
@@ -270,7 +270,7 @@ export function PalettePicker({
                   setDeleteConfirmId(null);
                 }}
                 aria-pressed={isSelected}
-                className={`w-full rounded-sm border p-2 text-left transition-colors ${
+                className={`press press-tile w-full rounded-sm border p-2 text-left ${
                   isSelected
                     ? "border-signal bg-surface-2"
                     : "border-hairline bg-surface hover:border-hairline-2 hover:bg-surface-2"
@@ -323,7 +323,7 @@ export function PalettePicker({
                       setDeleteConfirmId(id);
                     }
                   }}
-                  className={`absolute right-1 top-1 flex h-6 items-center justify-center rounded-sm text-[12px] transition-colors hover:bg-surface-2 ${
+                  className={`absolute right-1 top-1 flex h-6 items-center justify-center rounded-sm text-[12px] press hover:bg-surface-2 ${
                     deleteConfirmId === id
                       ? "w-auto px-1.5 text-alarm"
                       : "w-6 text-ink-faint hover:text-alarm"

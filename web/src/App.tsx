@@ -43,6 +43,7 @@ import {
 } from "./app/bootSelection.ts";
 import { normalizeStyleParams } from "./app/stateSafety.ts";
 import { detectCapabilities } from "./app/capabilities.ts";
+import { ensurePosterFonts } from "./engine/posterFonts.ts";
 import {
   prepareImportedComposition,
   readCompositionFile,
@@ -257,6 +258,22 @@ export default function App() {
     if (!claimInitialGeneration(initialGenerateStartedRef)) return;
     handleGenerateRef.current();
   }, []);
+
+  // The poster title block is set in Archivo Variable + IBM Plex Mono. Canvas
+  // text silently falls back to system fonts until the webfont is in memory, so
+  // force-load the faces on mount and repaint once they're ready — otherwise
+  // the first preview frame (and any export raced before fonts settle) would
+  // be set in the wrong typeface.
+  useEffect(() => {
+    let cancelled = false;
+    void ensurePosterFonts().then(() => {
+      if (cancelled) return;
+      notifyCanvasResized();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [notifyCanvasResized]);
 
   const handleRetry = useCallback(() => {
     retryTerrain(() => handleGenerateRef.current());

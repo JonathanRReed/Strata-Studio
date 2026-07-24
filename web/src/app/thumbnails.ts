@@ -1,6 +1,7 @@
 import { buildFeatureMasks } from "../engine/maskRasterizer.ts";
 import { renderStyleCanvas } from "../studios/registry.ts";
 import { sampleFeatures, sampleHeightmap } from "../data/sampleHeightmap.ts";
+import { PREVIEW_SIZE } from "./aspect.ts";
 import type {
   ArtworkInput,
   ElevationGrid,
@@ -10,6 +11,23 @@ import type {
 
 /** Default thumbnail edge length in pixels (thumbnails are always square). */
 export const THUMBNAIL_SIZE = 96;
+
+/**
+ * Logical space every thumbnail is COMPOSED in, independent of the pixel size
+ * it is rasterized to.
+ *
+ * This must equal the preview's logical size. `spacing` and `lineWidth` are
+ * absolute logical values, so composing a thumbnail in its own 96-unit space
+ * (as this module used to) changed two things at once: `spacing` yielded ~5×
+ * fewer lines, and a 1.2-unit stroke covered 1.25% of the frame instead of
+ * 0.23% — over five times its true relative weight. Dense line styles
+ * collapsed into a solid mass and read as tonally inverted, so the style and
+ * variation pickers showed something the renderer would never produce.
+ *
+ * Composing at PREVIEW_SIZE and letting the canvas transform scale down makes
+ * every thumbnail a true miniature of the artwork.
+ */
+export const THUMBNAIL_LOGICAL_SIZE = PREVIEW_SIZE;
 
 /** Maximum number of rendered thumbnails kept in the module cache. */
 export const THUMBNAIL_CACHE_CAP = 64;
@@ -154,13 +172,17 @@ export function renderThumbnail(
 
   const effective: StyleParams = { ...params, ...THUMBNAIL_PARAM_OVERRIDES };
   const grid = gridOverride ?? sampleHeightmap;
+  // Composed at the preview's logical size; the canvas transform in
+  // renderSceneCanvas scales the result down to `size` device pixels, so the
+  // thumbnail is a faithful miniature rather than a differently-composed image.
+  const logical = THUMBNAIL_LOGICAL_SIZE;
   const input: ArtworkInput = {
     bounds: grid.bounds,
     elevationGrid: grid,
     features: gridOverride ? undefined : sampleFeatures,
-    masks: gridOverride ? undefined : getSampleMasks(size),
-    width: size,
-    height: size,
+    masks: gridOverride ? undefined : getSampleMasks(logical),
+    width: logical,
+    height: logical,
     seed: effective.seed,
   };
 

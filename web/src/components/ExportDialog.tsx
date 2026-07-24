@@ -72,9 +72,9 @@ const ANIM_FORMATS: { value: AnimationFormat; label: string; desc: string }[] = 
 ];
 
 const optionRowClass =
-  "flex min-h-11 cursor-pointer items-center gap-3 rounded-sm border border-hairline px-3 py-2 transition-colors hover:border-hairline-2 peer-checked:border-signal peer-checked:bg-surface-2 peer-focus-visible:ring-2 peer-focus-visible:ring-signal";
+  "flex min-h-11 cursor-pointer items-center gap-3 rounded-sm border border-hairline px-3 py-2 press hover:border-hairline-2 peer-checked:border-signal peer-checked:bg-surface-2 peer-focus-visible:ring-2 peer-focus-visible:ring-signal";
 const shareButtonClass =
-  "flex min-h-11 flex-1 items-center justify-center rounded-sm border border-hairline-2 px-3 text-[13px] text-ink transition-colors hover:bg-surface-2 disabled:opacity-50";
+  "flex min-h-11 flex-1 items-center justify-center rounded-sm border border-hairline-2 px-3 text-[13px] text-ink press hover:bg-surface-2 disabled:opacity-50";
 const dialogClass =
   "m-auto max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-md overflow-y-auto rounded-sm border border-hairline-2 bg-surface p-0 text-ink shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop:bg-ground/80";
 
@@ -178,7 +178,7 @@ export function ExportDialog(props: Props) {
           onClick={requestClose}
           disabled={busy}
           aria-label={busy ? "Export in progress; use Cancel first" : "Close export dialog"}
-          className="-m-2 flex h-11 w-11 items-center justify-center text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+          className="-m-2 flex h-11 w-11 items-center justify-center text-ink-muted press hover:text-ink disabled:opacity-40"
         >
           <span aria-hidden="true">✕</span>
         </button>
@@ -202,7 +202,7 @@ export function ExportDialog(props: Props) {
                 className="peer sr-only"
               />
               <span
-                className={`flex h-11 cursor-pointer items-center justify-center border-b-2 font-mono text-[12px] uppercase tracking-[0.08em] transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-signal ${
+                className={`flex h-11 cursor-pointer items-center justify-center border-b-2 font-mono text-[12px] uppercase tracking-[0.08em] press peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-signal ${
                   format === value
                     ? "border-signal bg-surface-2 text-ink"
                     : "border-transparent text-ink-muted hover:text-ink"
@@ -277,7 +277,7 @@ export function ExportDialog(props: Props) {
           onClick={() => void handleExport()}
           disabled={exportDisabled}
           aria-busy={busy}
-          className="display flex h-11 w-full items-center justify-center rounded-sm bg-signal text-[13px] tracking-[0.08em] text-ground transition-colors hover:bg-signal/90 disabled:opacity-50"
+          className="display flex h-11 w-full items-center justify-center rounded-sm border border-signal/70 bg-signal/12 text-[13px] tracking-[0.08em] text-signal press hover:border-signal hover:bg-signal/20 hover:text-ink disabled:opacity-50"
         >
           {busy ? <span className="status-live">Working</span> : "Export"}
         </button>
@@ -285,7 +285,7 @@ export function ExportDialog(props: Props) {
           <button
             type="button"
             onClick={onCancel}
-            className="instrument-label flex h-10 w-full items-center justify-center rounded-sm border border-hairline-2 text-ink transition-colors hover:bg-surface-2"
+            className="instrument-label flex h-10 w-full items-center justify-center rounded-sm border border-hairline-2 text-ink press hover:bg-surface-2"
           >
             Cancel
           </button>
@@ -296,6 +296,14 @@ export function ExportDialog(props: Props) {
               className="h-full bg-signal transition-all"
               style={{ width: `${Math.round(animationStatus.progress * 100)}%` }}
             />
+          </div>
+        )}
+        {/* Static export (PNG/SVG) indeterminate progress — the work is
+            single-shot (fetch + render), so a shimmering bar communicates
+            "working" without a fake percentage. */}
+        {(exportStatus.phase === "fetching" || exportStatus.phase === "rendering") && (
+          <div className="h-1.5 w-full overflow-hidden rounded-sm bg-surface-2">
+            <div className="strata-shimmer h-full w-1/3 bg-signal" />
           </div>
         )}
         {activeMessage && (
@@ -314,7 +322,7 @@ export function ExportDialog(props: Props) {
             <button
               type="button"
               onClick={onDismissErrors}
-              className="instrument-label flex h-9 w-fit items-center rounded-sm border border-hairline-2 px-3 text-ink-muted transition-colors hover:bg-surface-2"
+              className="instrument-label flex h-9 w-fit items-center rounded-sm border border-hairline-2 px-3 text-ink-muted press hover:bg-surface-2"
             >
               Dismiss
             </button>

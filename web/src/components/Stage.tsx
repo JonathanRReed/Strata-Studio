@@ -101,7 +101,7 @@ function formatCaption(
 }
 
 const retryButtonClass =
-  "instrument-label flex h-9 items-center rounded-sm border border-alarm/40 px-3 text-alarm transition-colors hover:bg-alarm/10";
+  "instrument-label press flex h-9 items-center rounded-sm border border-alarm/40 px-3 text-alarm hover:bg-alarm/10";
 
 /**
  * The main stage: artwork presented museum-style on a palette-tinted wall,
@@ -241,7 +241,7 @@ export function Stage({
         className={
           mapExpanded
             ? "fixed inset-0 z-40 flex bg-ground/60 p-4 sm:p-8 lg:absolute lg:p-[7%]"
-            : "absolute bottom-3 left-3 z-20 h-[120px] w-[120px] border border-hairline-2 bg-surface shadow-[0_12px_32px_rgba(0,0,0,0.5)] max-lg:overflow-hidden max-lg:rounded-sm lg:bottom-6 lg:left-6 lg:h-[240px] lg:w-[240px] lg:shadow-[0_16px_48px_rgba(0,0,0,0.5)] 2xl:h-[300px] 2xl:w-[300px]"
+            : "absolute bottom-3 left-3 z-20 h-[120px] w-[120px] border border-hairline-2 bg-surface shadow-[0_12px_32px_rgba(0,0,0,0.5)] max-lg:overflow-hidden max-lg:rounded-sm lg:bottom-6 lg:left-6 lg:h-[200px] lg:w-[200px] lg:shadow-[0_16px_48px_rgba(0,0,0,0.5)] 2xl:h-[260px] 2xl:w-[260px]"
         }
         onClick={(e) => {
           if (mapExpanded && e.target === e.currentTarget) onToggleMapExpand();
@@ -288,31 +288,32 @@ export function Stage({
 
       {/* Artwork wall. Below lg it fills the stage (viewport minus the sheet's
           collapsed chrome) so the artwork owns the screen. At lg–2xl the wall
-          reserves a left column for the floating viewfinder so it never
-          occludes the frame or caption; at 2xl+ the artwork is fully centered
-          museum-style and the (larger) viewfinder floats clear of the caption. */}
+          reserves a modest left margin for the floating viewfinder; at 2xl+
+          the artwork is fully centered museum-style and the viewfinder floats
+          clear of the caption. The viewfinder is compact (280px) and floats
+          at the top-left, so the artboard claims the majority of the width. */}
       <div
         inert={mapExpanded ? true : undefined}
-        className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-[144px] pt-12 lg:h-auto lg:min-h-0 lg:flex-1 lg:pb-8 lg:pl-[296px] lg:pr-10 lg:pt-14 2xl:pl-10"
+        className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-[144px] pt-12 lg:h-auto lg:min-h-0 lg:flex-1 lg:pb-8 lg:pl-[200px] lg:pr-8 lg:pt-14 2xl:pl-10"
       >
         {orientation && <OrientationCard {...orientation} />}
         {/* Status pill rail — top-center of the artwork area, so it never
             covers the stacked viewfinder or the caption plate. */}
         <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex flex-col items-center gap-2 px-4 lg:top-6">
           {isGenerating && statusText && (
-            <div className="pointer-events-auto flex min-h-9 items-center rounded-sm border border-hairline bg-surface px-4">
+            <div className="enter-banner pointer-events-auto flex min-h-9 items-center rounded-sm border border-hairline bg-surface px-4">
               <span className="instrument-label status-live text-ink" role="status">
                 {statusText}
               </span>
             </div>
           )}
           {showStale && (
-            <div className="hatched pointer-events-auto flex items-center gap-3 rounded-sm border border-amber/40 bg-surface p-1.5 pl-4">
+            <div className="enter-banner hatched pointer-events-auto flex items-center gap-3 rounded-sm border border-amber/40 bg-surface p-1.5 pl-4">
               <span className="instrument-label text-amber">Selection moved — artwork stale</span>
               <button
                 type="button"
                 onClick={onRegenerate}
-                className="instrument-label flex h-8 items-center rounded-sm bg-amber px-3 text-ground transition-opacity hover:opacity-85"
+                className="instrument-label press flex h-8 items-center rounded-sm bg-amber px-3 text-ground hover:opacity-85"
               >
                 Regenerate now
               </button>
@@ -321,7 +322,7 @@ export function Stage({
           {errorMessage && (
             <div
               role="alert"
-              className="pointer-events-auto flex w-full max-w-xl flex-col gap-2.5 rounded-sm border border-alarm/40 bg-surface p-3"
+              className="enter-banner pointer-events-auto flex w-full max-w-xl flex-col gap-2.5 rounded-sm border border-alarm/40 bg-surface p-3"
             >
               <p className="text-[12px] leading-snug text-alarm">{errorMessage}</p>
               <div className="flex flex-wrap items-center gap-2">
@@ -333,7 +334,7 @@ export function Stage({
                 <button
                   type="button"
                   onClick={onDismissError}
-                  className="instrument-label flex h-9 items-center rounded-sm border border-hairline-2 px-3 text-ink-muted transition-colors hover:bg-surface-2"
+                  className="instrument-label press flex h-9 items-center rounded-sm border border-hairline-2 px-3 text-ink-muted hover:bg-surface-2"
                 >
                   Dismiss
                 </button>
@@ -343,16 +344,24 @@ export function Stage({
           {warning && (
             <div
               role="status"
-              className="hatched pointer-events-auto flex min-h-9 max-w-xl items-center rounded-sm border border-amber/40 bg-surface px-4 py-1.5"
+              className="enter-banner hatched pointer-events-auto flex min-h-9 max-w-xl items-center rounded-sm border border-amber/40 bg-surface px-4 py-1.5"
             >
               <span className="text-[12px] leading-snug text-amber">{warning}</span>
             </div>
           )}
         </div>
         {!artworkVisible && (
-          <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="enter-panel pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center">
             <p className="display text-3xl tracking-[0.06em] text-ink sm:text-4xl">Strata Studio</p>
             <p className="text-sm text-ink-muted">Real places, rendered like sound.</p>
+          </div>
+        )}
+        {/* Permanent watermark — the wordmark stays as a quiet corner mark
+            even after the artwork arrives, so the surface always identifies
+            itself. Fades to near-invisible so it never competes with the art. */}
+        {artworkVisible && (
+          <div className="pointer-events-none absolute bottom-3 right-3 z-10 select-none">
+            <p className="display text-[10px] tracking-[0.14em] text-ink-faint/40">STRATA</p>
           </div>
         )}
         <Artboard
@@ -367,13 +376,13 @@ export function Stage({
             artworkVisible ? "" : "invisible"
           }`}
         >
-          <p className="instrument-label text-center text-ink-faint">{caption}</p>
+          <p className="instrument-label enter-readout text-center text-ink-faint">{caption}</p>
           {/* Variations ghost button — desktop only; the mobile STYLE tab has its own. */}
           {variationsReady && (
             <button
               type="button"
               onClick={onOpenVariations}
-              className="instrument-label hidden h-7 items-center rounded-sm border border-hairline px-2.5 text-ink-muted transition-colors hover:border-hairline-2 hover:text-ink lg:flex"
+              className="instrument-label press hidden h-7 items-center rounded-sm border border-hairline px-2.5 text-ink-muted hover:border-hairline-2 hover:text-ink lg:flex"
             >
               Variations
             </button>

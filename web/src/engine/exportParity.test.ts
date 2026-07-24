@@ -127,8 +127,10 @@ describe("scene-scale invariance (canvas)", () => {
     const export3x = new StubCtx(300, 300);
     renderSceneCanvas(preview.asCtx(), SCENE, PARAMS, PALETTE, 100, 100);
     renderSceneCanvas(export3x.asCtx(), SCENE, PARAMS, PALETTE, 100, 100);
-    expect(Math.max(...preview.shadowBlurs)).toBe(8);
-    expect(Math.max(...export3x.shadowBlurs)).toBe(24);
+    // The two-pass glow uses a wide halo (14*scale) then a tight bloom
+    // (5*scale). The halo is the largest blur value emitted.
+    expect(Math.max(...preview.shadowBlurs)).toBe(14);
+    expect(Math.max(...export3x.shadowBlurs)).toBe(42);
   });
 
   it("lineWidth stays logical (the canvas transform scales it)", () => {
@@ -149,10 +151,12 @@ describe("transparent-mode compositing", () => {
     const fills = ctx.callsOf("fill");
     expect(fills.length).toBe(1);
     expect(fills[0].gco).toBe("destination-out");
-    // The foreground stroke still paints normally...
+    // The foreground glow stroke paints a wide halo pass then the crisp
+    // stroke — both on source-over (glow is suppressed for erase strokes,
+    // but the foreground stroke is not an erase stroke).
     const strokes = ctx.callsOf("stroke");
-    expect(strokes.length).toBe(1);
-    expect(strokes[0].gco).toBe("source-over");
+    expect(strokes.length).toBe(2);
+    for (const s of strokes) expect(s.gco).toBe("source-over");
     // ...and the op is restored afterwards.
     expect(ctx.globalCompositeOperation).toBe("source-over");
     // Transparent mode clears rather than filling the background.

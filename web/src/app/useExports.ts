@@ -21,6 +21,7 @@ import {
   type ExportProgress,
 } from "../engine/animationExport.ts";
 import { DEFAULT_FRAMES, DEFAULT_FPS } from "../engine/animation.ts";
+import { ensurePosterFonts } from "../engine/posterFonts.ts";
 import type {
   ArtworkInput,
   ElevationGrid,
@@ -227,6 +228,8 @@ export function useExports({
         });
       }
       report?.("rendering", `Rendering ${width}×${height} PNG…`);
+      await ensurePosterFonts();
+      throwIfExportAborted(signal);
       const { canvas, ctx } = createOffscreenCanvas(width, height);
       renderStyleCanvas(styleId, ctx, input, params, allPalettes);
       throwIfExportAborted(signal);

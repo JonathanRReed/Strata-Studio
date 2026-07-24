@@ -1,5 +1,6 @@
 import type { StyleParams, ArtworkInput, Palette, ArtStyle } from "./types.ts";
 import { renderSceneCanvas } from "./scene.ts";
+import { ensurePosterFonts } from "./posterFonts.ts";
 import { getStyle } from "../studios/registry.ts";
 import {
   animateScene,
@@ -360,6 +361,8 @@ export async function exportAnimation(
   const transparent = options.transparent ?? params.transparent ?? false;
   const { signal, onProgress } = options;
   const baseName = `strata-${styleId}-${params.seed}-${input.width}x${input.height}`;
+  throwIfExportAborted(signal);
+  await ensurePosterFonts();
   throwIfExportAborted(signal);
 
   let filename: string;

@@ -145,7 +145,7 @@ export function ModalSurface({
     return (
       <div
         ref={fallbackOverlayRef}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-ground/80 p-4"
+        className="enter-scrim fixed inset-0 z-50 flex items-center justify-center bg-ground/80 p-4"
         onClick={(event: MouseEvent<HTMLDivElement>) => {
           if (event.target === event.currentTarget) requestClose();
         }}
@@ -158,7 +158,7 @@ export function ModalSurface({
           aria-labelledby={ariaLabelledby}
           tabIndex={-1}
           onKeyDown={handleFallbackKeyDown}
-          className={className}
+          className={`enter-panel ${className}`}
         >
           {children}
         </div>
@@ -180,7 +180,7 @@ export function ModalSurface({
       }}
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledby}
-      className={className}
+      className={`enter-panel ${className}`}
     >
       {children}
     </dialog>

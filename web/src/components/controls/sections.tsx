@@ -108,7 +108,7 @@ export function StudioSwitcher({
           onClick={() => {
             if (studio !== s) onStyleChange(stylesByStudio[s][0].id);
           }}
-          className={`flex min-h-11 items-center justify-center border-b-2 px-2 text-[13px] transition-colors ${
+          className={`flex min-h-11 items-center justify-center border-b-2 px-2 text-[13px] press ${
             studio === s
               ? "border-signal bg-surface-2 text-ink"
               : "border-transparent text-ink-muted hover:text-ink"
@@ -124,11 +124,14 @@ export function StudioSwitcher({
 export function StyleSection({
   studio,
   styleId,
+  palette,
   onStyleChange,
   terrainGrid,
 }: {
   studio: Studio;
   styleId: string;
+  /** Current palette id, held constant across the grid so styles are comparable. */
+  palette: string;
   onStyleChange: (styleId: string) => void;
   terrainGrid: ElevationGrid | null;
 }) {
@@ -139,9 +142,17 @@ export function StyleSection({
         id: style.id,
         label: style.name,
         styleId: style.id,
-        params: { ...defaultStyleParams, ...style.defaultParams },
+        /*
+         * The style grid varies exactly ONE thing: the style. Letting each
+         * style contribute its own default palette meant Contour rendered
+         * dark, Flow white-on-black, Blueprint cyan and Woodcut cream, so the
+         * grid compared palettes and styles simultaneously and neither could
+         * be judged. Palette selection has its own control; this grid answers
+         * "what does this style do to my artwork".
+         */
+        params: { ...defaultStyleParams, ...style.defaultParams, palette },
       })),
-    [studio],
+    [studio, palette],
   );
   return (
     <Section id="style-controls-section" title="Style" defaultOpen={true}>
@@ -190,7 +201,7 @@ export function PresetsSection({
   );
 
   return (
-    <Section title="Presets" defaultOpen={true}>
+    <Section title="Presets" defaultOpen={false}>
       <ThumbGrid
         items={presetItems}
         selectedId={null}
@@ -214,7 +225,7 @@ export function TerrainSection({
   const hasAnySlider = ["amplitude", "spacing", "lineWidth", "noise", "detail", "compression", "occlusion"].some((k) => controls.has(k as ControlKey));
   if (!hasAnySlider) return null;
   return (
-    <Section title="Terrain" defaultOpen={true}>
+    <Section title="Terrain" defaultOpen={false}>
       {controls.has("amplitude") && (
         <Slider
           label="Amplitude"
@@ -433,7 +444,7 @@ export function FeaturesSection({
               type="button"
               onClick={() => setShowPerTypeWater(!showPerTypeWater)}
               aria-expanded={showPerTypeWater}
-              className="instrument-label min-h-9 text-left text-ink-faint transition-colors hover:text-ink-muted"
+              className="instrument-label min-h-9 text-left text-ink-faint press hover:text-ink-muted"
             >
               {showPerTypeWater ? "− Hide per-type water" : "+ Per-type water (ocean / lake / river)"}
             </button>
@@ -562,7 +573,7 @@ export function AnimationSection({
             onClick={onToggleAnimation}
             className={
               isAnimating
-                ? "flex min-h-11 items-center justify-center rounded-sm border border-signal bg-surface-2 px-3 text-[13px] text-ink transition-colors"
+                ? "flex min-h-11 items-center justify-center rounded-sm border border-signal bg-surface-2 px-3 text-[13px] text-ink press"
                 : secondaryButtonClass
             }
           >
@@ -647,7 +658,7 @@ export function CompositionSection({
                   className="peer sr-only"
                 />
                 <span
-                  className={`flex min-h-11 cursor-pointer items-center justify-center border-b-2 px-2 text-[13px] transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-signal ${
+                  className={`flex min-h-11 cursor-pointer items-center justify-center border-b-2 px-2 text-[13px] press peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-signal ${
                     params.labelStyle === style
                       ? "border-signal bg-surface-2 text-ink"
                       : "border-transparent text-ink-muted hover:text-ink"
@@ -712,7 +723,7 @@ export function SeedPaletteSection({
           <button
             type="button"
             onClick={() => update({ seed: Math.random().toString(36).slice(2, 8) })}
-            className="flex min-h-11 w-11 items-center justify-center rounded-sm border border-hairline-2 text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+            className="flex min-h-11 w-11 items-center justify-center rounded-sm border border-hairline-2 text-ink-muted press hover:bg-surface-2 hover:text-ink"
             title="Randomize seed"
             aria-label="Randomize seed"
           >
@@ -767,7 +778,7 @@ export function DataSection() {
   const cached = formatCacheSize(stats);
 
   return (
-    <Section title="Data" defaultOpen={true}>
+    <Section title="Data" defaultOpen={false}>
       <p className="text-[12px] leading-relaxed text-ink-faint">
         Basemap ©{" "}
         <a
@@ -793,7 +804,7 @@ export function DataSection() {
         type="button"
         onClick={handleClear}
         disabled={clearing}
-        className="flex min-h-11 items-center justify-between rounded-sm border border-transparent px-3 text-[13px] text-ink-muted transition-colors hover:border-hairline hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+        className="flex min-h-11 items-center justify-between rounded-sm border border-transparent px-3 text-[13px] text-ink-muted press hover:border-hairline hover:bg-surface-2 hover:text-ink disabled:opacity-50"
       >
         <span>{clearing ? "Clearing…" : "Clear cached map data"}</span>
         {cached && (

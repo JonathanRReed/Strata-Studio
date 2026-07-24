@@ -7,14 +7,28 @@ import type { MaskMode } from "../../engine/types.ts";
  * the exact same widgets without duplicating markup or behavior.
  */
 
+/*
+ * Every control shares the `press` class, which owns the transition and the
+ * 1px seat on :active (see index.css). Hover states are declared here so the
+ * whole app has one hover/press/disabled vocabulary rather than per-component
+ * variations.
+ */
 export const selectClass =
-  "min-h-11 rounded-sm border border-hairline-2 bg-surface-2 px-2.5 text-[13px] text-ink outline-none transition-colors focus:border-signal";
+  "press min-h-11 rounded-sm border border-hairline-2 bg-surface-2 px-2.5 text-[13px] text-ink outline-none hover:border-hairline-2/80 hover:bg-surface focus:border-signal disabled:opacity-50";
 export const textInputClass =
-  "min-h-11 rounded-sm border border-hairline-2 bg-surface-2 px-2.5 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-muted focus:border-signal";
+  "press min-h-11 rounded-sm border border-hairline-2 bg-surface-2 px-2.5 text-[13px] text-ink outline-none placeholder:text-ink-muted hover:border-hairline-2/80 focus:border-signal disabled:opacity-50";
 export const secondaryButtonClass =
-  "flex min-h-11 items-center justify-center rounded-sm border border-hairline-2 px-3 text-[13px] text-ink transition-colors hover:bg-surface-2 disabled:opacity-50";
+  "press flex min-h-11 items-center justify-center rounded-sm border border-hairline-2 px-3 text-[13px] text-ink hover:border-ink-muted hover:bg-surface-2 disabled:opacity-50";
+/*
+ * The primary action is deliberately NOT a saturated slab. `--color-signal` at
+ * full strength is the brightest thing the palette can produce, and a filled
+ * cyan bar in the rail reads louder than the artwork it exists to generate.
+ * A signal-bordered, signal-tinted instrument button is unmistakably primary
+ * (it is the only signal-colored control on the surface) without competing
+ * with the poster for the eye.
+ */
 export const primaryButtonClass =
-  "display flex h-11 w-full items-center justify-center rounded-sm bg-signal text-[13px] tracking-[0.08em] text-ground transition-colors hover:bg-signal/90 disabled:opacity-50";
+  "display press flex h-11 w-full items-center justify-center rounded-sm border border-signal/70 bg-signal/12 text-[13px] tracking-[0.08em] text-signal hover:border-signal hover:bg-signal/20 hover:text-ink disabled:opacity-50";
 
 export function InfoDot({
   text,
@@ -33,7 +47,7 @@ export function InfoDot({
         type="button"
         aria-label={`${label} help`}
         aria-describedby={id}
-        className="instrument-label flex h-5 w-5 cursor-help select-none items-center justify-center rounded-full border border-hairline-2 bg-surface-2 text-ink-muted"
+        className="instrument-label press flex h-5 w-5 cursor-help select-none items-center justify-center rounded-full border border-hairline-2 bg-surface-2 text-ink-muted hover:border-ink-muted hover:text-ink"
       >
         ?
       </button>
@@ -171,9 +185,9 @@ export function Section({
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         aria-controls={bodyId}
-        className="group flex min-h-11 w-full items-center justify-between text-left"
+        className="press group flex min-h-11 w-full items-center justify-between text-left"
       >
-        <span className="instrument-label flex items-center gap-2 text-ink-muted transition-colors group-hover:text-ink">
+        <span className="instrument-label flex items-center gap-2 text-ink-muted transition-colors duration-[180ms] group-hover:text-ink">
           {title}
           {badge && <span className="instrument-label text-ok">{badge}</span>}
         </span>
@@ -185,13 +199,13 @@ export function Section({
           stroke="currentColor"
           strokeWidth="2"
           aria-hidden="true"
-          className={`text-ink-muted transition-transform ${open ? "rotate-180" : ""}`}
+          className={`text-ink-muted transition-transform duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:text-ink ${open ? "rotate-180" : ""}`}
         >
           <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
       {open && (
-        <div id={bodyId} className="flex flex-col gap-3.5 pb-4">
+        <div id={bodyId} className="enter-card flex flex-col gap-3.5 pb-4">
           {children}
         </div>
       )}

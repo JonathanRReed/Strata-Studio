@@ -292,6 +292,11 @@ export function useRevealAnimation({
               false,
               input.masks,
             );
+            // Re-check before scheduling: cancelReveal may have nulled the
+            // state during the synchronous render above. Without this guard
+            // the callback schedules a new rAF that cancelAnimationFrame
+            // (which already ran on the old id) cannot cancel.
+            if (stateRef.current !== state) return;
             state.raf = requestAnimationFrame(frame);
           } catch (error) {
             stateRef.current = null;

@@ -150,7 +150,7 @@ export function NoMapFallback({
             onClick={() => selectPlace(surprisePlace(activePlaceId ?? undefined))}
             aria-label="Surprise me"
             title="Surprise me"
-            className="flex h-11 w-11 shrink-0 items-center justify-center text-[17px] text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+            className="flex h-11 w-11 shrink-0 items-center justify-center text-[17px] text-ink-muted press hover:bg-surface-2 hover:text-ink"
           >
             <span aria-hidden="true">⚄</span>
           </button>
@@ -159,12 +159,12 @@ export function NoMapFallback({
             onClick={(event) => onToggleExpand(event.currentTarget)}
             aria-label={expanded ? "Collapse map" : "Expand map"}
             aria-expanded={expanded}
-            className="flex h-11 w-11 shrink-0 items-center justify-center text-[15px] text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+            className="flex h-11 w-11 shrink-0 items-center justify-center text-[15px] text-ink-muted press hover:bg-surface-2 hover:text-ink"
           >
             <span aria-hidden="true">{expanded ? "✕" : "⤢"}</span>
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="border-t border-hairline">
+        <form onSubmit={handleSubmit} className="flex items-center border-t border-hairline">
           <input
             type="text"
             data-map-initial-focus
@@ -174,10 +174,14 @@ export function NoMapFallback({
             maxLength={MAX_SEARCH_QUERY_LENGTH}
             placeholder="Search place…"
             enterKeyHint="search"
-            className="h-10 w-full bg-transparent px-3 font-mono text-[12px] text-ink outline-none placeholder:text-ink-faint focus:bg-surface-2"
+            className="h-10 min-w-0 flex-1 bg-transparent px-3 font-mono text-[12px] text-ink outline-none placeholder:text-ink-faint focus:bg-surface-2"
           />
-          <button type="submit" className="sr-only">
-            Search
+          <button
+            type="submit"
+            aria-label="Search"
+            className="instrument-label press flex h-10 shrink-0 items-center px-3 text-ink-muted hover:text-ink"
+          >
+            <span aria-hidden="true" className="text-[14px]">⏎</span>
           </button>
         </form>
       </div>
@@ -216,7 +220,7 @@ export function NoMapFallback({
             <button
               type="button"
               onClick={onRetry}
-              className="instrument-label flex min-h-9 items-center rounded-sm border border-hairline-2 px-3 text-ink transition-colors hover:bg-surface-2"
+              className="instrument-label flex min-h-9 items-center rounded-sm border border-hairline-2 px-3 text-ink press hover:bg-surface-2"
             >
               Retry map
             </button>
@@ -238,7 +242,7 @@ export function NoMapFallback({
                   onClick={() => selectPlace(place)}
                   aria-pressed={active}
                   title={place.blurb}
-                  className={`flex min-h-11 flex-col items-start justify-center rounded-sm border bg-surface px-3 py-1.5 text-left transition-colors ${
+                  className={`flex min-h-11 flex-col items-start justify-center rounded-sm border bg-surface px-3 py-1.5 text-left press ${
                     active
                       ? "border-signal"
                       : "border-hairline hover:border-hairline-2 hover:bg-surface-2"

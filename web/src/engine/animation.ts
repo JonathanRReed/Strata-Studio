@@ -50,6 +50,11 @@ export function sceneWithDrawProgress(scene: Scene, progress: number): Scene {
   const stagger = 0.7; // 70% of the animation is staggered draw, 30% is hold/loop
   const perStroke = stagger / strokes.length;
 
+  // Ease-out applied per-stroke: each line decelerates as it nears completion,
+  // so the pen "settles" into its final position rather than stopping dead.
+  // This is the same curve family as the reveal's easeOutCubic.
+  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+
   const visibleStrokes: Stroke[] = [];
   for (let i = 0; i < strokes.length; i++) {
     const strokeStart = (i / strokes.length) * stagger;
@@ -59,9 +64,11 @@ export function sceneWithDrawProgress(scene: Scene, progress: number): Scene {
     if (clamped >= 1) {
       visibleStrokes.push(strokes[i]);
     } else {
-      // Reveal a fraction of the stroke's points from the start
+      // Reveal a fraction of the stroke's points from the start, eased so
+      // the pen moves fast at first and slows as it reaches the end.
+      const eased = easeOut(clamped);
       const points = strokes[i].points;
-      const visibleCount = Math.max(2, Math.ceil(points.length * clamped));
+      const visibleCount = Math.max(2, Math.ceil(points.length * eased));
       const revealed: ScenePoint[] = points.slice(0, visibleCount);
       visibleStrokes.push({ ...strokes[i], points: revealed });
     }
@@ -87,14 +94,22 @@ export function sceneWithParallax(scene: Scene, phase: number, width: number, he
     avgY /= stroke.points.length;
     // Normalize depth: 0 = top (far), 1 = bottom (near)
     const depth = avgY / height;
-    // Parallax offset: far layers move less, near layers move more
-    // Use a sinusoidal motion for smooth looping
+    // Parallax offset: far layers move less, near layers move more.
+    // The motion uses a sinusoidal curve for smooth looping, with a slight
+    // ease applied via the squared depth so near layers accelerate more —
+    // mimicking how closer objects appear to move faster under perspective.
     const wave = Math.sin(phase * Math.PI * 2);
-    const offsetX = wave * depth * width * 0.015;
-    const offsetY = Math.cos(phase * Math.PI * 2) * depth * height * 0.01;
+    const depthEase = depth * depth; // quadratic depth weighting
+    const offsetX = wave * depthEase * width * 0.02;
+    const offsetY = Math.cos(phase * Math.PI * 2) * depthEase * height * 0.012;
+    // Atmospheric perspective: far layers fade slightly toward transparent,
+    // giving the parallax depth cue a tonal dimension, not just positional.
+    const opacity = stroke.opacity ?? 1;
+    const depthOpacity = opacity * (0.7 + depth * 0.3);
     return {
       ...stroke,
       points: stroke.points.map((p) => ({ x: p.x + offsetX, y: p.y + offsetY })),
+      opacity: stroke.opacity !== undefined || depthOpacity < 1 ? depthOpacity : undefined,
     };
   });
 

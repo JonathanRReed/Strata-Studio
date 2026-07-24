@@ -9,9 +9,12 @@
 
 import { describe, it, expect } from "bun:test";
 import {
-  fitLabelText,
+  composePosterTitle,
   posterLayout,
   posterMetaLine,
+  posterTitleTrackingRatio,
+  POSTER_META_FAMILY,
+  POSTER_TITLE_FAMILY,
   renderSceneCanvas,
   sceneToSvg,
   type Scene,
@@ -114,6 +117,9 @@ class StubCtx {
   stroke() {}
   fill() {}
   drawImage() {}
+  createLinearGradient() {
+    return { addColorStop() {} };
+  }
   measureText(text: string) {
     // Deterministic fake metrics: 10 logical px per character.
     return { width: text.length * 10 };
@@ -149,35 +155,40 @@ function render(
 }
 
 describe("poster title block (canvas)", () => {
-  it("emits title, rule, and coordinates line at the shared layout positions", () => {
+  it("emits title, rule, and coordinates line at the composed layout positions", () => {
     const ctx = render(new StubCtx(W, H, true), posterParams(), metaMasks(META));
-    const L = posterLayout(W, H);
+    const C = composePosterTitle("San Francisco", W, H, META);
 
-    expect(ctx.fillTexts.length).toBe(2);
+    // One fillText per title line + one per meta character is not asserted
+    // here (the native-letterSpacing path emits one fillText per line). The
+    // native path is what the stub exercises when native=true.
+    expect(C.titleLines.length).toBe(1);
+    expect(ctx.fillTexts.length).toBe(2); // title line + meta line
     const [title, sub] = ctx.fillTexts;
 
     // Line 1: uppercase, letterspaced, centered (with trailing-track offset).
     expect(title.text).toBe("SAN FRANCISCO");
-    expect(title.x).toBeCloseTo(L.cx + L.titleTracking / 2, 6);
-    expect(title.y).toBeCloseTo(L.titleBaseline, 6);
+    expect(title.x).toBeCloseTo(C.cx + C.titleLines[0].tracking / 2, 6);
+    expect(title.y).toBeCloseTo(C.titleLines[0].baseline, 6);
     expect(title.textAlign).toBe("center");
-    expect(title.font).toBe(`600 ${L.titleSize}px sans-serif`);
-    expect(title.letterSpacing).toBe(`${L.titleTracking}px`);
+    expect(title.font).toBe(`600 ${C.titleLines[0].fontSize}px ${POSTER_TITLE_FAMILY}`);
+    expect(title.letterSpacing).toBe(`${C.titleLines[0].tracking}px`);
     expect(title.alpha).toBeCloseTo(0.92, 6);
 
-    // Line 2: the thin centered rule (the only poster fillRect besides bg).
-    const rule = ctx.fillRects.find((r) => r.w === L.ruleHalf * 2);
+    // Line 2: the thin centered rule (the only poster fillRect besides bg
+    // and the scrim gradient rect, which is wider than the rule).
+    const rule = ctx.fillRects.find((r) => r.w === C.rule.width);
     expect(rule).toBeDefined();
-    expect(rule!.x).toBeCloseTo(L.cx - L.ruleHalf, 6);
-    expect(rule!.y).toBeCloseTo(L.ruleY - L.ruleThickness / 2, 6);
-    expect(rule!.h).toBeCloseTo(L.ruleThickness, 6);
+    expect(rule!.x).toBeCloseTo(C.rule.x, 6);
+    expect(rule!.y).toBeCloseTo(C.rule.y, 6);
+    expect(rule!.h).toBeCloseTo(C.rule.height, 6);
     expect(rule!.alpha).toBeCloseTo(0.5, 6);
 
     // Line 3: coordinates + elevation range from the ArtworkMeta.
     expect(sub.text).toBe("37.77°N 122.42°W · ELEV −110–282 M");
-    expect(sub.y).toBeCloseTo(L.subBaseline, 6);
-    expect(sub.font).toBe(`${L.subSize}px sans-serif`);
-    expect(sub.letterSpacing).toBe(`${L.subTracking}px`);
+    expect(sub.y).toBeCloseTo(C.meta!.baseline, 6);
+    expect(sub.font).toBe(`${C.meta!.fontSize}px ${POSTER_META_FAMILY}`);
+    expect(sub.letterSpacing).toBe(`${C.meta!.tracking}px`);
     expect(sub.alpha).toBeCloseTo(0.62, 6);
   });
 
@@ -194,18 +205,18 @@ describe("poster title block (canvas)", () => {
 
   it("letterspaces manually (per-character advances) where ctx.letterSpacing is unsupported", () => {
     const ctx = render(new StubCtx(W, H, false), posterParams("Rio"), metaMasks(META));
-    const L = posterLayout(W, H);
+    const C = composePosterTitle("Rio", W, H, META);
 
     const titleChars = ctx.fillTexts.slice(0, 3);
     expect(titleChars.map((c) => c.text)).toEqual(["R", "I", "O"]);
     // Stub metrics: 10px per char → total = 30 + 2 tracks; centered on cx.
-    const total = 30 + L.titleTracking * 2;
-    expect(titleChars[0].x).toBeCloseTo(L.cx - total / 2, 6);
-    expect(titleChars[1].x).toBeCloseTo(titleChars[0].x + 10 + L.titleTracking, 6);
-    expect(titleChars[2].x).toBeCloseTo(titleChars[1].x + 10 + L.titleTracking, 6);
+    const total = 30 + C.titleLines[0].tracking * 2;
+    expect(titleChars[0].x).toBeCloseTo(C.cx - total / 2, 6);
+    expect(titleChars[1].x).toBeCloseTo(titleChars[0].x + 10 + C.titleLines[0].tracking, 6);
+    expect(titleChars[2].x).toBeCloseTo(titleChars[1].x + 10 + C.titleLines[0].tracking, 6);
     for (const c of titleChars) {
       expect(c.textAlign).toBe("left");
-      expect(c.y).toBeCloseTo(L.titleBaseline, 6);
+      expect(c.y).toBeCloseTo(C.titleLines[0].baseline, 6);
     }
     // The meta line is also drawn per-character in fallback mode.
     const metaLine = posterMetaLine(META);
@@ -215,8 +226,8 @@ describe("poster title block (canvas)", () => {
   it("omits the coordinates line when no ArtworkMeta is available", () => {
     const ctx = render(new StubCtx(W, H, true), posterParams(), metaMasks(undefined));
     expect(ctx.fillTexts.map((t) => t.text)).toEqual(["SAN FRANCISCO"]);
-    const L = posterLayout(W, H);
-    expect(ctx.fillRects.some((r) => r.w === L.ruleHalf * 2)).toBe(true);
+    const C = composePosterTitle("San Francisco", W, H, undefined);
+    expect(ctx.fillRects.some((r) => r.w === C.rule.width)).toBe(true);
   });
 
   it("renders nothing for an empty label", () => {
@@ -236,6 +247,30 @@ describe("poster title block (canvas)", () => {
     expect(caption.font).toBe(`${Math.max(12, Math.round(W / 36))}px sans-serif`);
     expect(caption.alpha).toBeCloseTo(0.6, 6);
   });
+
+  it("optically sizes short names larger than the nominal titleSize", () => {
+    // A three-letter name should be scaled up toward the optical measure,
+    // not left at the nominal size — that is the whole point of optical sizing.
+    const C = composePosterTitle("Rio", W, H, META);
+    const L = posterLayout(W, H);
+    expect(C.titleLines[0].fontSize).toBeGreaterThan(L.titleSize);
+  });
+
+  it("wraps a long multi-word title across two lines on a word boundary", () => {
+    const longLabel = "A Very Long Mountain Landscape Title";
+    const C = composePosterTitle(longLabel, W, H, META);
+    expect(C.titleLines.length).toBe(2);
+    // Both lines share one font size so they read as one lockup.
+    expect(C.titleLines[0].fontSize).toBe(C.titleLines[1].fontSize);
+    // The wrap is on a word boundary (no broken words).
+    const rejoined = C.titleLines.map((l) => l.text).join(" ");
+    expect(rejoined).toBe(longLabel.toUpperCase());
+  });
+
+  it("tapers tracking as the title lengthens", () => {
+    expect(posterTitleTrackingRatio(3)).toBeGreaterThan(posterTitleTrackingRatio(20));
+    expect(posterTitleTrackingRatio(30)).toBeLessThan(posterTitleTrackingRatio(8));
+  });
 });
 
 describe("poster meta line formatting", () => {
@@ -254,41 +289,50 @@ describe("poster title block (SVG parity)", () => {
   const svgOf = (params: StyleParams, masks?: FeatureMasks, exportSize?: { width: number; height: number }) =>
     sceneToSvg(SCENE, params, PALETTE, W, H, false, masks, exportSize);
 
-  it("emits letter-spaced centered text nodes matching the canvas layout", () => {
+  it("emits letter-spaced centered text nodes matching the composed layout", () => {
     const svg = svgOf(posterParams(), metaMasks(META));
-    const L = posterLayout(W, H);
+    const C = composePosterTitle("San Francisco", W, H, META);
     const n = (v: number) => +v.toFixed(2);
 
     expect(svg).toContain(">SAN FRANCISCO</text>");
-    expect(svg).toContain(`letter-spacing="${n(L.titleTracking)}"`);
-    expect(svg).toContain(`font-size="${n(L.titleSize)}"`);
+    expect(svg).toContain(`letter-spacing="${n(C.titleLines[0].tracking)}"`);
+    expect(svg).toContain(`font-size="${n(C.titleLines[0].fontSize)}"`);
     expect(svg).toContain('font-weight="600"');
     expect(svg).toContain('text-anchor="middle"');
-    expect(svg).toContain(`x="${n(L.cx + L.titleTracking / 2)}" y="${n(L.titleBaseline)}"`);
+    expect(svg).toContain(`x="${n(C.cx + C.titleLines[0].tracking / 2)}" y="${n(C.titleLines[0].baseline)}"`);
+    expect(svg).toContain(`font-family='${POSTER_TITLE_FAMILY}'`);
 
     // The rule.
     expect(svg).toContain(
-      `<rect x="${n(L.cx - L.ruleHalf)}" y="${n(L.ruleY - L.ruleThickness / 2)}" width="${n(L.ruleHalf * 2)}" height="${n(L.ruleThickness)}"`,
+      `<rect x="${n(C.rule.x)}" y="${n(C.rule.y)}" width="${n(C.rule.width)}" height="${n(C.rule.height)}"`,
     );
 
-    // The coordinates line.
+    // The coordinates line, set in the mono readout face.
     expect(svg).toContain(">37.77°N 122.42°W · ELEV −110–282 M</text>");
-    expect(svg).toContain(`letter-spacing="${n(L.subTracking)}"`);
+    expect(svg).toContain(`letter-spacing="${n(C.meta!.tracking)}"`);
+    expect(svg).toContain(`font-family='${POSTER_META_FAMILY}'`);
     expect(svg).toContain(`fill="${PALETTE.foreground}"`);
+
+    // The legibility scrim.
+    expect(svg).toContain("strata-poster-scrim");
+    expect(svg).toContain("linearGradient");
   });
 
   it("uses the same fitted title size in Canvas and SVG for long validated labels", () => {
     const longLabel = "A VERY LONG MOUNTAIN LANDSCAPE TITLE ".repeat(6).trim();
-    const fitted = fitLabelText(longLabel.toUpperCase(), posterLayout(W, H).titleSize, 0.28, W * 0.88);
-    expect(fitted.estimatedWidth).toBeLessThanOrEqual(W * 0.88 + 0.0001);
+    const C = composePosterTitle(longLabel, W, H, META);
 
     const canvas = render(new StubCtx(W, H, true), posterParams(longLabel), metaMasks(META));
-    expect(canvas.fillTexts[0].font).toBe(`600 ${fitted.fontSize}px sans-serif`);
-    expect(canvas.fillTexts[0].letterSpacing).toBe(`${fitted.tracking}px`);
+    // A wrapped title emits one fillText per line.
+    const canvasTitleFonts = canvas.fillTexts.filter((t) => t.text === C.titleLines[0].text || t.text === C.titleLines[1]?.text);
+    expect(canvasTitleFonts.length).toBe(C.titleLines.length);
+    for (const tf of canvasTitleFonts) {
+      expect(tf.font).toBe(`600 ${C.titleLines[0].fontSize}px ${POSTER_TITLE_FAMILY}`);
+    }
 
     const svg = svgOf(posterParams(longLabel), metaMasks(META));
-    expect(svg).toContain(`font-size="${+fitted.fontSize.toFixed(2)}"`);
-    expect(svg).toContain(`letter-spacing="${+fitted.tracking.toFixed(2)}"`);
+    expect(svg).toContain(`font-size="${+C.titleLines[0].fontSize.toFixed(2)}"`);
+    expect(svg).toContain(`letter-spacing="${+C.titleLines[0].tracking.toFixed(2)}"`);
   });
 
   it("keeps the layout in logical viewBox units at export size (scales with the artwork)", () => {

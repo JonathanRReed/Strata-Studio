@@ -86,7 +86,7 @@ export function ControlsPanel({
     <aside
       id="controls-panel"
       inert={backgroundInert ? true : undefined}
-      className="flex w-full flex-col border-b border-hairline bg-surface lg:h-full lg:w-[340px] lg:shrink-0 lg:border-b-0 lg:border-r"
+      className="flex w-full flex-col border-b border-hairline bg-surface lg:h-full lg:w-[320px] lg:shrink-0 lg:border-b-0 lg:border-r"
     >
       {/* Header block: wordmark + studio switcher */}
       <header className="shrink-0 border-b border-hairline px-5 pb-4 pt-5">
@@ -99,6 +99,7 @@ export function ControlsPanel({
         <StyleSection
           studio={studio}
           styleId={styleId}
+          palette={params.palette}
           onStyleChange={onStyleChange}
           terrainGrid={terrainGrid}
         />
@@ -133,19 +134,21 @@ export function ControlsPanel({
         <DataSection />
       </div>
 
-      {/* Sticky footer: the panel's one signal primary + Export */}
+      {/* Sticky footer: Export leads (it is the destination), Regenerate
+          is secondary (the artwork auto-generates on map change, so manual
+          regeneration is a recovery action, not the primary verb). */}
       <div className="sticky bottom-0 z-10 flex shrink-0 flex-col gap-2 border-t border-hairline bg-surface p-4">
+        <button type="button" onClick={onOpenExport} className={primaryButtonClass}>
+          Export…
+        </button>
         <button
           type="button"
           onClick={onGenerate}
           disabled={isLoading || isExporting || isExportingAnimation}
           aria-busy={isLoading}
-          className={primaryButtonClass}
+          className={secondaryButtonClass}
         >
           {isLoading ? <span className="status-live">Regenerating…</span> : "Regenerate now"}
-        </button>
-        <button type="button" onClick={onOpenExport} className={secondaryButtonClass}>
-          Export…
         </button>
       </div>
     </aside>

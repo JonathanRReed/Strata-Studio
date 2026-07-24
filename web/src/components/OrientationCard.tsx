@@ -27,7 +27,7 @@ export function OrientationCard({
   return (
     <aside
       aria-labelledby="orientation-title"
-      className="absolute bottom-4 right-3 top-auto z-20 w-[min(20rem,calc(100%-1.5rem))] rounded-sm border border-hairline-2 bg-surface/95 p-4 shadow-[0_16px_48px_rgba(0,0,0,0.55)] backdrop-blur-sm lg:fixed lg:bottom-auto lg:left-4 lg:right-auto lg:top-4 lg:w-[22rem]"
+      className="enter-card absolute bottom-4 right-3 top-auto z-20 w-[min(20rem,calc(100%-1.5rem))] rounded-sm border border-hairline-2 bg-surface p-4 shadow-[0_16px_48px_rgba(0,0,0,0.55)] lg:fixed lg:bottom-auto lg:left-4 lg:right-auto lg:top-4 lg:w-[22rem]"
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -42,7 +42,7 @@ export function OrientationCard({
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss getting started guide"
-          className="-m-2 flex h-11 w-11 shrink-0 items-center justify-center text-ink-muted transition-colors hover:text-ink"
+          className="press -m-2 flex h-11 w-11 shrink-0 items-center justify-center text-ink-muted hover:text-ink"
         >
           <span aria-hidden="true">✕</span>
         </button>
