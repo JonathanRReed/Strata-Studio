@@ -5,6 +5,13 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b0b0d" />
+    <!--
+      Canonical and sitemap.xml are deliberately hardcoded to the production
+      origin rather than the build-time origin token: fixture and CI builds
+      resolve that token to a fake host, and a canonical must never point at
+      a non-public origin.
+    -->
+    <link rel="canonical" href="https://strata-studio.pages.dev/" />
     <title>Strata Studio — turn real places into generative art</title>
     <meta
       name="description"
@@ -33,9 +40,110 @@
     <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin />
     <link rel="preconnect" href="%STRATA_PROXY_ORIGIN%" crossorigin />
     <link rel="dns-prefetch" href="https://nominatim.openstreetmap.org" />
+
+    <!--
+      Minimal styling for the pre-app markup below. Scoped to .static-intro so
+      it cannot leak into the mounted app, and inlined here because Tailwind's
+      stylesheet is not guaranteed to have painted before this is read.
+    -->
+    <style>
+      /* Repeated from index.css so the ground colour is painted even if the
+         stylesheet has not arrived yet. */
+      body {
+        background-color: #0b0b0d;
+      }
+      .static-intro {
+        max-width: 46rem;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+        background-color: #0b0b0d;
+        color: #e9e7e2;
+        font-family: system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.6;
+      }
+      .static-intro h1 {
+        margin: 0 0 1.5rem;
+        font-size: 1.5rem;
+        line-height: 1.25;
+        letter-spacing: 0.01em;
+      }
+      .static-intro p {
+        margin: 0 0 1rem;
+        color: #b8b6bd;
+      }
+      .static-intro nav {
+        margin-top: 2rem;
+        padding-top: 1rem;
+        border-top: 1px solid #3d3d45;
+        font-size: 14px;
+      }
+      .static-intro a {
+        color: #5fb0d4;
+        margin-right: 1.25rem;
+      }
+    </style>
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Strata Studio",
+        "url": "https://strata-studio.pages.dev/",
+        "description": "Turn any place on Earth into poster art. Real terrain and OpenStreetMap data rendered as contours, ridgelines, waveforms, and flow fields — free, in your browser, with no account.",
+        "applicationCategory": "DesignApplication",
+        "operatingSystem": "Any modern web browser",
+        "isAccessibleForFree": true,
+        "creator": {
+          "@type": "Person",
+          "name": "Jonathan R. Reed",
+          "url": "https://jonathanrreed.com/"
+        }
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <!--
+      Everything inside #root is the crawl-visible and no-JS view. React's
+      createRoot() discards these children on mount, so it never renders
+      alongside the app — keep it static, self-contained, and factual.
+    -->
+    <div id="root">
+      <main class="static-intro">
+        <h1>Strata Studio — turn real places into layered generative art</h1>
+        <p>
+          Strata Studio is a free browser tool that turns real geography into
+          poster-scale generative line art. Frame any area on Earth and it
+          renders the terrain and street network of that exact place as layered
+          contours, ridgelines, waveforms, and flow fields.
+        </p>
+        <p>
+          The inputs are real data, not textures: elevation from terrain tiles,
+          plus optional buildings, roads, and water from OpenStreetMap. Search
+          for a place or drag the map to frame a composition, then shape the
+          result with studio styles, palettes, seeds, line density, feature
+          influence, and animation controls. Everything renders locally in your
+          browser — no account, no upload.
+        </p>
+        <p>
+          Classic styles include Contour, Ridge, Flow, Blueprint, Woodcut,
+          Drift, and Signal. Experimental styles push the same data further with
+          Seismic, Melt Map, Gravity Well, Magnetic Field, Pulse Rings, Terrain
+          Sonogram, Building Interference, and Noise Amplifier.
+        </p>
+        <p>
+          Export a finished piece as a PNG up to 3000 px on the long edge (250
+          DPI print), as an SVG that pen plotters and print shops can use
+          directly, or as a short animated GIF, APNG, or WEBM loop. Each
+          composition is encoded in the page URL, so a result you like can be
+          shared or reopened exactly as rendered.
+        </p>
+        <nav aria-label="More from the author">
+          <a href="https://jonathanrreed.com/">Jonathan R. Reed</a>
+          <a href="https://jonathanrreed.com/projects/">More projects</a>
+        </nav>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
