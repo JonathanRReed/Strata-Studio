@@ -538,7 +538,7 @@ export function AnimationSection({
           <InfoDot
             label="Animation style"
             tooltipId={animationHelpId}
-            text="Add motion to your artwork. Drift breathes, draw reveals lines stroke by stroke, parallax separates depth layers."
+            text="Add motion to your artwork."
           />
         </span>
         <select
