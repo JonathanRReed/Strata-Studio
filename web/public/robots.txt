@@ -1,4 +1,164 @@
+# ---------------------------------------------------------------------------
+# robots.txt — policy: search YES / AI grounding YES / AI training NO
+# Last reviewed: 2026-08-04
+#
+# As a condition of accessing this website, you agree to abide by the
+# following content signals:
+#
+# (a)  If a content-signal = yes, you may collect content for the
+#      corresponding use.
+# (b)  If a content-signal = no, you may not collect content for the
+#      corresponding use.
+# (c)  If the website operator does not include a content signal for a
+#      corresponding use, the website operator neither grants nor restricts
+#      permission via content signal with respect to the corresponding use.
+#
+# The content signals and their meanings are:
+#
+# search:   building a search index and providing search results (e.g.,
+#           returning hyperlinks and short excerpts from your website's
+#           contents). Search does not include providing AI-generated search
+#           summaries.
+# ai-input: inputting content into one or more AI models (e.g., retrieval
+#           augmented generation, grounding, or other real-time taking of
+#           content for generative AI search answers).
+# ai-train: training or fine-tuning AI models.
+#
+# ANY RESTRICTIONS EXPRESSED VIA CONTENT SIGNALS ARE EXPRESS RESERVATIONS OF
+# RIGHTS UNDER ARTICLE 4 OF THE EUROPEAN UNION DIRECTIVE 2019/790 ON COPYRIGHT
+# AND RELATED RIGHTS IN THE DIGITAL SINGLE MARKET.
+# ---------------------------------------------------------------------------
+
+# === DEFAULT: everything may crawl; search + AI grounding granted, training refused
 User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
 Allow: /
+
+# NOTE (RFC 9309): a crawler obeys only the FIRST matching user-agent group.
+# Any bot named below never reads the "*" group above, so the Content-Signal
+# line (and any site-specific path rules) are repeated in the named ALLOW
+# groups. Bots given a Disallow below are refused outright.
+
+# ===========================================================================
+# ALLOWED — AI search / answer engines (indexing + citation)
+# ===========================================================================
+
+# OpenAI — ChatGPT search. Blocking this removes this site from ChatGPT answers.
+User-agent: OAI-SearchBot
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+# Anthropic — Claude search index.
+User-agent: Claude-SearchBot
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+# Perplexity — search index. Operator states it is NOT used for foundation models.
+User-agent: PerplexityBot
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+# Meta — Meta AI search index (distinct from meta-externalagent, which trains).
+User-agent: meta-webindexer
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+# Amazon — search only; operator states it does NOT crawl for GenAI training.
+User-agent: Amzn-SearchBot
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+# ===========================================================================
+# ALLOWED — user-initiated fetchers (a human asked for this page)
+# Most state they may ignore robots.txt; these groups are expressive.
+# ===========================================================================
+
+User-agent: ChatGPT-User
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+User-agent: Claude-User
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+User-agent: Perplexity-User
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+User-agent: Amzn-User
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+
+# ===========================================================================
+# DISALLOWED — model-training crawlers
+# ===========================================================================
+
+# OpenAI training crawler. Disallowing = "do not train on this content."
+User-agent: GPTBot
+Disallow: /
+
+# Anthropic training crawler (Claude-SearchBot / Claude-User stay allowed above).
+User-agent: ClaudeBot
+Disallow: /
+
+# Google — controls BOTH Gemini training AND Gemini Apps / Vertex grounding;
+# no token splits them. Training-no wins per site policy. This has NO effect
+# on Google Search, AI Overviews, or AI Mode (governed by Googlebot access).
+User-agent: Google-Extended
+Disallow: /
+
+# Apple training opt-out. Does not crawl; Applebot itself stays allowed via "*".
+User-agent: Applebot-Extended
+Disallow: /
+
+# Meta training crawler.
+User-agent: meta-externalagent
+Disallow: /
+
+# Common Crawl — open corpus, widely used as third-party training data.
+User-agent: CCBot
+Disallow: /
+
+# ByteDance. No first-party docs, no compliance commitment; also enforced at WAF.
+User-agent: Bytespider
+Disallow: /
+
+# Amazon dual-purpose crawler ("may be used to train Amazon AI models").
+# Amzn-SearchBot and Amzn-User remain allowed above and are non-training.
+User-agent: Amazonbot
+Disallow: /
+
+# ===========================================================================
+# DISALLOWED — legacy and third-party training-adjacent tokens (template v2)
+# Added 2026-08-04 after rollout review: these previously fell through to "*"
+# ===========================================================================
+
+# Anthropic legacy tokens (superseded by ClaudeBot/Claude-SearchBot/Claude-User)
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: claude-web
+Disallow: /
+
+# Cohere training crawler
+User-agent: cohere-ai
+Disallow: /
+
+# Allen Institute corpus crawler
+User-agent: AI2Bot
+Disallow: /
+
+# Commercial scraping/corpus services widely resold as training data
+User-agent: Diffbot
+Disallow: /
+
+User-agent: ImagesiftBot
+Disallow: /
+
+User-agent: omgili
+Disallow: /
+
+User-agent: omgilibot
+Disallow: /
 
 Sitemap: https://strata-studio.pages.dev/sitemap.xml
