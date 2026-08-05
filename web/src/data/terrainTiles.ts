@@ -35,7 +35,7 @@ export const TERRAIN_TILE_URL: string =
   CONFIGURED_TERRAIN_PROXY_URL || DIRECT_TERRAIN_TILE_URL;
 
 export const TERRAIN_ATTRIBUTION =
-  "Terrain: Mapzen/Tilezen terrain tiles via AWS Open Data — elevation data courtesy of USGS, NASA SRTM, and other sources";
+  "Terrain: Mapzen/Tilezen terrain tiles via AWS Open Data (elevation data courtesy of USGS, NASA SRTM, and other sources)";
 
 const TILE_SIZE = 256;
 const MAX_ZOOM = 15;

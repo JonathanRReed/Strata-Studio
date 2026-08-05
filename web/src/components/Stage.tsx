@@ -309,7 +309,7 @@ export function Stage({
           )}
           {showStale && (
             <div className="enter-banner hatched pointer-events-auto flex items-center gap-3 rounded-sm border border-amber/40 bg-surface p-1.5 pl-4">
-              <span className="instrument-label text-amber">Selection moved — artwork stale</span>
+              <span className="instrument-label text-amber">Selection moved, artwork stale</span>
               <button
                 type="button"
                 onClick={onRegenerate}

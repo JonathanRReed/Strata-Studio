@@ -77,7 +77,7 @@ export function useShare({
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
-    const title = label ? `Strata Studio — ${label}` : "Strata Studio";
+    const title = label ? `Strata Studio: ${label}` : "Strata Studio";
     const url = window.location.href;
 
     try {

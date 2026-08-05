@@ -96,7 +96,7 @@ export function VariationsDialog({
           <div className="flex flex-col gap-1">
             <h2 className="display text-[15px] tracking-[0.06em] text-ink">Variations</h2>
             <p className="instrument-label text-ink-faint">
-              Same place · same style · fresh seeds
+              Same place and style, new seeds
             </p>
           </div>
           <button
@@ -139,7 +139,7 @@ export function VariationsDialog({
           </div>
         ) : (
           <p className="text-[12px] leading-snug text-ink-faint">
-            Generate an artwork first — variations reuse its terrain.
+            Generate an artwork first. Variations reuse its terrain.
           </p>
         )}
 

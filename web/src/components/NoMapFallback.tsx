@@ -230,7 +230,7 @@ export function NoMapFallback({
         {expanded && (
           <div
             role="group"
-            aria-label="Curated places"
+            aria-label="Suggested places"
             className="mt-4 grid max-h-[55%] w-full max-w-3xl grid-cols-2 gap-1.5 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4"
           >
             {CURATED_PLACES.map((place) => {

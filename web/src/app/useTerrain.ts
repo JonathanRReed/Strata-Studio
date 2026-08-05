@@ -86,7 +86,7 @@ export function useTerrain({
         setTerrainInfo(describeTerrain(newGrid, bounds));
         if (failedTiles > 0) {
           setWarning(
-            `${failedTiles} of ${totalTiles} terrain tiles failed to load — showing partial data.`,
+            `${failedTiles} of ${totalTiles} terrain tiles failed to load. Showing partial data.`,
           );
         }
         setStatus({ phase: "done" });

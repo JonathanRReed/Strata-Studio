@@ -54,7 +54,7 @@ const MASK_MODE_DESCRIPTIONS: Record<MaskMode, string> = {
 
 const ANIMATION_MODE_DESCRIPTIONS: Record<AnimationMode, string> = {
   none: "Static artwork",
-  drift: "Noise field scrolls over time — organic breathing motion",
+  drift: "Noise field scrolls over time, so the lines breathe",
   draw: "Lines draw themselves in stroke by stroke, then loop",
   parallax: "Depth layers separate and drift at different speeds",
 };
@@ -277,7 +277,7 @@ export function TerrainSection({
           max={1}
           step={0.05}
           onChange={(v) => update({ detail: v })}
-          tooltip="Sampling resolution — higher = more detail"
+          tooltip="Sampling resolution. Higher = more detail"
         />
       )}
       {controls.has("compression") && (
@@ -338,7 +338,7 @@ export function FeaturesSection({
   ) : featureError ? (
     <span className="text-alarm">Feature fetch failed</span>
   ) : osmAreaHint ? (
-    <span className="text-ink-faint">Area too large — zoom in</span>
+    <span className="text-ink-faint">Area too large, zoom in</span>
   ) : hasFeatures ? (
     <span className="text-ok">
       Features loaded
@@ -549,9 +549,9 @@ export function AnimationSection({
           className={selectClass}
         >
           <option value="none">None (static)</option>
-          <option value="drift">Drift — organic breathing</option>
-          <option value="draw">Draw-in — stroke reveal</option>
-          <option value="parallax">Parallax — depth layers</option>
+          <option value="drift">Drift · organic breathing</option>
+          <option value="draw">Draw-in · stroke reveal</option>
+          <option value="parallax">Parallax · depth layers</option>
         </select>
       </div>
       {params.animationMode !== "none" && (
@@ -798,7 +798,7 @@ export function DataSection() {
         >
           Mapzen/AWS Open Data
         </a>{" "}
-        — USGS, NASA SRTM.
+        · USGS, NASA SRTM.
       </p>
       <button
         type="button"

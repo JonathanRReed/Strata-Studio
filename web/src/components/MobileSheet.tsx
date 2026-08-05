@@ -415,7 +415,7 @@ export function MobileSheet({
                 </span>
               </p>
               <button type="button" onClick={handleOpenMap} className={secondaryButtonClass}>
-                Choose area on map — search & pan
+                Choose area on map (search & pan)
               </button>
               <button
                 type="button"
@@ -425,7 +425,7 @@ export function MobileSheet({
                 <span aria-hidden="true" className="mr-2 text-[17px]">⚄</span>
                 Surprise me
               </button>
-              <div role="group" aria-label="Curated places" className="grid grid-cols-2 gap-1.5">
+              <div role="group" aria-label="Suggested places" className="grid grid-cols-2 gap-1.5">
                 {CURATED_PLACES.map((place) => {
                   const active = place.id === activePlaceId;
                   return (
@@ -465,7 +465,7 @@ export function MobileSheet({
                 disabled={!variationsReady}
                 className={`${secondaryButtonClass} mt-3 w-full`}
               >
-                Variations — 4 fresh seeds
+                Variations · 4 fresh seeds
               </button>
               <StyleSection
                 studio={studio}

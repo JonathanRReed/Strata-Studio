@@ -30,7 +30,7 @@ export const EASTER_EGGS: EasterEgg[] = [
     name: "Null Island",
     center: { lat: 0, lng: 0 },
     radiusKm: 75,
-    toastText: "Null Island found — 'Glitch' palette unlocked",
+    toastText: "Null Island found. 'Glitch' palette unlocked",
     palette: {
       id: "custom-egg-glitch",
       name: "Glitch",
@@ -50,7 +50,7 @@ export const EASTER_EGGS: EasterEgg[] = [
     name: "Area 51",
     center: { lat: 37.235, lng: -115.811 },
     radiusKm: 30,
-    toastText: "Area 51 found — 'Classified' palette unlocked",
+    toastText: "Area 51 found. 'Classified' palette unlocked",
     palette: {
       id: "custom-egg-classified",
       name: "Classified",
@@ -70,7 +70,7 @@ export const EASTER_EGGS: EasterEgg[] = [
     name: "Everest Summit",
     center: { lat: 27.9881, lng: 86.925 },
     radiusKm: 25,
-    toastText: "Everest summit found — 'Death Zone' palette unlocked",
+    toastText: "Everest summit found. 'Death Zone' palette unlocked",
     palette: {
       id: "custom-egg-death-zone",
       name: "Death Zone",
@@ -90,7 +90,7 @@ export const EASTER_EGGS: EasterEgg[] = [
     name: "Challenger Deep",
     center: { lat: 11.3733, lng: 142.5917 },
     radiusKm: 60,
-    toastText: "Challenger Deep found — 'Hadal' palette unlocked",
+    toastText: "Challenger Deep found. 'Hadal' palette unlocked",
     palette: {
       id: "custom-egg-hadal",
       name: "Hadal",
@@ -110,7 +110,7 @@ export const EASTER_EGGS: EasterEgg[] = [
     name: "Bermuda Triangle",
     center: { lat: 25.5, lng: -70.5 },
     radiusKm: 350,
-    toastText: "Bermuda Triangle found — 'Vanishing Point' palette unlocked",
+    toastText: "Bermuda Triangle found. 'Vanishing Point' palette unlocked",
     palette: {
       id: "custom-egg-vanishing-point",
       name: "Vanishing Point",
@@ -130,7 +130,7 @@ export const EASTER_EGGS: EasterEgg[] = [
     name: "Giza Pyramids",
     center: { lat: 29.9773, lng: 31.1325 },
     radiusKm: 20,
-    toastText: "Giza pyramids found — 'Dynasty' palette unlocked",
+    toastText: "Giza pyramids found. 'Dynasty' palette unlocked",
     palette: {
       id: "custom-egg-dynasty",
       name: "Dynasty",

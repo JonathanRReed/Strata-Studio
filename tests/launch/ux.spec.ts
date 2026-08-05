@@ -192,7 +192,7 @@ test("@smoke expanded map traps focus, exposes canvas focus, and clears curated 
   await expect(canvas).toBeFocused();
   await dialog.focus();
 
-  const curated = page.getByRole("group", { name: "Curated places" });
+  const curated = page.getByRole("group", { name: "Suggested places" });
   const manhattan = curated.getByRole("button", { name: /Manhattan/ });
   await manhattan.click();
   await expect(manhattan).toHaveAttribute("aria-pressed", "true");
@@ -380,7 +380,7 @@ test("@smoke mobile map restores focus to visible chrome and full sheet inerts a
   const handle = page.locator('button[aria-controls="mobile-sheet-body"]');
   await page.getByRole("button", { name: "Open controls" }).click();
   await page.getByRole("tab", { name: "Place" }).click();
-  await page.getByRole("button", { name: "Choose area on map — search & pan" }).click();
+  await page.getByRole("button", { name: "Choose area on map (search & pan)" }).click();
   await page.keyboard.press("Escape");
   await expect(handle).toBeFocused();
 
@@ -488,7 +488,7 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
   await startWithoutOrientation(page);
   await page.getByRole("button", { name: "Expand map" }).click();
   await page
-    .getByRole("group", { name: "Curated places" })
+    .getByRole("group", { name: "Suggested places" })
     .getByRole("button", { name: /Manhattan/ })
     .click();
   await expect

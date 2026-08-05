@@ -126,7 +126,7 @@ test("@smoke artwork boots and location choices work without the map chunk", asy
     .toBe(true);
 
   await page.getByRole("button", { name: "Expand map" }).click();
-  const curatedPlaces = page.getByRole("group", { name: "Curated places" });
+  const curatedPlaces = page.getByRole("group", { name: "Suggested places" });
   await expect(curatedPlaces).toBeVisible();
   await curatedPlaces.getByRole("button", { name: /Manhattan/ }).click();
   await expect(
@@ -199,7 +199,7 @@ test("@smoke map recovery preserves the active selection", async ({
     timeout: 20_000,
   });
   await page.getByRole("button", { name: "Expand map" }).click();
-  const curatedPlaces = page.getByRole("group", { name: "Curated places" });
+  const curatedPlaces = page.getByRole("group", { name: "Suggested places" });
   await curatedPlaces.getByRole("button", { name: /Manhattan/ }).click();
   await expect
     .poll(() => {
@@ -269,7 +269,7 @@ test("@smoke Overpass proxy failure uses one bounded direct fallback", async ({
   );
 
   await page.getByRole("button", { name: "Expand map" }).click();
-  const curatedPlaces = page.getByRole("group", { name: "Curated places" });
+  const curatedPlaces = page.getByRole("group", { name: "Suggested places" });
   await curatedPlaces.getByRole("button", { name: /Manhattan/ }).click();
 
   await expect.poll(() => directCalls, { timeout: 20_000 }).toBe(1);
@@ -300,7 +300,7 @@ test("@smoke evaluator can choose a place, change style, generate, and export", 
   await expect(generate).toBeEnabled({ timeout: 20_000 });
 
   await page.getByRole("button", { name: "Expand map" }).click();
-  const curatedPlaces = page.getByRole("group", { name: "Curated places" });
+  const curatedPlaces = page.getByRole("group", { name: "Suggested places" });
   await expect(curatedPlaces).toBeVisible();
   const manhattan = curatedPlaces.getByRole("button", { name: /Manhattan/ });
   await manhattan.click();

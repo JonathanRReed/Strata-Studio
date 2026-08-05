@@ -110,7 +110,7 @@ describe("native sharing", () => {
     expect(rendered).toBe(0);
     expect(shares).toEqual([
       {
-        title: "Strata Studio — Yosemite",
+        title: "Strata Studio: Yosemite",
         url: "https://strata.example/?composition=x",
       },
     ]);

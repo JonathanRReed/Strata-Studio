@@ -64,7 +64,7 @@ const PNG_SIZES: { value: ExportSize; desc: string; dpi?: number }[] = [
   },
 ];
 
-const SVG_DESC = "vector — plotter & print-shop ready";
+const SVG_DESC = "vector · plotter & print-shop ready";
 const ANIM_FORMATS: { value: AnimationFormat; label: string; desc: string }[] = [
   { value: "gif", label: "GIF", desc: "24 frames · universal short loop" },
   { value: "apng", label: "APNG", desc: "24 frames · high-quality short loop" },
@@ -266,7 +266,7 @@ export function ExportDialog(props: Props) {
         </div>
         {animationBlocked && (
           <p className="mt-2 text-[12px] leading-snug text-amber">
-            Animation is set to none — choose an animation style in the panel first.
+            Animation is set to none. Choose an animation style in the panel first.
           </p>
         )}
       </fieldset>

@@ -582,7 +582,7 @@ export default function MapSelector({
         {expanded && (
           <div
             role="group"
-            aria-label="Curated places"
+            aria-label="Suggested places"
             className="flex gap-1.5 overflow-x-auto border-t border-hairline px-3 py-2"
           >
             {CURATED_PLACES.map((place) => {
