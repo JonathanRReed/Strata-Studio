@@ -73,6 +73,14 @@
         margin: 0 0 1rem;
         color: #b8b6bd;
       }
+      .static-intro ul {
+        margin: 0 0 1rem;
+        padding-left: 1.25rem;
+        color: #b8b6bd;
+      }
+      .static-intro li {
+        margin-bottom: 0.5rem;
+      }
       .static-intro nav {
         margin-top: 2rem;
         padding-top: 1rem;
@@ -113,28 +121,43 @@
       <main class="static-intro">
         <h1>Strata Studio: turn real places into layered generative art</h1>
         <p>
+          Strata Studio is a browser tool that turns a map view of a real place
+          into a poster, drawn from the elevation and street data for that exact
+          spot.
+        </p>
+        <p>
           Frame any area on Earth and the poster is built from that exact place:
           elevation from terrain tiles, plus optional buildings, roads, and
           water from OpenStreetMap. Search for a place or drag the map to
           compose, then shape the result with studio styles, palettes, seeds,
           line density, feature influence, and animation controls.
         </p>
+        <ul>
+          <li>
+            Three data sources: Terrarium elevation tiles from the AWS
+            elevation-tiles-prod archive, buildings, roads, and water from
+            OpenStreetMap through Overpass, and place search from Nominatim.
+          </li>
+          <li>
+            16 styles. 7 classic (Contour, Ridge, Flow, Blueprint, Woodcut,
+            Drift, Signal) and 9 experimental (Waveform Terrain, Noise
+            Amplifier, Seismic, Melt Map, Gravity Well, Magnetic Field, Pulse
+            Rings, Terrain Sonogram, Building Interference).
+          </li>
+          <li>16 palettes and 21 named presets to start from.</li>
+          <li>
+            Export a PNG at 1024, 2048 (300 DPI), or 3000 px (250 DPI, about 12
+            inches on the long edge), an SVG that pen plotters and print shops
+            read directly, or a 24 frame loop as GIF, APNG, or WEBM.
+          </li>
+          <li>
+            Every composition is encoded in the page URL, so a result you like
+            can be shared or reopened exactly as rendered.
+          </li>
+        </ul>
         <p>
           Everything renders locally in your browser. No account, no upload,
           nothing to pay for.
-        </p>
-        <p>
-          Classic styles include Contour, Ridge, Flow, Blueprint, Woodcut,
-          Drift, and Signal. Experimental styles push the same data further with
-          Seismic, Melt Map, Gravity Well, Magnetic Field, Pulse Rings, Terrain
-          Sonogram, Building Interference, and Noise Amplifier.
-        </p>
-        <p>
-          Export a finished piece as a PNG up to 3000 px on the long edge (250
-          DPI print), as an SVG that pen plotters and print shops can use
-          directly, or as a short animated GIF, APNG, or WEBM loop. Each
-          composition is encoded in the page URL, so a result you like can be
-          shared or reopened exactly as rendered.
         </p>
         <nav aria-label="More from the author">
           <a href="https://jonathanrreed.com/">Jonathan R. Reed</a>
