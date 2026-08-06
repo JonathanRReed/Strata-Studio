@@ -93,6 +93,11 @@
       }
     </style>
 
+    <!--
+      dateModified is a committed literal, so a shallow-clone rebuild of an
+      unchanged commit emits the same date. Keep it equal to <lastmod> for this
+      URL in public/sitemap.xml, and move both when the page content changes.
+    -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -103,6 +108,7 @@
         "applicationCategory": "DesignApplication",
         "operatingSystem": "Any modern web browser",
         "isAccessibleForFree": true,
+        "dateModified": "2026-08-06",
         "creator": {
           "@type": "Person",
           "name": "Jonathan R. Reed",
