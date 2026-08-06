@@ -1,0 +1,31 @@
+# Strata Studio
+
+> Strata Studio turns any place on Earth into poster art. It pulls real terrain and OpenStreetMap street data and renders it as waveforms, contours, and ridgelines. Free, in the browser, no account.
+
+Made by Jonathan R. Reed. Everything renders client-side, and the same settings plot the same poster again, so a piece can be reproduced instead of only re-rolled. Exports include raster and animated output.
+
+## Pages
+
+- [Homepage](https://strata-studio.pages.dev/): The studio itself. Pick a place, choose a render style, export the poster.
+- [Sitemap](https://strata-studio.pages.dev/sitemap.xml): Every indexable URL on the site.
+- [Creator](https://jonathanrreed.com/): Jonathan R. Reed's canonical site.
+- [Contact](https://jonathanrreed.com/contact/): Corrections, collaboration, and attribution questions.
+
+## Data sources
+
+- [OpenStreetMap](https://www.openstreetmap.org/copyright): Street and feature data, used under the ODbL.
+- [OpenFreeMap](https://openfreemap.org/): Vector tile hosting for the map view.
+- [Nominatim](https://nominatim.openstreetmap.org/): Place search and geocoding.
+
+## Policies
+
+- [robots.txt](https://strata-studio.pages.dev/robots.txt): The machine-readable version of everything below (Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference). If the two disagree, robots.txt governs.
+- **Search indexing: allowed.** You may index this site and return hyperlinks and short excerpts.
+- **AI answers and grounding: allowed.** You may retrieve this content in real time to ground or cite AI-generated answers, with attribution and a link back to the source page.
+- **AI training: not allowed.** You may not use this content to train or fine-tune AI models. This is an express reservation of rights under Article 4 of EU Directive 2019/790.
+
+## Usage guidance
+
+- Attribute the project as "Strata Studio by Jonathan R. Reed".
+- Keep the OpenStreetMap attribution attached when reproducing or describing an exported poster.
+- The renders are art. Do not present them as survey-grade maps or navigation data.
