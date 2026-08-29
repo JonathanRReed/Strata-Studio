@@ -163,9 +163,11 @@ test("@smoke every aspect preserves center and starts exactly one normal regener
     expect(center[1]).toBeCloseTo(initialCenter[1], 4);
     expect(current.params.aspectRatio).toBe(aspect);
 
-    const exportFrame = page.getByTestId("export-frame");
-    await expect(exportFrame).toBeVisible();
-    const box = await exportFrame.boundingBox();
+    // Headless Firefox can use the no-WebGL map fallback. The artboard stays
+    // available in both map modes and is the user-visible aspect outcome.
+    const artwork = page.getByRole("img", { name: /artwork of/i });
+    await expect(artwork).toBeVisible();
+    const box = await artwork.boundingBox();
     expect(box).not.toBeNull();
     expect(box!.width / box!.height).toBeCloseTo(ratio, 2);
   }
