@@ -97,7 +97,9 @@ function formatCaption(
   const coords = `${Math.abs(lat).toFixed(4)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lng).toFixed(4)}°${lng >= 0 ? "E" : "W"}`;
   const match = terrainInfo?.match(/Elevation (-?\d+)m – (-?\d+)m/);
   const elev = match ? `ELEV ${minus(match[1])}–${minus(match[2])} M` : null;
-  return [label.trim() || null, coords, elev, `SEED ${seed}`].filter(Boolean).join(" · ");
+  return [label.trim() || null, coords, elev, `SEED ${seed}`]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 const retryButtonClass =
@@ -172,7 +174,10 @@ export function Stage({
         dialog.querySelectorAll<HTMLElement>(
           'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], canvas[tabindex="0"], [tabindex]:not([tabindex="-1"])',
         ),
-      ).filter((element) => !element.closest("[inert]") && element.offsetParent !== null);
+      ).filter(
+        (element) =>
+          !element.closest("[inert]") && element.offsetParent !== null,
+      );
       if (focusable.length === 0) {
         event.preventDefault();
         dialog.focus();
@@ -227,7 +232,9 @@ export function Stage({
     <main
       inert={backgroundInert ? true : undefined}
       className="relative flex min-w-0 flex-1 flex-col"
-      style={{ backgroundColor: `color-mix(in srgb, ${wallColor} 6%, var(--color-ground))` }}
+      style={{
+        backgroundColor: `color-mix(in srgb, ${wallColor} 6%, var(--color-ground))`,
+      }}
     >
       {/* Viewfinder — floating PiP at every size: ~120px locator bottom-left on
           mobile (tap to expand to the fullscreen overlay), 240px instrument at lg. */}
@@ -251,9 +258,9 @@ export function Stage({
           Choose artwork area
         </h2>
         <p id="map-keyboard-instructions" className="sr-only">
-          Pan with the arrow keys and zoom with plus or minus when the map is focused.
-          Changes apply automatically. The outlined frame is the exported area. Press
-          Escape to close the expanded map.
+          Pan with the arrow keys and zoom with plus or minus when the map is
+          focused. Changes apply automatically. The outlined frame is the
+          exported area. Press Escape to close the expanded map.
         </p>
         <div
           className={
@@ -276,7 +283,9 @@ export function Stage({
             <Suspense
               fallback={
                 <div className="flex h-full w-full items-center justify-center bg-surface">
-                  <span className="instrument-label status-live text-ink-muted">Loading map</span>
+                  <span className="instrument-label status-live text-ink-muted">
+                    Loading map
+                  </span>
                 </div>
               }
             >
@@ -302,14 +311,19 @@ export function Stage({
         <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex flex-col items-center gap-2 px-4 lg:top-6">
           {isGenerating && statusText && (
             <div className="enter-banner pointer-events-auto flex min-h-9 items-center rounded-sm border border-hairline bg-surface px-4">
-              <span className="instrument-label status-live text-ink" role="status">
+              <span
+                className="instrument-label status-live text-ink"
+                role="status"
+              >
                 {statusText}
               </span>
             </div>
           )}
           {showStale && (
             <div className="enter-banner hatched pointer-events-auto flex items-center gap-3 rounded-sm border border-amber/40 bg-surface p-1.5 pl-4">
-              <span className="instrument-label text-amber">Selection moved, artwork stale</span>
+              <span className="instrument-label text-amber">
+                Selection moved, artwork stale
+              </span>
               <button
                 type="button"
                 onClick={onRegenerate}
@@ -324,11 +338,18 @@ export function Stage({
               role="alert"
               className="enter-banner pointer-events-auto flex w-full max-w-xl flex-col gap-2.5 rounded-sm border border-alarm/40 bg-surface p-3"
             >
-              <p className="text-[12px] leading-snug text-alarm">{errorMessage}</p>
+              <p className="text-[12px] leading-snug text-alarm">
+                {errorMessage}
+              </p>
               <div className="flex flex-wrap items-center gap-2">
                 {showTerrainRetry && (
-                  <button type="button" onClick={onRetryTerrain} className={retryButtonClass}>
-                    Retry{terrainRetryCount > 0 ? ` (${terrainRetryCount})` : ""}
+                  <button
+                    type="button"
+                    onClick={onRetryTerrain}
+                    className={retryButtonClass}
+                  >
+                    Retry
+                    {terrainRetryCount > 0 ? ` (${terrainRetryCount})` : ""}
                   </button>
                 )}
                 <button
@@ -346,22 +367,30 @@ export function Stage({
               role="status"
               className="enter-banner hatched pointer-events-auto flex min-h-9 max-w-xl items-center rounded-sm border border-amber/40 bg-surface px-4 py-1.5"
             >
-              <span className="text-[12px] leading-snug text-amber">{warning}</span>
+              <span className="text-[12px] leading-snug text-amber">
+                {warning}
+              </span>
             </div>
           )}
         </div>
         {!artworkVisible && (
           <div className="enter-panel pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center">
-            <p className="display text-3xl tracking-[0.06em] text-ink sm:text-4xl">Strata Studio</p>
-            <p className="text-sm text-ink-muted">Real places, rendered like sound.</p>
+            <p className="display text-3xl tracking-[0.06em] text-ink sm:text-4xl">
+              Strata Studio
+            </p>
+            <p className="text-sm text-ink-muted">
+              Real places, rendered like sound.
+            </p>
           </div>
         )}
-        {/* Permanent watermark — the wordmark stays as a quiet corner mark
+        {/* The permanent watermark stays as a quiet corner mark
             even after the artwork arrives, so the surface always identifies
-            itself. Fades to near-invisible so it never competes with the art. */}
+            itself without sacrificing readable contrast. */}
         {artworkVisible && (
           <div className="pointer-events-none absolute bottom-3 right-3 z-10 select-none">
-            <p className="display text-[10px] tracking-[0.14em] text-ink-faint/40">STRATA</p>
+            <p className="display text-[10px] tracking-[0.14em] text-ink-faint">
+              STRATA
+            </p>
           </div>
         )}
         <Artboard
@@ -376,7 +405,9 @@ export function Stage({
             artworkVisible ? "" : "invisible"
           }`}
         >
-          <p className="instrument-label enter-readout text-center text-ink-faint">{caption}</p>
+          <p className="instrument-label enter-readout text-center text-ink-faint">
+            {caption}
+          </p>
           {/* Variations ghost button — desktop only; the mobile STYLE tab has its own. */}
           {variationsReady && (
             <button

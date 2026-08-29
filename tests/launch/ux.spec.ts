@@ -12,18 +12,25 @@ type SharedDocument = {
 function sharedDocument(url: string): SharedDocument | null {
   const encoded = new URL(url).searchParams.get("composition");
   if (!encoded) return null;
-  return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as SharedDocument;
+  return JSON.parse(
+    Buffer.from(encoded, "base64url").toString("utf8"),
+  ) as SharedDocument;
 }
 
 async function waitForArtwork(page: import("@playwright/test").Page) {
   await expect(page.getByRole("img", { name: /artwork of/i })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({
+  await expect(
+    page.getByRole("button", { name: "Regenerate now" }),
+  ).toBeEnabled({
     timeout: 30_000,
   });
 }
 
 async function startWithoutOrientation(page: import("@playwright/test").Page) {
-  await page.addInitScript((key) => localStorage.setItem(key, "1"), ORIENTATION_KEY);
+  await page.addInitScript(
+    (key) => localStorage.setItem(key, "1"),
+    ORIENTATION_KEY,
+  );
   await page.goto("/");
   await waitForArtwork(page);
 }
@@ -34,7 +41,9 @@ test("@smoke first-session orientation routes desktop actions and persists dismi
   await page.goto("/");
   await waitForArtwork(page);
 
-  const guide = page.getByRole("complementary", { name: "Your Daily Strata is ready" });
+  const guide = page.getByRole("complementary", {
+    name: "Your Daily Strata is ready",
+  });
   await expect(guide).toBeVisible();
   await expect(guide).toContainText(" · ");
 
@@ -68,13 +77,17 @@ test("@smoke first-session orientation routes desktop actions and persists dismi
   await expect(guide).toHaveCount(0);
 });
 
-test("@smoke first-session Customize artwork opens the mobile Style sheet", async ({ page }) => {
+test("@smoke first-session Customize artwork opens the mobile Style sheet", async ({
+  page,
+}) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await waitForArtwork(page);
 
-  const guide = page.getByRole("complementary", { name: "Your Daily Strata is ready" });
+  const guide = page.getByRole("complementary", {
+    name: "Your Daily Strata is ready",
+  });
   await guide.getByRole("button", { name: "Customize artwork" }).click();
   const styleTab = page.getByRole("tab", { name: "Style" });
   await expect(styleTab).toHaveAttribute("aria-selected", "true");
@@ -119,11 +132,12 @@ test("@smoke every aspect preserves center and starts exactly one normal regener
   await waitForArtwork(page);
   await page.waitForTimeout(1_200);
 
-  const busyStarts = () => page.evaluate(
-    () =>
-      (window as Window & { __strataAspectBusyStarts?: number })
-        .__strataAspectBusyStarts ?? 0,
-  );
+  const busyStarts = () =>
+    page.evaluate(
+      () =>
+        (window as Window & { __strataAspectBusyStarts?: number })
+          .__strataAspectBusyStarts ?? 0,
+    );
   const baseline = await busyStarts();
   const initial = sharedDocument(page.url())!;
   const initialCenter = [
@@ -146,7 +160,9 @@ test("@smoke every aspect preserves center and starts exactly one normal regener
     const startsBefore = await busyStarts();
     await aspectSelect.selectOption(aspect);
     await expect.poll(busyStarts, { timeout: 30_000 }).toBe(startsBefore + 1);
-    const regenerate = page.getByRole("button", { name: /Regenerating|Regenerate now/ });
+    const regenerate = page.getByRole("button", {
+      name: /Regenerating|Regenerate now/,
+    });
     await expect(regenerate).toBeEnabled({ timeout: 30_000 });
     await expect
       .poll(() => sharedDocument(page.url())?.params.aspectRatio, {
@@ -246,13 +262,23 @@ test("@a11y labels, help descriptions, slider values, and palette errors are ass
 }) => {
   await startWithoutOrientation(page);
 
+  await page.getByRole("tab", { name: "Experimental Lab" }).click();
+  await page
+    .getByRole("button", { name: "Waveform Terrain", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Terrain", exact: true }).click();
+
   const slider = page.getByRole("slider", { name: "Amplitude" });
   const sliderId = await slider.getAttribute("id");
   expect(sliderId).toBeTruthy();
   const describedBy = await slider.getAttribute("aria-describedby");
   expect(describedBy).toBeTruthy();
-  await expect(page.locator(`#${describedBy}`)).toContainText("terrain displaces");
-  await expect(page.getByRole("button", { name: "Amplitude help" })).toBeVisible();
+  await expect(page.locator(`#${describedBy}`)).toContainText(
+    "terrain displaces",
+  );
+  await expect(
+    page.getByRole("button", { name: "Amplitude help" }),
+  ).toBeVisible();
   await expect(page.locator(`output[for="${sliderId}"]`)).not.toHaveAttribute(
     "aria-live",
     /.+/,
@@ -277,12 +303,20 @@ test("@smoke Generate stays busy through the complete no-preference reveal", asy
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(false);
+  expect(
+    await page.evaluate(
+      () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+    ),
+  ).toBe(false);
   await startWithoutOrientation(page);
 
-  const regenerate = page.getByRole("button", { name: /Regenerating|Regenerate now/ });
+  const regenerate = page.getByRole("button", {
+    name: /Regenerating|Regenerate now/,
+  });
   await regenerate.click();
-  await expect(page.getByText("Rendering…", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Rendering…", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
   await page.waitForTimeout(300);
   await expect(regenerate).toBeDisabled();
   await expect(regenerate).toBeEnabled({ timeout: 10_000 });
@@ -293,7 +327,9 @@ test("@smoke first-session guide never covers the artwork across supported layou
 }) => {
   await page.goto("/");
   await waitForArtwork(page);
-  const guide = page.getByRole("complementary", { name: "Your Daily Strata is ready" });
+  const guide = page.getByRole("complementary", {
+    name: "Your Daily Strata is ready",
+  });
   const artwork = page.getByRole("img", { name: /artwork of/i });
 
   for (const viewport of [
@@ -314,21 +350,32 @@ test("@smoke first-session guide never covers the artwork across supported layou
         .querySelector<HTMLElement>('canvas[role="img"]')!
         .getBoundingClientRect();
       return (
-        Math.max(0, Math.min(guideRect.right, artRect.right) - Math.max(guideRect.left, artRect.left)) *
-        Math.max(0, Math.min(guideRect.bottom, artRect.bottom) - Math.max(guideRect.top, artRect.top))
+        Math.max(
+          0,
+          Math.min(guideRect.right, artRect.right) -
+            Math.max(guideRect.left, artRect.left),
+        ) *
+        Math.max(
+          0,
+          Math.min(guideRect.bottom, artRect.bottom) -
+            Math.max(guideRect.top, artRect.top),
+        )
       );
     });
     expect(overlap).toBeLessThan(1);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-      viewport.width,
-    );
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(viewport.width);
   }
 });
 
 test("@smoke dialog fallback traps focus, inerts background, restores openers, and copies links", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Capability fallback injection is covered in Chromium.");
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "Capability fallback injection is covered in Chromium.",
+  );
   await page.addInitScript((key) => {
     localStorage.setItem(key, "1");
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -351,15 +398,22 @@ test("@smoke dialog fallback traps focus, inerts background, restores openers, a
   await exportOpener.click();
   const exportDialog = page.getByRole("dialog", { name: "Export" });
   await expect(exportDialog).toBeVisible();
-  const closeExport = exportDialog.getByRole("button", { name: "Close export dialog" });
+  const closeExport = exportDialog.getByRole("button", {
+    name: "Close export dialog",
+  });
   await expect(closeExport).toBeFocused();
   await expect(page.locator("main")).toHaveAttribute("inert", "");
   await page.keyboard.press("Shift+Tab");
   await expect(
-    exportDialog.getByRole("button", { name: "Import composition", exact: true }),
+    exportDialog.getByRole("button", {
+      name: "Import composition",
+      exact: true,
+    }),
   ).toBeFocused();
   await exportDialog.getByRole("button", { name: "Copy link" }).click();
-  await expect(exportDialog.getByRole("button", { name: "Copied" })).toBeVisible();
+  await expect(
+    exportDialog.getByRole("button", { name: "Copied" }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(exportDialog).toBeHidden();
   await expect(exportOpener).toBeFocused();
@@ -381,14 +435,19 @@ test("@smoke dialog fallback traps focus, inerts background, restores openers, a
 test("@smoke mobile map restores focus to visible chrome and full sheet inerts artwork", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Pointer-drag sheet modality is covered in Chromium.");
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "Pointer-drag sheet modality is covered in Chromium.",
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   await startWithoutOrientation(page);
 
   const handle = page.locator('button[aria-controls="mobile-sheet-body"]');
   await page.getByRole("button", { name: "Open controls" }).click();
   await page.getByRole("tab", { name: "Place" }).click();
-  await page.getByRole("button", { name: "Choose area on map (search & pan)" }).click();
+  await page
+    .getByRole("button", { name: "Choose area on map (search & pan)" })
+    .click();
   await page.keyboard.press("Escape");
   await expect(handle).toBeFocused();
 
@@ -400,17 +459,24 @@ test("@smoke mobile map restores focus to visible chrome and full sheet inerts a
   await page.mouse.down();
   await page.mouse.move(box!.x + box!.width / 2, 20, { steps: 8 });
   await page.mouse.up();
-  await expect(page.getByRole("dialog", { name: "Artwork controls" })).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "Artwork controls" }),
+  ).toBeVisible();
   await expect(page.locator("main")).toHaveAttribute("inert", "");
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "Artwork controls" })).toHaveCount(0);
+  await expect(
+    page.getByRole("dialog", { name: "Artwork controls" }),
+  ).toHaveCount(0);
   await expect(page.locator("main")).not.toHaveAttribute("inert", "");
 });
 
 test("@smoke native URL sharing avoids image work when file share is unavailable", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Native share stubbing is covered in Chromium.");
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "Native share stubbing is covered in Chromium.",
+  );
   await page.addInitScript((key) => {
     localStorage.setItem(key, "1");
     Object.defineProperty(navigator, "canShare", {
@@ -420,16 +486,23 @@ test("@smoke native URL sharing avoids image work when file share is unavailable
     Object.defineProperty(navigator, "share", {
       configurable: true,
       value: async (data: ShareData) => {
-        (window as Window & { __strataSharedData?: ShareData }).__strataSharedData = data;
+        (
+          window as Window & { __strataSharedData?: ShareData }
+        ).__strataSharedData = data;
       },
     });
   }, ORIENTATION_KEY);
   await page.goto("/");
   await waitForArtwork(page);
   await page.getByRole("button", { name: "Export…" }).click();
-  await page.getByRole("dialog", { name: "Export" }).getByRole("button", { name: "Share…" }).click();
+  await page
+    .getByRole("dialog", { name: "Export" })
+    .getByRole("button", { name: "Share…" })
+    .click();
   const shared = await page.evaluate(
-    () => (window as Window & { __strataSharedData?: ShareData }).__strataSharedData,
+    () =>
+      (window as Window & { __strataSharedData?: ShareData })
+        .__strataSharedData,
   );
   expect(shared?.url).toBe(page.url());
   expect(shared?.files).toBeUndefined();
@@ -439,7 +512,10 @@ test("@smoke native file sharing reuses the resident preview terrain", async ({
   page,
   externalRequests,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Native share stubbing is covered in Chromium.");
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "Native share stubbing is covered in Chromium.",
+  );
   await page.addInitScript((key) => {
     localStorage.setItem(key, "1");
     Object.defineProperty(navigator, "canShare", {
@@ -450,8 +526,11 @@ test("@smoke native file sharing reuses the resident preview terrain", async ({
       configurable: true,
       value: async (data: ShareData) => {
         const file = data.files?.[0];
-        (window as Window & { __strataSharedFile?: { name: string; size: number } })
-          .__strataSharedFile = file
+        (
+          window as Window & {
+            __strataSharedFile?: { name: string; size: number };
+          }
+        ).__strataSharedFile = file
           ? { name: file.name, size: file.size }
           : undefined;
       },
@@ -474,8 +553,11 @@ test("@smoke native file sharing reuses the resident preview terrain", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window as Window & { __strataSharedFile?: { name: string; size: number } })
-            .__strataSharedFile,
+          (
+            window as Window & {
+              __strataSharedFile?: { name: string; size: number };
+            }
+          ).__strataSharedFile,
       ),
     )
     .toEqual(
@@ -491,7 +573,10 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
   page,
   externalRequests,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Representative multi-format exports are covered in Chromium.");
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "Representative multi-format exports are covered in Chromium.",
+  );
   test.setTimeout(120_000);
   await startWithoutOrientation(page);
   await page.getByRole("button", { name: "Expand map" }).click();
@@ -517,7 +602,8 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
   await expect(placeRegeneration).toBeEnabled({ timeout: 30_000 });
 
   const composition = page.getByRole("button", { name: "Composition" });
-  if ((await composition.getAttribute("aria-expanded")) !== "true") await composition.click();
+  if ((await composition.getAttribute("aria-expanded")) !== "true")
+    await composition.click();
   const posterLabel = page.getByRole("radio", { name: "Poster" });
   await posterLabel.focus();
   await posterLabel.press("Space");
@@ -529,9 +615,14 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
     ["square", 1024, 1024],
   ] as const;
   for (const [aspect, width, height] of cases) {
-    if ((await composition.getAttribute("aria-expanded")) !== "true") await composition.click();
-    await page.getByRole("combobox", { name: "Aspect ratio" }).selectOption(aspect);
-    const regenerate = page.getByRole("button", { name: /Regenerating|Regenerate now/ });
+    if ((await composition.getAttribute("aria-expanded")) !== "true")
+      await composition.click();
+    await page
+      .getByRole("combobox", { name: "Aspect ratio" })
+      .selectOption(aspect);
+    const regenerate = page.getByRole("button", {
+      name: /Regenerating|Regenerate now/,
+    });
     await expect(regenerate).toBeDisabled();
     await expect(regenerate).toBeEnabled({ timeout: 30_000 });
     const document = sharedDocument(page.url())!;
@@ -559,7 +650,9 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
             Math.abs((west + east) / 2 - centerLng) < 0.01
           );
         });
-    await expect.poll(() => matchingOsmRequests().length, { timeout: 20_000 }).toBeGreaterThan(0);
+    await expect
+      .poll(() => matchingOsmRequests().length, { timeout: 20_000 })
+      .toBeGreaterThan(0);
     expect(matchingOsmRequests().at(-1)!.search).toMatch(
       /^\?south=-?\d+\.\d{4}&west=-?\d+\.\d{4}&north=-?\d+\.\d{4}&east=-?\d+\.\d{4}$/,
     );
@@ -567,8 +660,14 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
     await page.getByRole("button", { name: "Variations" }).click();
     const variations = page.getByRole("dialog", { name: "Variations" });
     const variationCanvas = variations.locator("canvas").first();
-    await expect(variationCanvas).toHaveAttribute("width", String(Math.round((220 * width) / Math.max(width, height))));
-    await expect(variationCanvas).toHaveAttribute("height", String(Math.round((220 * height) / Math.max(width, height))));
+    await expect(variationCanvas).toHaveAttribute(
+      "width",
+      String(Math.round((220 * width) / Math.max(width, height))),
+    );
+    await expect(variationCanvas).toHaveAttribute(
+      "height",
+      String(Math.round((220 * height) / Math.max(width, height))),
+    );
     await variations.getByRole("button", { name: "Close variations" }).click();
 
     await page.getByRole("button", { name: "Export…" }).click();
@@ -581,19 +680,25 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
     await pngFormat.focus();
     await pngFormat.press("Space");
     const pngDownloadPromise = page.waitForEvent("download");
-    await exportDialog.getByRole("button", { name: "Export", exact: true }).click();
+    await exportDialog
+      .getByRole("button", { name: "Export", exact: true })
+      .click();
     const pngDownload = await pngDownloadPromise;
     expect(pngDownload.suggestedFilename()).toContain(`${width}x${height}.png`);
     const pngPath = await pngDownload.path();
     expect(pngPath).not.toBeNull();
     const png = await readFile(pngPath!);
-    expect(Array.from(png.subarray(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect(Array.from(png.subarray(0, 8))).toEqual([
+      137, 80, 78, 71, 13, 10, 26, 10,
+    ]);
 
     const svgFormat = exportDialog.getByRole("radio", { name: "SVG" });
     await svgFormat.focus();
     await svgFormat.press("Space");
     const svgDownloadPromise = page.waitForEvent("download");
-    await exportDialog.getByRole("button", { name: "Export", exact: true }).click();
+    await exportDialog
+      .getByRole("button", { name: "Export", exact: true })
+      .click();
     const svgDownload = await svgDownloadPromise;
     expect(svgDownload.suggestedFilename()).toContain(`${width}x${height}.svg`);
     const svgPath = await svgDownload.path();
@@ -603,7 +708,9 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
     expect(svg).toContain(
       `${Math.abs(centerLat).toFixed(2)}°${centerLat >= 0 ? "N" : "S"} ${Math.abs(centerLng).toFixed(2)}°${centerLng >= 0 ? "E" : "W"}`,
     );
-    await exportDialog.getByRole("button", { name: "Close export dialog" }).click();
+    await exportDialog
+      .getByRole("button", { name: "Close export dialog" })
+      .click();
 
     const beforeRestore = sharedDocument(page.url())!;
     await page.reload();
@@ -611,7 +718,10 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
     const afterRestore = sharedDocument(page.url())!;
     expect(afterRestore.params.aspectRatio).toBe(aspect);
     for (const key of ["west", "south", "east", "north"] as const) {
-      expect(afterRestore.bounds[key]).toBeCloseTo(beforeRestore.bounds[key], 10);
+      expect(afterRestore.bounds[key]).toBeCloseTo(
+        beforeRestore.bounds[key],
+        10,
+      );
     }
     const frame = await page.getByTestId("export-frame").boundingBox();
     expect(frame).not.toBeNull();
@@ -622,31 +732,40 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
 test("@smoke custom palettes restore from an empty store and malformed imports are atomic", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Storage and file import journey is covered in Chromium.");
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "Storage and file import journey is covered in Chromium.",
+  );
   await startWithoutOrientation(page);
   await page.getByRole("button", { name: "Seed & Palette" }).click();
   await page.getByRole("button", { name: "New palette" }).click();
   await page.getByRole("textbox", { name: "Name" }).fill("Incognito Ember");
-  await page.getByRole("textbox", { name: "Background", exact: true }).fill("#102030");
+  await page
+    .getByRole("textbox", { name: "Background", exact: true })
+    .fill("#102030");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect.poll(() => sharedDocument(page.url())?.customPalette?.name).toBe("Incognito Ember");
+  await expect
+    .poll(() => sharedDocument(page.url())?.customPalette?.name)
+    .toBe("Incognito Ember");
   const sharedUrl = page.url();
 
   await page.evaluate(() => localStorage.clear());
   await page.goto(sharedUrl);
   await waitForArtwork(page);
   const seedPalette = page.getByRole("button", { name: "Seed & Palette" });
-  if ((await seedPalette.getAttribute("aria-expanded")) !== "true") await seedPalette.click();
-  await expect(page.getByRole("button", { name: /Incognito Ember custom/i })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  if ((await seedPalette.getAttribute("aria-expanded")) !== "true")
+    await seedPalette.click();
+  await expect(
+    page.getByRole("button", { name: /Incognito Ember custom/i }),
+  ).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "Export…" }).click();
   const dialog = page.getByRole("dialog", { name: "Export" });
   const beforeImport = page.url();
   const encoded = new URL(beforeImport).searchParams.get("composition")!;
-  const document = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  const document = JSON.parse(
+    Buffer.from(encoded, "base64url").toString("utf8"),
+  );
   const malformed = {
     ...document,
     bounds: { west: 5, south: 0, east: -5, north: 1 },
@@ -659,7 +778,9 @@ test("@smoke custom palettes restore from an empty store and malformed imports a
   });
   await expect(dialog.getByRole("alert")).toContainText("bounds are invalid");
   expect(page.url()).toBe(beforeImport);
-  await expect(page.getByRole("img", { name: /Must not apply/i })).toHaveCount(0);
+  await expect(page.getByRole("img", { name: /Must not apply/i })).toHaveCount(
+    0,
+  );
 
   const valid = {
     ...document,
@@ -670,8 +791,14 @@ test("@smoke custom palettes restore from an empty store and malformed imports a
     mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify(valid)),
   });
-  await expect(dialog.getByRole("status")).toContainText("Imported valid.composition.json");
-  await expect.poll(() => sharedDocument(page.url())?.params.label).toBe("Imported Atomically");
+  await expect(dialog.getByRole("status")).toContainText(
+    "Imported valid.composition.json",
+  );
+  await expect
+    .poll(() => sharedDocument(page.url())?.params.label)
+    .toBe("Imported Atomically");
   await dialog.getByRole("button", { name: "Close export dialog" }).click();
-  await expect(page.getByRole("img", { name: /Imported Atomically/i })).toBeVisible();
+  await expect(
+    page.getByRole("img", { name: /Imported Atomically/i }),
+  ).toBeVisible();
 });

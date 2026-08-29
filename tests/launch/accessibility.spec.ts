@@ -5,7 +5,9 @@ test("@a11y fresh visit has no serious WCAG or contrast violations", async ({
   page,
 }, testInfo) => {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({
+  await expect(
+    page.getByRole("button", { name: "Regenerate now" }),
+  ).toBeEnabled({
     timeout: 20_000,
   });
 
@@ -27,10 +29,17 @@ test("@a11y fresh visit has no serious WCAG or contrast violations", async ({
 test("@a11y interactive map, export, variations, and mobile sheet have no serious violations", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Expanded interactive surfaces are covered in Chromium.");
-  await page.addInitScript(() => localStorage.setItem("strata.orientation.dismissed", "1"));
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "Expanded interactive surfaces are covered in Chromium.",
+  );
+  await page.addInitScript(() =>
+    localStorage.setItem("strata.orientation.dismissed", "1"),
+  );
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({
+  await expect(
+    page.getByRole("button", { name: "Regenerate now" }),
+  ).toBeEnabled({
     timeout: 20_000,
   });
 
@@ -44,26 +53,44 @@ test("@a11y interactive map, export, variations, and mobile sheet have no seriou
     });
     expect(
       results.violations.filter(
-        (violation) => violation.impact === "critical" || violation.impact === "serious",
+        (violation) =>
+          violation.impact === "critical" || violation.impact === "serious",
       ),
     ).toEqual([]);
   };
 
   await page.getByRole("button", { name: "Expand map" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Choose artwork area" }),
+  ).toHaveCSS("opacity", "1");
   await assertSurface("expanded-map");
   await page.keyboard.press("Escape");
 
   await page.getByRole("button", { name: "Variations" }).click();
+  await expect(page.getByRole("dialog", { name: "Variations" })).toHaveCSS(
+    "opacity",
+    "1",
+  );
   await assertSurface("variations");
-  await page.getByRole("dialog", { name: "Variations" }).getByRole("button", {
-    name: "Close variations",
-  }).click();
+  await page
+    .getByRole("dialog", { name: "Variations" })
+    .getByRole("button", {
+      name: "Close variations",
+    })
+    .click();
 
   await page.getByRole("button", { name: "Export…" }).click();
+  await expect(page.getByRole("dialog", { name: "Export" })).toHaveCSS(
+    "opacity",
+    "1",
+  );
   await assertSurface("export");
-  await page.getByRole("dialog", { name: "Export" }).getByRole("button", {
-    name: "Close export dialog",
-  }).click();
+  await page
+    .getByRole("dialog", { name: "Export" })
+    .getByRole("button", {
+      name: "Close export dialog",
+    })
+    .click();
 
   await page.setViewportSize({ width: 390, height: 844 });
   const handle = page.locator('button[aria-controls="mobile-sheet-body"]');
@@ -75,6 +102,8 @@ test("@a11y interactive map, export, variations, and mobile sheet have no seriou
   await page.mouse.down();
   await page.mouse.move(box!.x + box!.width / 2, 20, { steps: 8 });
   await page.mouse.up();
-  await expect(page.getByRole("dialog", { name: "Artwork controls" })).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "Artwork controls" }),
+  ).toHaveCSS("opacity", "1");
   await assertSurface("mobile-full-sheet");
 });
