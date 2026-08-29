@@ -32,16 +32,14 @@ if (buildInfo.schemaVersion !== 1 || buildInfo.app !== "strata-studio") {
 if (buildInfo.dataPolicy !== "proxy-first") {
   throw new Error("build-info.json must declare the proxy-first data policy.");
 }
-if (
-  buildInfo.appOrigin !== CANONICAL_APP_ORIGIN ||
-  buildInfo.canonicalOrigin !== CANONICAL_APP_ORIGIN
-) {
+const appOrigin = requireString(buildInfo.appOrigin, "appOrigin");
+if (buildInfo.canonicalOrigin !== CANONICAL_APP_ORIGIN) {
   throw new Error("build-info.json must declare the branded canonical origin.");
 }
 
 const dataRoutes = requireRecord(buildInfo.dataRoutes, "dataRoutes");
 const artifactValues = {
-  appOrigin: CANONICAL_APP_ORIGIN,
+  appOrigin,
   terrainTileUrl: requireString(dataRoutes.terrain, "dataRoutes.terrain"),
   overpassUrl: requireString(dataRoutes.overpass, "dataRoutes.overpass"),
 };
@@ -102,10 +100,10 @@ if (
   throw new Error("GIF/APNG encoders must be dynamically imported and absent from initial preloads.");
 }
 if (
-  !indexHtml.includes(`content="${expected.appOrigin}/"`) ||
-  !indexHtml.includes(`content="${expected.appOrigin}/og.png"`)
+  !indexHtml.includes(`content="${CANONICAL_APP_ORIGIN}/"`) ||
+  !indexHtml.includes(`content="${CANONICAL_APP_ORIGIN}/og.png"`)
 ) {
-  throw new Error("Compiled social metadata does not use the app origin.");
+  throw new Error("Compiled social metadata does not use the branded canonical origin.");
 }
 if (!indexHtml.includes(`href="${proxyOrigin}"`)) {
   throw new Error("Compiled HTML does not preconnect to the proxy origin.");

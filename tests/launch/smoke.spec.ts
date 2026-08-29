@@ -92,7 +92,7 @@ test("@smoke fresh visit renders proxy-backed artwork exactly once", async ({
   await expect(response.json()).resolves.toMatchObject({
     app: "strata-studio",
     dataPolicy: "proxy-first",
-    appOrigin: "https://stratastudio.jonathanrreed.com",
+    appOrigin: "https://strata-studio.example",
     canonicalOrigin: "https://stratastudio.jonathanrreed.com",
     dataRoutes: {
       terrain: "https://strata-proxy.example/terrain",
