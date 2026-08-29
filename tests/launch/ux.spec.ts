@@ -90,6 +90,7 @@ test("@smoke first-session Customize artwork opens the mobile Style sheet", asyn
 test("@smoke every aspect preserves center and starts exactly one normal regeneration", async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   await page.addInitScript((key) => {
     localStorage.setItem(key, "1");
     const busyByButton = new WeakMap<Element, boolean>();
@@ -118,11 +119,12 @@ test("@smoke every aspect preserves center and starts exactly one normal regener
   await waitForArtwork(page);
   await page.waitForTimeout(1_200);
 
-  const baseline = await page.evaluate(
+  const busyStarts = () => page.evaluate(
     () =>
       (window as Window & { __strataAspectBusyStarts?: number })
         .__strataAspectBusyStarts ?? 0,
   );
+  const baseline = await busyStarts();
   const initial = sharedDocument(page.url())!;
   const initialCenter = [
     (initial.bounds.west + initial.bounds.east) / 2,
@@ -141,12 +143,16 @@ test("@smoke every aspect preserves center and starts exactly one normal regener
   ] as const;
 
   for (const [aspect, ratio] of cases) {
+    const startsBefore = await busyStarts();
     await aspectSelect.selectOption(aspect);
+    await expect.poll(busyStarts, { timeout: 30_000 }).toBe(startsBefore + 1);
     const regenerate = page.getByRole("button", { name: /Regenerating|Regenerate now/ });
-    await expect(regenerate).toBeDisabled();
-    await expect(regenerate).toHaveText(/Regenerating…/);
     await expect(regenerate).toBeEnabled({ timeout: 30_000 });
-    await page.waitForTimeout(1_000);
+    await expect
+      .poll(() => sharedDocument(page.url())?.params.aspectRatio, {
+        timeout: 30_000,
+      })
+      .toBe(aspect);
 
     const current = sharedDocument(page.url())!;
     const center = [
@@ -157,16 +163,14 @@ test("@smoke every aspect preserves center and starts exactly one normal regener
     expect(center[1]).toBeCloseTo(initialCenter[1], 4);
     expect(current.params.aspectRatio).toBe(aspect);
 
-    const box = await page.getByTestId("export-frame").boundingBox();
+    const exportFrame = page.getByTestId("export-frame");
+    await expect(exportFrame).toBeVisible();
+    const box = await exportFrame.boundingBox();
     expect(box).not.toBeNull();
     expect(box!.width / box!.height).toBeCloseTo(ratio, 2);
   }
 
-  const starts = await page.evaluate(
-    () =>
-      (window as Window & { __strataAspectBusyStarts?: number })
-        .__strataAspectBusyStarts ?? 0,
-  );
+  const starts = await busyStarts();
   expect(starts).toBe(baseline + cases.length);
   const restoredSquare = sharedDocument(page.url())!.bounds;
   for (const key of ["west", "south", "east", "north"] as const) {

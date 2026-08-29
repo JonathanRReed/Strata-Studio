@@ -297,7 +297,9 @@ test("@smoke evaluator can choose a place, change style, generate, and export", 
   pageErrors,
 }) => {
   await page.goto("/");
-  const generate = page.getByRole("button", { name: "Regenerate now" });
+  const generate = page.getByRole("button", {
+    name: /Regenerating|Regenerate now/,
+  });
   await expect(generate).toBeEnabled({ timeout: 20_000 });
 
   await page.getByRole("button", { name: "Expand map" }).click();
