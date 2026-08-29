@@ -44,9 +44,9 @@ VITE_BUILD_CONTEXT=production \
 bun run --cwd web build
 ```
 
-`vite.config.ts` validates those URLs from the shell or Vite mode files, injects the app origin into absolute Open Graph/Twitter image metadata, and emits `dist/build-info.json`. The build then runs `scripts/assert-proxy-first.ts`, which validates the emitted configuration and rejects direct upstream endpoints or a bundle that does not contain the configured proxy routes.
+`vite.config.ts` validates those URLs from the shell or Vite mode files, pins canonical and Open Graph/Twitter metadata to `https://stratastudio.jonathanrreed.com/`, and emits `dist/build-info.json`. The build then runs `scripts/assert-proxy-first.ts`, which validates the emitted configuration and rejects direct upstream endpoints or a bundle that does not contain the configured proxy routes.
 
-`build-info.json` contains only safe public deployment metadata: app/version, timestamp, sanitized commit/branch/context/provider, app origin, data policy, and data routes. Do not add secrets.
+`build-info.json` contains only safe public deployment metadata: app/version, timestamp, sanitized commit/branch/context/provider, branded app and canonical origins, data policy, and data routes. Do not add secrets.
 
 ## Cloudflare Pages
 

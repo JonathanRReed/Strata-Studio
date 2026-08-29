@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CANONICAL_APP_ORIGIN,
   DIRECT_TERRAIN_URL,
   resolvePublicBuildConfig,
 } from "./build-config.ts";
@@ -23,6 +24,7 @@ describe("resolvePublicBuildConfig", () => {
       ),
     ).toEqual({
       appOrigin: "https://studio.example.com",
+      canonicalOrigin: "https://stratastudio.jonathanrreed.com",
       terrainTileUrl: "https://proxy.example.com/terrain",
       overpassUrl: "https://proxy.example.com/overpass",
       production: true,
@@ -86,6 +88,7 @@ describe("resolvePublicBuildConfig", () => {
   test("keeps safe localhost defaults for development", () => {
     expect(resolvePublicBuildConfig({}, false)).toEqual({
       appOrigin: "http://localhost:5173",
+      canonicalOrigin: "https://stratastudio.jonathanrreed.com",
       terrainTileUrl: DIRECT_TERRAIN_URL,
       overpassUrl: null,
       production: false,
@@ -99,5 +102,29 @@ describe("resolvePublicBuildConfig", () => {
         false,
       ),
     ).toThrow("HTTP is only allowed for localhost");
+  });
+});
+
+describe("canonical public origin", () => {
+  test("uses the branded origin across public metadata sources", async () => {
+    expect(CANONICAL_APP_ORIGIN).toBe(
+      "https://stratastudio.jonathanrreed.com",
+    );
+    const canonicalOrigin = CANONICAL_APP_ORIGIN;
+    const legacyOrigin = ["https://strata-studio", ".pages.dev"].join("");
+    const files = [
+      "index.html",
+      "public/robots.txt",
+      "public/sitemap.xml",
+      "public/llms.txt",
+    ];
+    const contents = await Promise.all(
+      files.map((file) => Bun.file(new URL(`./${file}`, import.meta.url)).text()),
+    );
+
+    for (const content of contents) {
+      expect(content).toContain(canonicalOrigin);
+      expect(content).not.toContain(legacyOrigin);
+    }
   });
 });

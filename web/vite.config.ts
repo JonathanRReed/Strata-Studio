@@ -115,7 +115,8 @@ function buildInfoPlugin(config: PublicBuildConfig): Plugin {
             branch,
             context,
             provider,
-            appOrigin: config.appOrigin,
+            appOrigin: config.canonicalOrigin,
+            canonicalOrigin: config.canonicalOrigin,
             dataPolicy: config.production ? "proxy-first" : "development",
             dataRoutes: {
               terrain: config.terrainTileUrl,

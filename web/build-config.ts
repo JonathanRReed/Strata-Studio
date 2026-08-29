@@ -1,5 +1,6 @@
 export type PublicBuildConfig = {
   appOrigin: string;
+  canonicalOrigin: string;
   terrainTileUrl: string;
   overpassUrl: string | null;
   production: boolean;
@@ -12,6 +13,9 @@ export type PublicBuildEnv = {
 };
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+export const CANONICAL_APP_ORIGIN =
+  "https://stratastudio.jonathanrreed.com";
 
 export const DIRECT_TERRAIN_URL =
   "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
@@ -147,6 +151,7 @@ export function resolvePublicBuildConfig(
 
   return {
     appOrigin,
+    canonicalOrigin: CANONICAL_APP_ORIGIN,
     terrainTileUrl,
     overpassUrl,
     production,

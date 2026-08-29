@@ -7,12 +7,11 @@
     <meta name="theme-color" content="#0b0b0d" />
     <meta name="google-site-verification" content="gOXj_S4hpU9VYkdRBhuUC24moW4L65nkNtyf-F_3AA8" />
     <!--
-      Canonical and sitemap.xml are deliberately hardcoded to the production
-      origin rather than the build-time origin token: fixture and CI builds
-      resolve that token to a fake host, and a canonical must never point at
-      a non-public origin.
+      Canonical metadata is pinned to the branded public origin. Fixture and
+      CI builds use reserved origins for runtime verification, but must not
+      publish those origins as public metadata.
     -->
-    <link rel="canonical" href="https://strata-studio.pages.dev/" />
+    <link rel="canonical" href="https://stratastudio.jonathanrreed.com/" />
     <title>Strata Studio: turn real places into generative art</title>
     <meta
       name="description"
@@ -22,20 +21,20 @@
     <!-- Social cards. og.png is a real render exported from the app. -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Strata Studio" />
-    <meta property="og:url" content="%STRATA_APP_ORIGIN%/" />
+    <meta property="og:url" content="https://stratastudio.jonathanrreed.com/" />
     <meta property="og:title" content="Strata Studio: turn real places into generative art" />
     <meta
       property="og:description"
       content="Real terrain and street data rendered as waveforms, contours, and ridgelines. Free, in your browser."
     />
-    <meta property="og:image" content="%STRATA_APP_ORIGIN%/og.png" />
+    <meta property="og:image" content="https://stratastudio.jonathanrreed.com/og.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Strata Studio: turn real places into generative art" />
     <meta
       name="twitter:description"
       content="Real terrain and street data rendered as waveforms, contours, and ridgelines. Free, in your browser."
     />
-    <meta name="twitter:image" content="%STRATA_APP_ORIGIN%/og.png" />
+    <meta name="twitter:image" content="https://stratastudio.jonathanrreed.com/og.png" />
 
     <!-- Warm up the two connections every session needs. -->
     <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin />
@@ -103,7 +102,7 @@
         "@context": "https://schema.org",
         "@type": "WebApplication",
         "name": "Strata Studio",
-        "url": "https://strata-studio.pages.dev/",
+        "url": "https://stratastudio.jonathanrreed.com/",
         "description": "Turn any place on Earth into poster art. Real terrain and OpenStreetMap data rendered as contours, ridgelines, waveforms, and flow fields. Free, in your browser, with no account.",
         "applicationCategory": "DesignApplication",
         "operatingSystem": "Any modern web browser",

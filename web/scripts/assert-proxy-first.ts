@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import {
+  CANONICAL_APP_ORIGIN,
   KNOWN_DIRECT_DATA_HOSTS,
   resolvePublicBuildConfig,
 } from "../build-config.ts";
@@ -31,10 +32,16 @@ if (buildInfo.schemaVersion !== 1 || buildInfo.app !== "strata-studio") {
 if (buildInfo.dataPolicy !== "proxy-first") {
   throw new Error("build-info.json must declare the proxy-first data policy.");
 }
+if (
+  buildInfo.appOrigin !== CANONICAL_APP_ORIGIN ||
+  buildInfo.canonicalOrigin !== CANONICAL_APP_ORIGIN
+) {
+  throw new Error("build-info.json must declare the branded canonical origin.");
+}
 
 const dataRoutes = requireRecord(buildInfo.dataRoutes, "dataRoutes");
 const artifactValues = {
-  appOrigin: requireString(buildInfo.appOrigin, "appOrigin"),
+  appOrigin: CANONICAL_APP_ORIGIN,
   terrainTileUrl: requireString(dataRoutes.terrain, "dataRoutes.terrain"),
   overpassUrl: requireString(dataRoutes.overpass, "dataRoutes.overpass"),
 };

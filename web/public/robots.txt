@@ -161,4 +161,4 @@ Disallow: /
 User-agent: omgilibot
 Disallow: /
 
-Sitemap: https://strata-studio.pages.dev/sitemap.xml
+Sitemap: https://stratastudio.jonathanrreed.com/sitemap.xml

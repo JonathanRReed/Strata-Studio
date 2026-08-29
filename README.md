@@ -48,7 +48,8 @@ The production build is proxy-first. It refuses to build without explicit HTTPS 
 - terrain and Overpass target the two `strata-proxy` routes on one HTTPS origin;
 - those values are embedded in the compiled JavaScript;
 - `build-info.json` reports the same public configuration; and
-- social metadata uses the configured app origin.
+- canonical HTML and social metadata use the branded public origin
+  `https://stratastudio.jonathanrreed.com/`.
 
 No secrets are included in the client bundle or `build-info.json`.
 
@@ -84,7 +85,7 @@ All three variables are required for `vite build` / `bun run build`. They may be
 
 | Variable                | Example                                             | Contract                                                                      |
 | ----------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `VITE_APP_ORIGIN`       | `https://studio.example.com`                        | Public Pages/custom-domain origin only; no path, query, credentials, or hash. |
+| `VITE_APP_ORIGIN`       | `https://studio.example.com`                        | Public Pages/custom-domain origin used to validate the build; no path, query, credentials, or hash. Canonical metadata is always the branded origin. |
 | `VITE_TERRAIN_TILE_URL` | `https://strata-proxy.example.workers.dev/terrain`  | Full proxy terrain route; the app appends `/{z}/{x}/{y}.png`.                 |
 | `VITE_OVERPASS_URL`     | `https://strata-proxy.example.workers.dev/overpass` | Full proxy Overpass route; the app appends canonical snapped bbox parameters. |
 
@@ -141,7 +142,7 @@ curl -fsS https://<app-origin>/build-info.json
 curl -fsSI https://<app-origin>/
 ```
 
-A healthy `build-info.json` has `dataPolicy: "proxy-first"`, the expected app origin, the deployed `/terrain` and `/overpass` routes, and the expected commit/branch. It must not contain credentials or private environment values.
+A healthy `build-info.json` has `dataPolicy: "proxy-first"`, the branded `appOrigin` and `canonicalOrigin`, the deployed `/terrain` and `/overpass` routes, and the expected commit/branch. It must not contain credentials or private environment values.
 
 ## Supported browsers
 
