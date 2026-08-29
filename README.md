@@ -142,7 +142,7 @@ curl -fsS https://<app-origin>/build-info.json
 curl -fsSI https://<app-origin>/
 ```
 
-A healthy `build-info.json` has `dataPolicy: "proxy-first"`, the branded `appOrigin` and `canonicalOrigin`, the deployed `/terrain` and `/overpass` routes, and the expected commit/branch. It must not contain credentials or private environment values.
+A healthy `build-info.json` has `dataPolicy: "proxy-first"`, the validated deployment or preview `appOrigin`, the branded `canonicalOrigin`, the deployed `/terrain` and `/overpass` routes, and the expected commit/branch. It must not contain credentials or private environment values.
 
 ## Supported browsers
 
