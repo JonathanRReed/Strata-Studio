@@ -356,12 +356,12 @@ export function Stage({
             <p className="text-sm text-ink-muted">Real places, rendered like sound.</p>
           </div>
         )}
-        {/* Permanent watermark — the wordmark stays as a quiet corner mark
+        {/* The permanent watermark stays as a quiet corner mark
             even after the artwork arrives, so the surface always identifies
-            itself. Fades to near-invisible so it never competes with the art. */}
+            itself without sacrificing readable contrast. */}
         {artworkVisible && (
           <div className="pointer-events-none absolute bottom-3 right-3 z-10 select-none">
-            <p className="display text-[10px] tracking-[0.14em] text-ink-faint/40">STRATA</p>
+            <p className="display text-[10px] tracking-[0.14em] text-ink-faint">STRATA</p>
           </div>
         )}
         <Artboard

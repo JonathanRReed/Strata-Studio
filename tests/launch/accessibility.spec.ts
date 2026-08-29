@@ -50,16 +50,22 @@ test("@a11y interactive map, export, variations, and mobile sheet have no seriou
   };
 
   await page.getByRole("button", { name: "Expand map" }).click();
+  await expect(page.getByRole("dialog", { name: "Choose artwork area" })).toHaveCSS(
+    "opacity",
+    "1",
+  );
   await assertSurface("expanded-map");
   await page.keyboard.press("Escape");
 
   await page.getByRole("button", { name: "Variations" }).click();
+  await expect(page.getByRole("dialog", { name: "Variations" })).toHaveCSS("opacity", "1");
   await assertSurface("variations");
   await page.getByRole("dialog", { name: "Variations" }).getByRole("button", {
     name: "Close variations",
   }).click();
 
   await page.getByRole("button", { name: "Export…" }).click();
+  await expect(page.getByRole("dialog", { name: "Export" })).toHaveCSS("opacity", "1");
   await assertSurface("export");
   await page.getByRole("dialog", { name: "Export" }).getByRole("button", {
     name: "Close export dialog",
@@ -75,6 +81,9 @@ test("@a11y interactive map, export, variations, and mobile sheet have no seriou
   await page.mouse.down();
   await page.mouse.move(box!.x + box!.width / 2, 20, { steps: 8 });
   await page.mouse.up();
-  await expect(page.getByRole("dialog", { name: "Artwork controls" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Artwork controls" })).toHaveCSS(
+    "opacity",
+    "1",
+  );
   await assertSurface("mobile-full-sheet");
 });

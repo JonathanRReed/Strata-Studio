@@ -246,6 +246,10 @@ test("@a11y labels, help descriptions, slider values, and palette errors are ass
 }) => {
   await startWithoutOrientation(page);
 
+  await page.getByRole("tab", { name: "Experimental Lab" }).click();
+  await page.getByRole("button", { name: "Waveform Terrain", exact: true }).click();
+  await page.getByRole("button", { name: "Terrain", exact: true }).click();
+
   const slider = page.getByRole("slider", { name: "Amplitude" });
   const sliderId = await slider.getAttribute("id");
   expect(sliderId).toBeTruthy();
