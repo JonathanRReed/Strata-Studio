@@ -122,8 +122,9 @@ jobs:
           retention-days: 7
 
   broad-launch:
-    name: Main browser and accessibility coverage
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Browser and accessibility coverage
+    # Exercise the Firefox regression before merging the focused repair.
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.pull_request.number == 5
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20

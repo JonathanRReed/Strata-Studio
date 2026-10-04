@@ -237,6 +237,16 @@ function latitudeFromMercatorY(y: number): number {
   return (180 / Math.PI) * Math.atan(Math.sinh(n));
 }
 
+/** Camera center of a selection, recovered in Web Mercator space. */
+export function getMercatorBoundsCenter(bounds: GeoBounds): [number, number] {
+  return [
+    (bounds.west + bounds.east) / 2,
+    latitudeFromMercatorY(
+      (mercatorY(bounds.south) + mercatorY(bounds.north)) / 2,
+    ),
+  ];
+}
+
 /**
  * Pure deterministic selection for fresh and legacy center/zoom boots. Exact
  * validated share bounds bypass this helper and remain the source of truth.
