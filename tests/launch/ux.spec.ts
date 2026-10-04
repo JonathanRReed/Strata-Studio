@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test, expect } from "./fixtures";
+import { latToPixelY, pixelYToLat } from "../../web/src/engine/projection.ts";
 
 const ORIENTATION_KEY = "strata.orientation.dismissed";
 
@@ -13,6 +14,16 @@ function sharedDocument(url: string): SharedDocument | null {
   const encoded = new URL(url).searchParams.get("composition");
   if (!encoded) return null;
   return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as SharedDocument;
+}
+
+function projectedSelectionCenter(bounds: SharedDocument["bounds"]): [number, number] {
+  return [
+    (bounds.west + bounds.east) / 2,
+    pixelYToLat(
+      (latToPixelY(bounds.south, 0) + latToPixelY(bounds.north, 0)) / 2,
+      0,
+    ),
+  ];
 }
 
 async function waitForArtwork(page: import("@playwright/test").Page) {
@@ -87,100 +98,112 @@ test("@smoke first-session Customize artwork opens the mobile Style sheet", asyn
   expect(transitionSeconds).toBeLessThanOrEqual(0.001);
 });
 
-test("@smoke every aspect preserves center and starts exactly one normal regeneration", async ({
-  page,
-}) => {
-  test.setTimeout(60_000);
-  await page.addInitScript((key) => {
-    localStorage.setItem(key, "1");
-    const busyByButton = new WeakMap<Element, boolean>();
-    let starts = 0;
-    Object.defineProperty(window, "__strataAspectBusyStarts", {
-      configurable: true,
-      get: () => starts,
-    });
-    const scan = () => {
-      for (const button of document.querySelectorAll("button[aria-busy]")) {
-        const busy = button.getAttribute("aria-busy") === "true";
-        const previous = busyByButton.get(button) ?? false;
-        if (busy && !previous) starts++;
-        busyByButton.set(button, busy);
-      }
-    };
-    new MutationObserver(scan).observe(document, {
-      attributes: true,
-      attributeFilter: ["aria-busy"],
-      childList: true,
-      subtree: true,
-    });
-    queueMicrotask(scan);
-  }, ORIENTATION_KEY);
-  await page.goto("/");
-  await waitForArtwork(page);
-  await page.waitForTimeout(1_200);
+for (const mapMode of ["normal", "no-webgl"] as const) {
+  test(`@smoke every aspect preserves center and starts exactly one normal regeneration (${mapMode})`, async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    if (mapMode === "no-webgl") {
+      await page.addInitScript(() => {
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+          configurable: true,
+          value: function (this: HTMLCanvasElement, contextId: string, ...args: unknown[]) {
+            if (contextId === "webgl" || contextId === "webgl2") return null;
+            return Reflect.apply(originalGetContext, this, [contextId, ...args]);
+          },
+        });
+      });
+    }
+    await page.addInitScript((key) => {
+      localStorage.setItem(key, "1");
+      const busyByButton = new WeakMap<Element, boolean>();
+      let starts = 0;
+      Object.defineProperty(window, "__strataAspectBusyStarts", {
+        configurable: true,
+        get: () => starts,
+      });
+      const scan = () => {
+        for (const button of document.querySelectorAll("button[aria-busy]")) {
+          const busy = button.getAttribute("aria-busy") === "true";
+          const previous = busyByButton.get(button) ?? false;
+          if (busy && !previous) starts++;
+          busyByButton.set(button, busy);
+        }
+      };
+      new MutationObserver(scan).observe(document, {
+        attributes: true,
+        attributeFilter: ["aria-busy"],
+        childList: true,
+        subtree: true,
+      });
+      queueMicrotask(scan);
+    }, ORIENTATION_KEY);
+    // Pin high-latitude geography so daily-place rotation cannot mask drift.
+    await page.goto("/?lat=63.07&lng=-151&z=9.5");
+    await waitForArtwork(page);
+    if (mapMode === "no-webgl") {
+      await expect(page.getByLabel("Map unavailable")).toBeVisible();
+    }
+    await page.waitForTimeout(1_200);
 
-  const busyStarts = () => page.evaluate(
-    () =>
-      (window as Window & { __strataAspectBusyStarts?: number })
-        .__strataAspectBusyStarts ?? 0,
-  );
-  const baseline = await busyStarts();
-  const initial = sharedDocument(page.url())!;
-  const initialCenter = [
-    (initial.bounds.west + initial.bounds.east) / 2,
-    (initial.bounds.south + initial.bounds.north) / 2,
-  ];
-  const composition = page.getByRole("button", { name: "Composition" });
-  if ((await composition.getAttribute("aria-expanded")) !== "true") {
-    await composition.click();
-  }
-  const aspectSelect = page.getByRole("combobox", { name: "Aspect ratio" });
-  const cases = [
-    ["16:9", 16 / 9],
-    ["9:16", 9 / 16],
-    ["12:18", 12 / 18],
-    ["square", 1],
-  ] as const;
+    const busyStarts = () => page.evaluate(
+      () =>
+        (window as Window & { __strataAspectBusyStarts?: number })
+          .__strataAspectBusyStarts ?? 0,
+    );
+    const baseline = await busyStarts();
+    const initial = sharedDocument(page.url())!;
+    const initialCenter = projectedSelectionCenter(initial.bounds);
+    const composition = page.getByRole("button", { name: "Composition" });
+    if ((await composition.getAttribute("aria-expanded")) !== "true") {
+      await composition.click();
+    }
+    const aspectSelect = page.getByRole("combobox", { name: "Aspect ratio" });
+    const cases = [
+      ["16:9", 16 / 9],
+      ["9:16", 9 / 16],
+      ["12:18", 12 / 18],
+      ["square", 1],
+    ] as const;
 
-  for (const [aspect, ratio] of cases) {
-    const startsBefore = await busyStarts();
-    await aspectSelect.selectOption(aspect);
-    await expect.poll(busyStarts, { timeout: 30_000 }).toBe(startsBefore + 1);
-    const regenerate = page.getByRole("button", { name: /Regenerating|Regenerate now/ });
-    await expect(regenerate).toBeEnabled({ timeout: 30_000 });
-    await expect
-      .poll(() => sharedDocument(page.url())?.params.aspectRatio, {
-        timeout: 30_000,
-      })
-      .toBe(aspect);
+    for (const [aspect, ratio] of cases) {
+      const startsBefore = await busyStarts();
+      await aspectSelect.selectOption(aspect);
+      await expect.poll(busyStarts, { timeout: 30_000 }).toBe(startsBefore + 1);
+      const regenerate = page.getByRole("button", { name: /Regenerating|Regenerate now/ });
+      await expect(regenerate).toBeEnabled({ timeout: 30_000 });
+      await expect
+        .poll(() => sharedDocument(page.url())?.params.aspectRatio, {
+          timeout: 30_000,
+        })
+        .toBe(aspect);
 
-    const current = sharedDocument(page.url())!;
-    const center = [
-      (current.bounds.west + current.bounds.east) / 2,
-      (current.bounds.south + current.bounds.north) / 2,
-    ];
-    expect(center[0]).toBeCloseTo(initialCenter[0], 4);
-    expect(center[1]).toBeCloseTo(initialCenter[1], 4);
-    expect(current.params.aspectRatio).toBe(aspect);
+      const current = sharedDocument(page.url())!;
+      const center = projectedSelectionCenter(current.bounds);
+      expect(center[0]).toBeCloseTo(initialCenter[0], 4);
+      expect(center[1]).toBeCloseTo(initialCenter[1], 4);
+      expect(current.params.aspectRatio).toBe(aspect);
 
-    // Headless Firefox can use the no-WebGL map fallback. The artboard stays
-    // available in both map modes and is the user-visible aspect outcome.
-    const artwork = page.getByRole("img", { name: /artwork of/i });
-    await expect(artwork).toBeVisible();
-    const box = await artwork.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.width / box!.height).toBeCloseTo(ratio, 2);
-  }
+      // Headless Firefox can use the no-WebGL map fallback. The artboard stays
+      // available in both map modes and is the user-visible aspect outcome.
+      const artwork = page.getByRole("img", { name: /artwork of/i });
+      await expect(artwork).toBeVisible();
+      const box = await artwork.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width / box!.height).toBeCloseTo(ratio, 2);
+    }
 
-  const starts = await busyStarts();
-  expect(starts).toBe(baseline + cases.length);
-  const restoredSquare = sharedDocument(page.url())!.bounds;
-  for (const key of ["west", "south", "east", "north"] as const) {
-    // The no-WebGL fallback recomputes geographic bounds. Six decimals keeps
-    // the allowed floating-point drift below roughly five centimeters.
-    expect(restoredSquare[key]).toBeCloseTo(initial.bounds[key], 6);
-  }
-});
+    const starts = await busyStarts();
+    expect(starts).toBe(baseline + cases.length);
+    const restoredSquare = sharedDocument(page.url())!.bounds;
+    for (const key of ["west", "south", "east", "north"] as const) {
+      // The no-WebGL fallback recomputes geographic bounds. Six decimals keeps
+      // the allowed floating-point drift below roughly five centimeters.
+      expect(restoredSquare[key]).toBeCloseTo(initial.bounds[key], 6);
+    }
+  });
+}
 
 test("@smoke expanded map traps focus, exposes canvas focus, and clears curated state only after manual/search moves", async ({
   page,

@@ -10,6 +10,7 @@ import { bboxAreaKm2, isBboxSmallEnough } from "../data/osmOverpass.ts";
 import { CURATED_PLACES, surprisePlace, type CuratedPlace } from "../data/places.ts";
 import {
   deriveSelectionBounds,
+  getMercatorBoundsCenter,
   MAX_SEARCH_QUERY_LENGTH,
   normalizeMapCenter,
   normalizeMapZoom,
@@ -123,11 +124,7 @@ export function NoMapFallback({
   useEffect(() => {
     if (previousAspectRef.current === aspectRatio) return;
     previousAspectRef.current = aspectRatio;
-    selectCenter(
-      [(bounds.west + bounds.east) / 2, (bounds.south + bounds.north) / 2],
-      zoom,
-      "aspect",
-    );
+    selectCenter(getMercatorBoundsCenter(bounds), zoom, "aspect");
   }, [aspectRatio, bounds, selectCenter, zoom]);
 
   const centerLat = (bounds.north + bounds.south) / 2;
