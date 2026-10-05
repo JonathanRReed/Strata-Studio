@@ -97,28 +97,48 @@
       unchanged commit emits the same date. Keep it equal to <lastmod> for this
       URL in public/sitemap.xml, and move both when the page content changes.
     -->
+    <!-- No ratings or reviews are published, so this describes the site and page. -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "WebApplication",
-        "name": "Strata Studio",
-        "url": "https://stratastudio.jonathanrreed.com/",
-        "description": "Turn any place on Earth into poster art. Real terrain and OpenStreetMap data rendered as contours, ridgelines, waveforms, and flow fields. Free, in your browser, with no account.",
-        "applicationCategory": "DesignApplication",
-        "operatingSystem": "Any modern web browser",
-        "isAccessibleForFree": true,
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "USD",
-          "url": "https://stratastudio.jonathanrreed.com/"
-        },
-        "dateModified": "2026-10-04",
-        "creator": {
-          "@type": "Person",
-          "name": "Jonathan R. Reed",
-          "url": "https://jonathanrreed.com/"
-        }
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://stratastudio.jonathanrreed.com/#website",
+            "name": "Strata Studio",
+            "url": "https://stratastudio.jonathanrreed.com/",
+            "description": "Turn any place on Earth into poster art. Real terrain and OpenStreetMap data rendered as contours, ridgelines, waveforms, and flow fields. Free, in your browser, with no account.",
+            "inLanguage": "en",
+            "isAccessibleForFree": true,
+            "creator": {
+              "@type": "Person",
+              "name": "Jonathan R. Reed",
+              "url": "https://jonathanrreed.com/"
+            }
+          },
+          {
+            "@type": "WebPage",
+            "@id": "https://stratastudio.jonathanrreed.com/#webpage",
+            "name": "Strata Studio",
+            "url": "https://stratastudio.jonathanrreed.com/",
+            "description": "Turn any place on Earth into poster art. Real terrain and OpenStreetMap data rendered as contours, ridgelines, waveforms, and flow fields. Free, in your browser, with no account.",
+            "inLanguage": "en",
+            "isAccessibleForFree": true,
+            "dateModified": "2026-10-05",
+            "creator": {
+              "@type": "Person",
+              "name": "Jonathan R. Reed",
+              "url": "https://jonathanrreed.com/"
+            },
+            "isPartOf": {
+              "@id": "https://stratastudio.jonathanrreed.com/#website"
+            },
+            "primaryImageOfPage": {
+              "@type": "ImageObject",
+              "url": "https://stratastudio.jonathanrreed.com/og.png"
+            }
+          }
+        ]
       }
     </script>
   </head>
