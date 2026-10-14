@@ -8,7 +8,7 @@ The repository intentionally has three independent Bun package boundaries and is
 - `web/`: Vite + React static app deployed to Cloudflare Pages;
 - `workers/proxy/`: hardened Cloudflare Worker for terrain, canonical bbox-only Overpass, and health; social metadata uses static `web/public/og.png`.
 
-Use Bun 1.3.14. The `--cwd` flag belongs after the Bun subcommand, for example `bun run --cwd web test` and `bun install --cwd web --frozen-lockfile`.
+Use the Bun version pinned by `packageManager` in the root `package.json`. The `--cwd` flag belongs after the Bun subcommand, for example `bun run --cwd web test` and `bun install --cwd web --frozen-lockfile`.
 
 ## Primary commands
 

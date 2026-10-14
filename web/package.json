@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && bun run assert:proxy-first",
+    "build": "bun --check && vite build && bun run assert:proxy-first",
     "assert:proxy-first": "bun run scripts/assert-proxy-first.ts",
     "lint": "oxlint",
-    "typecheck": "tsc -b",
+    "typecheck": "bun --check",
     "test": "bun test",
     "format": "prettier --write .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck:tsc": "tsc -b"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "^5.2.8",

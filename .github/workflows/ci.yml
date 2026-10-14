@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BUN_VERSION: "1.3.14"
+  BUN_VERSION: "1.4.3"
   VITE_APP_ORIGIN: "https://strata-studio.example"
   VITE_TERRAIN_TILE_URL: "https://strata-proxy.example/terrain"
   VITE_OVERPASS_URL: "https://strata-proxy.example/overpass"
