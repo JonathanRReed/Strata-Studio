@@ -300,14 +300,42 @@ test("@a11y labels, help descriptions, slider values, and palette errors are ass
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
+test("@smoke fresh visits boot on the pinned day's Daily Strata with a flowing clock", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await waitForArtwork(page);
+  await expect(
+    page.getByRole("complementary", { name: "Your Daily Strata is ready" }),
+  ).toContainText("Golden Gate · Waveform Terrain");
+  // The pin moves only the wall clock: page timers and Date keep advancing.
+  const elapsed = await page.evaluate(async () => {
+    const start = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return Date.now() - start;
+  });
+  expect(elapsed).toBeGreaterThanOrEqual(200);
+});
+
+test.describe("a date-sensitive test", () => {
+  test.use({ launchNow: new Date("2026-10-16T12:00:00Z") });
+
+  test("@smoke boots on the Daily Strata of the day it chooses", async ({ page }) => {
+    await page.goto("/");
+    await waitForArtwork(page);
+    await expect(
+      page.getByRole("complementary", { name: "Your Daily Strata is ready" }),
+    ).toContainText("Venice · Blueprint");
+  });
+});
+
 test("@smoke Generate stays busy through the complete no-preference reveal", async ({
   page,
 }) => {
-  // A fresh visit boots on the date's Daily Strata place. Street-grid styles
-  // such as Signal draw no strokes from the fixture's empty OSM response, and a
-  // stroke-free scene paints instantly with no reveal, so pin a date whose
-  // place uses a terrain-driven style (Golden Gate, Waveform Terrain).
-  await page.clock.setSystemTime(new Date("2026-10-14T12:00:00Z"));
+  // A stroke-free scene paints instantly with no reveal, and street-grid styles
+  // such as Signal draw no strokes from the fixture's empty OSM response. This
+  // relies on the fixture's LAUNCH_NOW boot place (Golden Gate, Waveform
+  // Terrain); the style assertion fails first if that pin changes.
   await page.emulateMedia({ reducedMotion: "no-preference" });
   expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(false);
   await startWithoutOrientation(page);
