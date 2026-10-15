@@ -49,6 +49,9 @@ jobs:
       - name: Lint web app
         run: bun run lint
 
+      - name: Test the Bun type-check guard
+        run: bun run test:bun-check
+
       - name: Typecheck web app and proxy
         run: bun run typecheck
 

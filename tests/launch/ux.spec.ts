@@ -303,9 +303,18 @@ test("@a11y labels, help descriptions, slider values, and palette errors are ass
 test("@smoke Generate stays busy through the complete no-preference reveal", async ({
   page,
 }) => {
+  // A fresh visit boots on the date's Daily Strata place. Street-grid styles
+  // such as Signal draw no strokes from the fixture's empty OSM response, and a
+  // stroke-free scene paints instantly with no reveal, so pin a date whose
+  // place uses a terrain-driven style (Golden Gate, Waveform Terrain).
+  await page.clock.setSystemTime(new Date("2026-10-14T12:00:00Z"));
   await page.emulateMedia({ reducedMotion: "no-preference" });
   expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(false);
   await startWithoutOrientation(page);
+  await expect(page.getByRole("button", { name: "Waveform Terrain", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 
   const regenerate = page.getByRole("button", { name: /Regenerating|Regenerate now/ });
   await regenerate.click();

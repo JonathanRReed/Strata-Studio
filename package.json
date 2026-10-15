@@ -30,7 +30,7 @@
     "test:launch:a11y": "playwright test --project=chromium --grep @a11y",
     "test:launch:browsers": "playwright test --project=firefox --project=webkit --grep @smoke",
     "test:launch:all": "playwright test",
-    "verify:launch": "bun run install:frozen && bun run lint && bun run typecheck:proxy && bun run test:unit && bun run build:fixture && bun run check:wrangler && bun run test:launch:built"
+    "verify:launch": "bun run install:frozen && bun run lint && bun run test:bun-check && bun run typecheck:proxy && bun run test:unit && bun run build:fixture && bun run check:wrangler && bun run test:launch:built"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
