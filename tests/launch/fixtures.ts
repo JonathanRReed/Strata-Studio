@@ -18,19 +18,36 @@ const MAP_STYLE = {
   ],
 };
 
+/**
+ * A fresh visit boots on the date's Daily Strata place (web/src/data/places.ts),
+ * so an unpinned clock makes every boot-dependent test depend on the day it
+ * runs. Pin the page clock to a day whose place (Golden Gate) uses a
+ * terrain-driven style that draws strokes from the fixture terrain.
+ * `setSystemTime` only moves the wall clock: Date keeps flowing and timers,
+ * animation frames, and `page.waitForTimeout` waits still advance in real time.
+ */
+export const LAUNCH_NOW = new Date("2026-10-14T12:00:00Z");
+
+type LaunchOptions = {
+  /** Wall-clock start for each page. A date-sensitive test overrides it with `test.use`; `null` keeps the real clock. */
+  launchNow: Date | null;
+};
+
 type LaunchFixtures = {
   externalRequests: string[];
   pageErrors: string[];
 };
 
-export const test = base.extend<LaunchFixtures>({
+export const test = base.extend<LaunchOptions & LaunchFixtures>({
+  launchNow: [LAUNCH_NOW, { option: true }],
   externalRequests: async ({}, use) => {
     await use([]);
   },
   pageErrors: async ({}, use) => {
     await use([]);
   },
-  page: async ({ page, externalRequests, pageErrors }, use) => {
+  page: async ({ page, launchNow, externalRequests, pageErrors }, use) => {
+    if (launchNow) await page.clock.setSystemTime(launchNow);
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.route("https://**/*", async (route) => {
       const url = new URL(route.request().url());
