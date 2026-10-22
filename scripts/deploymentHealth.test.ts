@@ -34,3 +34,12 @@ test('reports forbidden origins and malformed health bodies without accepting th
   expect(await inspectProxyHealth(response({ error: { code: 'origin_forbidden' } }, null, 403), origin)).toContain('Proxy health returned HTTP 403');
   expect(await inspectProxyHealth(response({ ok: true }), origin)).toContain('Proxy health response is incomplete');
 });
+
+
+test("browser CI images are immutable and match the installed Playwright version", async () => {
+  const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+  const manifest = await Bun.file(new URL("../package.json", import.meta.url)).json();
+  const images = [...workflow.matchAll(/mcr\.microsoft\.com\/playwright:v([0-9.]+)-noble@sha256:[a-f0-9]{64}/g)];
+  expect(images).toHaveLength(2);
+  for (const image of images) expect(image[1]).toBe(manifest.devDependencies["@playwright/test"]);
+});
