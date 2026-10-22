@@ -34,7 +34,7 @@ function rowLoop(
   pointFn: (u: number, v: number, x: number, baseY: number) => RowPointResult,
 ): Scene {
   return rowsToScene(
-    generateRowSegments(input.width, input.height, params, pointFn),
+    generateRowSegments(input.width, input.height, params, pointFn, input.masks),
     params,
     input.height,
   );

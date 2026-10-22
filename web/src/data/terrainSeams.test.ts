@@ -38,7 +38,7 @@ test("registered bilinear samples preserve affine terrain across four-tile seams
     dimensions = { width: 128, height: 3 };
   const { grid, calls } = await plane(bounds, dimensions);
   expect(new Set(calls.map((c) => c.z))).toEqual(new Set([1]));
-  expect(calls.length).toBe(tileCountForFetch(bounds, dimensions));
+  expect(calls.length).toBe(tileCountForFetch(bounds, dimensions, 256));
   for (let row = 0; row < 3; row++)
     for (let col = 0; col < 128; col++) {
       const x = 255.5 + (col / 127) * 129,
@@ -76,4 +76,64 @@ test("world edges clamp to actual sample centers without invalid tiles or latitu
       );
       expect(grid.data[row * 129 + col]!).toBeCloseTo(2 * x + 3 * y + 7, 3);
     }
+});
+
+test("small NYC selections and high-resolution exports use only supported native 512px zooms", async () => {
+  const calls: { z: number; x: number; y: number }[] = [];
+  const bounds = { west: -73.967, east: -73.966, south: 40.782, north: 40.783 };
+  const grid = await fetchTerrain(bounds, 1024, undefined, {
+    tileLoader: {
+      tileSize: 512,
+      getTileData: async (z, x, y) => {
+        calls.push({ z, x, y });
+        return new Float32Array(512 * 512).fill(12.5);
+      },
+    },
+  });
+  expect(calls.length).toBeGreaterThan(0);
+  expect(calls.every(({ z }) => z === 14)).toBe(true);
+  expect(calls).toContainEqual({
+    z: 14,
+    x: Math.floor(lngToPixelX(-73.9665, 14) / 256),
+    y: Math.floor(latToPixelY(40.7825, 14) / 256),
+  });
+  expect(grid.data.every((v) => v === 12.5)).toBe(true);
+});
+
+test("native 512px tiles preserve pixel-center registration across a source seam", async () => {
+  const bounds = {
+    west: pixelXToLng(511.5, 2),
+    east: pixelXToLng(640.5, 2),
+    north: pixelYToLat(511.5, 2),
+    south: pixelYToLat(512.5, 2),
+  };
+  const calls: number[] = [];
+  const grid = await fetchTerrain(
+    bounds,
+    { width: 128, height: 3 },
+    undefined,
+    {
+      tileLoader: {
+        tileSize: 512,
+        getTileData: async (z, x, y) => {
+          calls.push(z);
+          return Float32Array.from(
+            { length: 512 * 512 },
+            (_, i) =>
+              2 * (x * 512 + (i % 512) + 0.5) +
+              3 * (y * 512 + Math.floor(i / 512) + 0.5) +
+              7,
+          );
+        },
+      },
+    },
+  );
+  expect(calls).toHaveLength(4);
+  expect(calls.every((z) => z === 1)).toBe(true);
+  for (let row = 0; row < 3; row++)
+    for (let col = 0; col < 128; col++)
+      expect(grid.data[row * 128 + col]).toBeCloseTo(
+        2 * (511.5 + (col / 127) * 129) + 3 * (511.5 + row / 2) + 7,
+        3,
+      );
 });

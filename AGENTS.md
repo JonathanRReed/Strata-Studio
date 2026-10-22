@@ -76,6 +76,6 @@ Do not commit, push, deploy, or modify Cloudflare resources unless the user expl
 ## Data sources
 
 - Basemap: OpenFreeMap vector styles through MapLibre.
-- Terrain: Tilezen scalar GeoTIFF on AWS Open Data through `/terrain-geotiff`. The configured legacy `/terrain` base is adapted by the client. Never interpolate encoded RGB or reuse legacy PNG-derived cache entries.
+- Terrain: Native 512px Tilezen scalar GeoTIFF (source zooms 0–14) on AWS Open Data through `/terrain-geotiff`. The configured legacy `/terrain` base is adapted by the client. Never interpolate encoded RGB or reuse legacy PNG-derived cache entries.
 - OSM features: protected OpenFreeMap z14 snapshots via `/map-features` are primary. Raw Overpass is off the production critical path. Missing geometry means an incomplete preview and must block artwork exports.
 - Geocoding: policy-compliant one-shot Nominatim requests.

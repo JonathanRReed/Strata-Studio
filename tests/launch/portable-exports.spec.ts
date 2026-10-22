@@ -19,8 +19,8 @@ async function prepareAnimation(page: import("@playwright/test").Page) {
   );
   await page.getByRole("button", { name: "Export…" }).click();
   const dialog = page.getByRole("dialog", { name: "Export" });
-  await dialog.getByRole("radio", { name: "Animation", exact: true }).check();
-  await dialog.getByRole("radio", { name: /APNG/ }).check();
+  await dialog.getByRole("radio", { name: "Animation", exact: true }).press("Space");
+  await dialog.getByRole("radio", { name: /APNG/ }).press("Space");
   return { dialog, speed };
 }
 test("@smoke APNG worker downloads a complete animation at preview speed", async ({
@@ -99,11 +99,11 @@ test("@smoke poster SVG carries its licensed fonts for standalone viewing", asyn
   await page
     .getByRole("textbox", { name: "Label", exact: true })
     .fill("Golden Gate");
-  await page.getByRole("radio", { name: "Poster", exact: true }).check();
+  await page.getByRole("radio", { name: "Poster", exact: true }).press("Space");
   await page.getByRole("button", { name: "Export…" }).click();
   const dialog = page.getByRole("dialog", { name: "Export" });
-  await dialog.getByRole("radio", { name: "SVG", exact: true }).check();
-  await dialog.getByRole("radio", { name: /1024/ }).check();
+  await dialog.getByRole("radio", { name: "SVG", exact: true }).press("Space");
+  await dialog.getByRole("radio", { name: /1024/ }).press("Space");
   const pending = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "Export", exact: true }).click();
   const download = await pending,
