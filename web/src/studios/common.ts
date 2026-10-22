@@ -186,12 +186,13 @@ export type GlowRun = { points: ScenePoint[]; strength: number };
  */
 export function glowRuns(
   points: { x: number; y: number; glow: boolean; glowStrength?: number }[],
+  closed = false,
 ): GlowRun[] {
   const runs: GlowRun[] = [];
   let current: ScenePoint[] = [];
   let strength = 0;
   const flush = () => {
-    if (current.length > 1) runs.push({ points: current, strength });
+    if (current.length > 0) runs.push({ points: current, strength });
     current = [];
     strength = 0;
   };
@@ -204,7 +205,12 @@ export function glowRuns(
     }
   }
   flush();
-  return runs;
+  if (closed && runs.length > 1 && points[0]?.glow && points[points.length - 1]?.glow) {
+    const first = runs[0], last = runs[runs.length - 1];
+    runs[0] = { points: [...last.points, ...first.points.slice(1)], strength: Math.max(first.strength, last.strength) };
+    runs.pop();
+  }
+  return runs.filter(run => run.points.length > 1);
 }
 
 /**
@@ -227,47 +233,85 @@ export function applyInfluenceToLine(
   closed = false,
   strataType?: "building" | "road" | "water",
 ): Stroke[] {
-  if (!masks) return [{ points, width: baseWidth, opacity: baseOpacity, role, closed: closed || undefined }];
-
-  const strokes: Stroke[] = [];
-  let current: { x: number; y: number; glow: boolean; glowStrength: number }[] = [];
-  let hadBreak = false;
-
+  const active = (!strataType || strataType === "building") && params.buildingInfluence !== 0 ||
+    (!strataType || strataType === "road") && params.roadInfluence !== 0 ||
+    (!strataType || strataType === "water") && [params.waterInfluence, params.oceanInfluence, params.lakeInfluence, params.riverInfluence].some(value => value !== 0);
+  if (!masks || !active) return [{ points, width: baseWidth, opacity: baseOpacity, role, closed: closed || undefined }];
+  if (points.length < 2) return [];
+  const first = points[0], last = points[points.length - 1];
+  const path = closed && (first.x !== last.x || first.y !== last.y) ? [...points, first] : points;
+  const samples = path.map(point => ({ point, influence: applyFeatureInfluence(
+    1, point.x / (width - 1 || 1), point.y / (height - 1 || 1), masks, params, strataType,
+  ) }));
+  type InkRun = { negative: boolean; ink: number; length: number; points: ScenePoint[] };
+  const runs: InkRun[] = [];
+  let current: InkRun | undefined;
+  let drawnEdges = 0;
   const flush = () => {
-    if (current.length > 1) {
-      strokes.push({
-        points: current.map((p) => ({ x: p.x, y: p.y })),
-        role,
-        width: baseWidth,
-        opacity: baseOpacity,
-        closed: !hadBreak && closed ? true : undefined,
-      });
-      for (const run of glowRuns(current)) {
-        strokes.push({
-          points: run.points,
-          role: "accent",
-          width: baseWidth,
-          opacity: baseOpacity * run.strength,
-          glow: true,
-        });
-      }
-    }
-    current = [];
+    if (!current) return;
+    runs.push(current);
+    current = undefined;
   };
-
-  for (const p of points) {
-    const u = p.x / (width - 1 || 1);
-    const v = p.y / (height - 1 || 1);
-    // Only apply masks relevant to this line's feature type
-    const res = applyFeatureInfluence(1, u, v, masks, params, strataType);
-    if (res.break_) {
-      hadBreak = true;
-      flush();
-      continue;
+  const emitEdge = (a: ScenePoint, b: ScenePoint, value: number): boolean => {
+    if (value === 0) { flush(); return false; }
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (length === 0) return true;
+    const negative = value < 0, ink = Math.abs(value) * length;
+    // One arc-length-weighted ink gain per uninterrupted same-sign run.
+    // Per-vertex strokes create overlapping translucent caps and thousands
+    // of draw calls on feathered masks. This preserves integrated ink weight
+    // without claiming a continuously varying stroke-width gradient.
+    if (current?.negative === negative) {
+      current.points.push(b); current.ink += ink; current.length += length;
+    } else {
+      flush(); current = { negative, ink, length, points: [a, b] };
     }
-    current.push({ x: p.x, y: p.y, glow: res.glow, glowStrength: res.glowStrength });
+    return true;
+  };
+  // Signed ink gain changes weight/opacity rather than distorting real-world
+  // coordinates. Inversion passes through zero to negative (knockout) ink.
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1], b = samples[i];
+    if (a.influence.break_ || b.influence.break_) { flush(); continue; }
+    const da = a.influence.displacement, db = b.influence.displacement;
+    if (da !== 0 && db !== 0 && (da < 0) !== (db < 0)) {
+      // Averaging opposite signs could erase an entire boundary-crossing
+      // edge. Split at its actual linear zero, preserving both sides.
+      const t = da / (da - db);
+      const midpoint = { x: a.point.x + (b.point.x - a.point.x) * t,
+        y: a.point.y + (b.point.y - a.point.y) * t };
+      const firstVisible = emitEdge(a.point, midpoint, da / 2);
+      const secondVisible = emitEdge(midpoint, b.point, db / 2);
+      if (firstVisible || secondVisible) drawnEdges++;
+    } else if (emitEdge(a.point, b.point, (da + db) / 2)) drawnEdges++;
   }
   flush();
+  if (closed && runs.length > 1) {
+    const head = runs[0], tail = runs[runs.length - 1];
+    if (head.negative === tail.negative && head.points[0] === path[0] &&
+        tail.points[tail.points.length - 1] === path[path.length - 1]) {
+      runs[0] = { negative: head.negative, ink: head.ink + tail.ink,
+        length: head.length + tail.length, points: [...tail.points, ...head.points.slice(1)] };
+      runs.pop();
+    }
+  }
+  const toStroke = (run: InkRun): Stroke => {
+    const magnitude = run.ink / run.length;
+    return { points: run.points, role: run.negative ? "background" : role,
+      width: baseWidth * Math.max(1, magnitude), opacity: baseOpacity * Math.min(1, magnitude),
+      closed: closed && runs.length === 1 && drawnEdges === path.length - 1 ? true : undefined };
+  };
+  // Apply negative ink last within this line, independently of the arbitrary
+  // first vertex of a closed ring (or the direction of an open line).
+  const strokes = runs.filter(run => !run.negative).map(toStroke);
+  const glowPoints = samples.map(({ point, influence }) => ({ ...point,
+    glow: !influence.break_ && influence.displacement > 0 && influence.glow,
+    glowStrength: influence.glowStrength }));
+  for (const run of glowRuns(glowPoints, closed)) {
+    strokes.push({ points: run.points, role: "accent", width: baseWidth,
+      opacity: baseOpacity * run.strength, glow: true });
+  }
+  strokes.push(...runs.filter(run => run.negative).map(toStroke));
   return strokes;
 }
 

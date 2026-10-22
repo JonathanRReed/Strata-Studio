@@ -175,14 +175,15 @@ describe("transparent-mode compositing", () => {
     expect(ctx.callsOf("fillRect").length).toBe(1);
   });
 
-  it("omits background-role shapes from transparent SVG (documented parity limit)", () => {
+  it("preserves background-role erasure with transparent SVG masks", () => {
     const opaque = sceneToSvg(SCENE, PARAMS, PALETTE, 100, 100, false);
     const transparent = sceneToSvg(SCENE, PARAMS, PALETTE, 100, 100, true);
     // Opaque output paints the occlusion shape in the background color.
     expect(opaque).toContain(`fill="${PALETTE.background}"`);
-    // Transparent output has no occlusion shape (and no background rect).
+    // Transparent output has no painted backdrop; occlusion is a black mask.
     expect(transparent).not.toContain(`fill="${PALETTE.background}"`);
-    expect(transparent).not.toContain("<rect");
+    expect(transparent).toContain("<mask");
+    expect(transparent).toContain('fill="black"');
     expect(transparent).toContain("<path");
   });
 });
@@ -351,4 +352,13 @@ describe("gifenc transparency", () => {
     expect(findTransparentIndex([[10, 20, 30], [40, 50, 60]])).toBe(-1);
     expect(findTransparentIndex([[10, 20, 30, 255]])).toBe(-1);
   });
+});
+
+it('off-viewport lines do not inflate transparent mask allocation bounds',()=>{
+  const scene: Scene={strokes:[
+    {points:[{x:0,y:20},{x:100,y:20}],role:'foreground',width:2},
+    {points:[{x:1e9,y:50},{x:1e9+10,y:50}],role:'foreground',width:2},
+    {points:[{x:30,y:0},{x:30,y:100}],role:'background',width:4},
+  ]};
+  expect(()=>sceneToSvg(scene,PARAMS,PALETTE,100,100,true)).not.toThrow();
 });

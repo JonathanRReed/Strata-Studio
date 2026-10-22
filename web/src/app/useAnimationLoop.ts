@@ -95,6 +95,7 @@ export function useAnimationLoop({
 
     animStartRef.current = performance.now();
     const totalFrames = DEFAULT_FRAMES;
+    let previousFrame: number | null = null;
 
     const loop = (now: number) => {
       const currentParams = animParamsRef.current;
@@ -107,6 +108,15 @@ export function useAnimationLoop({
         ? rawPhase // continuous — noise field scrolls seamlessly
         : rawPhase % 1;
       const frame = Math.floor((rawPhase % 1) * totalFrames);
+
+      // Draw/parallax have only 24 discrete frames, often fewer than four
+      // distinct frames per second at the default speed. Keep scheduling, but
+      // don't rebuild and repaint the same geometry on every display refresh.
+      if (!needsRegeneration(currentParams.animationMode) && frame === previousFrame) {
+        animFrameRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      previousFrame = frame;
 
       if (needsRegeneration(currentParams.animationMode)) {
         // Drift: regenerate with continuous phase

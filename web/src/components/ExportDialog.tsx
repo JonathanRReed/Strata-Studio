@@ -68,7 +68,7 @@ const SVG_DESC = "vector · plotter & print-shop ready";
 const ANIM_FORMATS: { value: AnimationFormat; label: string; desc: string }[] = [
   { value: "gif", label: "GIF", desc: "24 frames · universal short loop" },
   { value: "apng", label: "APNG", desc: "24 frames · high-quality short loop" },
-  { value: "webm", label: "WEBM", desc: "24 frames · smallest short loop" },
+  { value: "webm", label: "WEBM", desc: "Real-time video · keep tab active" },
 ];
 
 const optionRowClass =

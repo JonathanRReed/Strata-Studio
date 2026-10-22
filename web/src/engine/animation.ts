@@ -20,6 +20,13 @@ import type { Scene, Stroke, ScenePoint } from "./scene.ts";
 export const DEFAULT_FRAMES = 24;
 export const DEFAULT_FPS = 24;
 
+/** Quantize cumulative timestamps, so rounding does not drift once per frame. */
+export function frameDelayMs(frame: number, fps: number, quantumMs = 1): number {
+  const before = Math.round(frame * 1000 / fps / quantumMs);
+  const after = Math.round((frame + 1) * 1000 / fps / quantumMs);
+  return (after - before) * quantumMs;
+}
+
 /** Returns the phase value (0–1) for a given frame in the loop. */
 export function framePhase(frame: number, totalFrames: number): number {
   if (totalFrames <= 0) return 0;

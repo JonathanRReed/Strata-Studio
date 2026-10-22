@@ -8,12 +8,14 @@ import {
   DEFAULT_FRAMES,
   DEFAULT_FPS,
   needsRegeneration,
+  frameDelayMs,
 } from "./animation.ts";
 import {
   createOffscreenCanvas,
   drawCanvasAttribution,
   startBlobDownload,
   throwIfExportAborted,
+  awaitExportTask,
   type DownloadReceipt,
 } from "./export.ts";
 
@@ -184,7 +186,6 @@ async function exportGif(
 
   const width = frames[0].width;
   const height = frames[0].height;
-  const delay = Math.round(1000 / fps);
   const sampleCount = Math.min(frames.length, 8);
   const sampleData = new Uint8Array(width * height * 4 * sampleCount);
   for (let index = 0; index < sampleCount; index++) {
@@ -210,7 +211,7 @@ async function exportGif(
     throwIfExportAborted(signal);
     const indexed = applyPalette(frames[index].data, palette, format);
     gif.writeFrame(indexed, width, height, {
-      delay,
+      delay: frameDelayMs(index, fps, 10),
       transparent: useTransparency,
       transparentIndex: useTransparency ? transparentIndex : 0,
       dispose: 2,
@@ -242,7 +243,6 @@ async function exportApng(
 
   const width = frames[0].width;
   const height = frames[0].height;
-  const delay = Math.round(1000 / fps);
   const frameBuffers: ArrayBuffer[] = [];
   for (let index = 0; index < frames.length; index++) {
     throwIfExportAborted(signal);
@@ -262,7 +262,7 @@ async function exportApng(
     width,
     height,
     0,
-    new Array(frames.length).fill(delay),
+    frames.map((_, index) => frameDelayMs(index, fps)),
   );
   throwIfExportAborted(signal);
   return startBlobDownload(new Blob([png], { type: "image/png" }), filename);
@@ -297,40 +297,53 @@ async function exportWebm(
   try {
     recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
     const chunks: Blob[] = [];
+    let recordingError: Error | undefined;
     const done = new Promise<void>((resolve, reject) => {
       recorder!.ondataavailable = (event) => {
         if (event.data.size > 0) chunks.push(event.data);
       };
       recorder!.onstop = () => resolve();
-      recorder!.onerror = () => reject(new Error("WebM recording failed"));
+      recorder!.onerror = () => {
+        recordingError = new Error("WebM recording failed");
+        reject(recordingError);
+      };
     });
+    // Native errors may arrive while frames are being prepared, before await.
+    void done.catch(() => undefined);
     const onAbort = () => {
-      if (recorder && recorder.state !== "inactive") recorder.stop();
+      try {
+        if (recorder && recorder.state !== "inactive") recorder.stop();
+      } catch { /* A native state transition must not throw from abort dispatch. */ }
     };
     signal?.addEventListener("abort", onAbort, { once: true });
 
-    const renderFrame = createFrameRenderer({
-      style: getStyle(styleId),
-      input,
-      params,
-      paletteMap,
-      totalFrames,
-      transparent: false,
-    });
-
     try {
+      // Prepare expensive artwork before the recorder clock starts. Otherwise
+      // rendering time is added to every frame and silently stretches the clip.
+      const frames = await captureFrames(styleId, input, params, paletteMap,
+        totalFrames, false, onProgress, signal);
+      ctx.putImageData(frames[0], 0, 0);
       recorder.start();
+      const started = performance.now();
       for (let frame = 0; frame < totalFrames; frame++) {
         throwIfExportAborted(signal);
-        renderFrame(ctx, frame);
+        if (recordingError) throw recordingError;
+        if (frame > 0) ctx.putImageData(frames[frame], 0, 0);
         track.requestFrame();
-        onProgress?.((frame + 1) / totalFrames * 0.98, `Recording frame ${frame + 1}/${totalFrames}`);
-        await waitWithAbort(1000 / fps, signal);
+        onProgress?.(0.88 + (frame + 1) / totalFrames * 0.1,
+          `Recording frame ${frame + 1}/${totalFrames} (keep this tab active)`);
+        const target = started + (frame + 1) * 1000 / fps;
+        await waitWithAbort(Math.max(0, target - performance.now()), signal);
+        if (performance.now() - target > Math.max(250, 2000 / fps)) {
+          throw new Error("The browser paused recording. Keep this tab active and try again.");
+        }
       }
       throwIfExportAborted(signal);
+      if (recordingError) throw recordingError;
       recorder.stop();
-      await done;
+      await awaitExportTask(done, signal, 10_000);
       throwIfExportAborted(signal);
+      if (chunks.length === 0) throw new Error("WebM recording produced no video data");
       return startBlobDownload(new Blob(chunks, { type: mimeType }), filename);
     } finally {
       signal?.removeEventListener("abort", onAbort);
@@ -366,13 +379,25 @@ export async function exportAnimation(
     webmMimeType?: string | null;
   } = {},
 ): Promise<AnimationExportResult> {
-  const totalFrames = Math.max(1, options.frames ?? DEFAULT_FRAMES);
-  const fps = Math.max(1, options.fps ?? DEFAULT_FPS);
+  const totalFrames = options.frames ?? DEFAULT_FRAMES;
+  const fps = options.fps ?? DEFAULT_FPS;
+  if (!Number.isInteger(totalFrames) || totalFrames < 1 || totalFrames > 240 ||
+      !Number.isFinite(fps) || fps < 1 || fps > 60) {
+    throw new Error("Animation requires 1–240 whole frames at 1–60 FPS");
+  }
+  if (!Number.isInteger(input.width) || !Number.isInteger(input.height) ||
+      input.width < 1 || input.height < 1 ||
+      input.width * input.height * totalFrames * 4 > 128 * 1024 * 1024) {
+    throw new Error("Animation exceeds the 128 MiB raw-frame budget; reduce its dimensions or frame count");
+  }
   const transparent = options.transparent ?? params.transparent ?? false;
+  if (format === "webm" && transparent) {
+    throw new Error("Transparent WebM is not supported; choose GIF or APNG");
+  }
   const { signal, onProgress } = options;
   const baseName = `strata-${styleId}-${params.seed}-${input.width}x${input.height}`;
   throwIfExportAborted(signal);
-  await ensurePosterFonts();
+  await ensurePosterFonts(signal);
   throwIfExportAborted(signal);
 
   let filename: string;
@@ -399,10 +424,10 @@ export async function exportAnimation(
     let apngEncoder: UpngModule["default"] | null = null;
     if (format === "gif") {
       onProgress?.(0, "Loading GIF encoder…");
-      gifEncoder = await loadGifEncoder();
+      gifEncoder = await awaitExportTask(loadGifEncoder(), signal);
     } else {
       onProgress?.(0, "Loading APNG encoder…");
-      apngEncoder = (await loadApngEncoder()).default;
+      apngEncoder = (await awaitExportTask(loadApngEncoder(), signal)).default;
     }
     throwIfExportAborted(signal);
     onProgress?.(0, "Rendering frames…");

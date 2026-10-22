@@ -35,3 +35,10 @@ describe("animation cancellation", () => {
     expect(source).toContain("await waitWithAbort(0, signal)");
   });
 });
+
+it('rejects unbounded and non-finite animation requests before allocating frames', async()=>{
+  for(const options of [{frames:Infinity},{frames:1.5},{frames:241},{fps:NaN},{fps:0},{fps:61}]) {
+    await expect(exportAnimation('ridge',input,defaultStyleParams,palettes,'gif',options)).rejects.toThrow('Animation requires');
+  }
+  await expect(exportAnimation('ridge',{...input,width:4096,height:4096},defaultStyleParams,palettes,'gif')).rejects.toThrow('128 MiB');
+});
