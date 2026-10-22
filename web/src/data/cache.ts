@@ -176,7 +176,7 @@ export async function getTile(
 
   try {
     const db = await openDb();
-    const key = `${z}/${x}/${y}`;
+    const key = `geotiff-v1:${z}/${x}/${y}`;
     const store = openStore(db, TILES_STORE, "readonly");
     const result = await requestToPromise<TileRecord | undefined>(store.get(key));
     if (!result || isExpired(result.ts, TILE_TTL_MS)) return undefined;
@@ -196,7 +196,7 @@ export async function setTile(
 
   try {
     const db = await openDb();
-    const key = `${z}/${x}/${y}`;
+    const key = `geotiff-v1:${z}/${x}/${y}`;
     const { packed, scale } = packElevations(data);
     const record: TileRecord = { key, data: packed, scale, ts: Date.now() };
     const store = openStore(db, TILES_STORE, "readwrite");

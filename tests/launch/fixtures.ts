@@ -1,8 +1,9 @@
+import { encodeMapTileBundle, mapTilesForBounds } from "../../workers/proxy/src/mapTiles";
 import { readFileSync } from "node:fs";
 import { test as base, expect } from "@playwright/test";
 
-const TERRAIN_PNG = readFileSync(
-  new URL("./terrain-fixture.png", import.meta.url),
+const TERRAIN_TIFF = readFileSync(
+  new URL("./terrain-fixture.tif", import.meta.url),
 );
 
 const MAP_STYLE = {
@@ -68,27 +69,25 @@ export const test = base.extend<LaunchOptions & LaunchFixtures>({
 
       if (
         url.hostname === "strata-proxy.example" &&
-        url.pathname.startsWith("/terrain/")
+        url.pathname.startsWith("/terrain-geotiff/")
       ) {
         await route.fulfill({
           status: 200,
-          contentType: "image/png",
+          contentType: "image/tiff",
           headers: { "Access-Control-Allow-Origin": "*" },
-          body: TERRAIN_PNG,
+          body: TERRAIN_TIFF,
         });
         return;
       }
 
       if (
         url.hostname === "strata-proxy.example" &&
-        url.pathname === "/overpass"
+        url.pathname === "/map-features"
       ) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          headers: { "Access-Control-Allow-Origin": "*" },
-          body: JSON.stringify({ elements: [] }),
-        });
+        const q=url.searchParams;
+        const bounds={south:Number(q.get("south")),west:Number(q.get("west")),north:Number(q.get("north")),east:Number(q.get("east"))};
+        const bytes=new Uint8Array([26,15,10,8,98,117,105,108,100,105,110,103,120,2,40,128,32]);
+        await route.fulfill({status:200,contentType:"application/vnd.strata.map-tiles",headers:{"Access-Control-Allow-Origin":"*"},body:Buffer.from(encodeMapTileBundle("20261018_080001_pt",mapTilesForBounds(bounds).map(tile=>({...tile,bytes}))))});
         return;
       }
 

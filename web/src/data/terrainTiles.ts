@@ -1,3 +1,4 @@
+import { decodeTerrainGeoTiff } from "./terrainGeoTiff.ts";
 import {
   lngToPixelX,
   latToPixelY,
@@ -22,12 +23,12 @@ import {
 
 /** Direct AWS is a deliberate runtime fallback, never the preferred production provider. */
 export const DIRECT_TERRAIN_TILE_URL =
-  "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+  "https://s3.amazonaws.com/elevation-tiles-prod/geotiff/{z}/{x}/{y}.tif";
 
 const configuredTerrainUrl = import.meta.env.VITE_TERRAIN_TILE_URL?.trim();
 const CONFIGURED_TERRAIN_PROXY_URL =
   configuredTerrainUrl && configuredTerrainUrl !== DIRECT_TERRAIN_TILE_URL
-    ? configuredTerrainUrl
+    ? configuredTerrainUrl.replace(/\/terrain\/?$/, "/terrain-geotiff/{z}/{x}/{y}.tif")
     : undefined;
 
 /** Preferred tile URL retained as a public export for diagnostics/build assertions. */
@@ -35,7 +36,7 @@ export const TERRAIN_TILE_URL: string =
   CONFIGURED_TERRAIN_PROXY_URL || DIRECT_TERRAIN_TILE_URL;
 
 export const TERRAIN_ATTRIBUTION =
-  "Terrain: Mapzen/Tilezen terrain tiles via AWS Open Data (elevation data courtesy of USGS, NASA SRTM, and other sources)";
+  "Terrain: Tilezen scalar GeoTIFF via AWS Open Data (elevation data courtesy of USGS, NASA SRTM, and other sources)";
 
 const TILE_SIZE = 256;
 const MAX_ZOOM = 15;
@@ -58,12 +59,9 @@ function tileUrl(template: string, z: number, x: number, y: number): string {
       .replace("{x}", String(x))
       .replace("{y}", String(y));
   }
-  return `${template.replace(/\/$/, "")}/${z}/${x}/${y}.png`;
+  return `${template.replace(/\/$/, "")}/${z}/${x}/${y}.${template.includes("terrain-geotiff") ? "tif" : "png"}`;
 }
 
-function decodeElevation(r: number, g: number, b: number): number {
-  return r * 256 + g + b / 256 - 32768;
-}
 
 function discardResponseBody(response: Response): void {
   try {
@@ -76,80 +74,21 @@ function discardResponseBody(response: Response): void {
   }
 }
 
-async function decodeTerrainImage(
-  blob: Blob,
-  signal: AbortSignal,
-): Promise<{ source: CanvasImageSource; close: () => void }> {
-  if (typeof createImageBitmap === "function") {
-    const bitmap = await createImageBitmap(blob);
-    return { source: bitmap, close: () => bitmap.close() };
+async function decodeTerrainResponse(response: Response, signal: AbortSignal): Promise<Float32Array> {
+  const contentType=response.headers.get("Content-Type")?.split(";",1)[0]?.trim();
+  if(contentType!=="image/tiff" && contentType!=="image/geotiff" && contentType!=="application/octet-stream") {
+    discardResponseBody(response);
+    throw new RequestPolicyError("decode","Terrain source did not return a scalar GeoTIFF");
   }
-
-  const url = URL.createObjectURL(blob);
-  const image = new Image();
+  const reader=response.body?.getReader();
+  if(!reader)throw new RequestPolicyError("decode","Terrain source returned no data");
+  const chunks:Uint8Array[]=[];let length=0;
   try {
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => signal.removeEventListener("abort", onAbort);
-      const onAbort = () => {
-        cleanup();
-        image.src = "";
-        reject(abortErrorFromSignal(signal));
-      };
-      image.onload = () => {
-        cleanup();
-        resolve();
-      };
-      image.onerror = () => {
-        cleanup();
-        reject(new Error("Image decode failed"));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) onAbort();
-      else image.src = url;
-    });
-    return { source: image, close: () => URL.revokeObjectURL(url) };
-  } catch (error) {
-    URL.revokeObjectURL(url);
-    throw error;
-  }
-}
-
-async function decodeTerrainResponse(
-  response: Response,
-  signal: AbortSignal,
-): Promise<Float32Array> {
-  const blob = await response.blob();
-  if (signal.aborted) throw abortErrorFromSignal(signal);
-
-  let decoded: { source: CanvasImageSource; close: () => void };
-  try {
-    decoded = await decodeTerrainImage(blob, signal);
-  } catch (error) {
-    if (signal.aborted) throw abortErrorFromSignal(signal);
-    throw new RequestPolicyError("decode", "Terrain tile image could not be decoded", {
-      cause: error,
-    });
-  }
-
-  try {
-    if (signal.aborted) throw abortErrorFromSignal(signal);
-    const canvas = document.createElement("canvas");
-    canvas.width = TILE_SIZE;
-    canvas.height = TILE_SIZE;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      throw new RequestPolicyError("decode", "Could not get canvas context for terrain tile");
-    }
-    ctx.drawImage(decoded.source, 0, 0);
-    const pixels = ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE).data;
-    const data = new Float32Array(TILE_SIZE * TILE_SIZE);
-    for (let i = 0, j = 0; i < pixels.length; i += 4, j++) {
-      data[j] = decodeElevation(pixels[i], pixels[i + 1], pixels[i + 2]);
-    }
-    return data;
-  } finally {
-    decoded.close();
-  }
+    for(;;){const {value,done}=await reader.read();if(done)break;length+=value.byteLength;
+      if(length>2*1024*1024)throw new RequestPolicyError("decode","Terrain raster exceeded its size limit");chunks.push(value);}
+  } finally {void reader.cancel().catch(()=>{});}
+  const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+  return decodeTerrainGeoTiff(bytes.buffer,signal);
 }
 
 function isCircuitFailure(error: RequestPolicyError): boolean {
@@ -645,11 +584,12 @@ export type TerrainFetchOptions = {
 };
 
 export class TerrainLoadError extends Error {
-  readonly kind = "all-tiles-failed";
+  readonly kind: "all-tiles-failed" | "incomplete-terrain";
 
-  constructor(message: string, cause?: unknown) {
+  constructor(message: string, cause?: unknown, kind: "all-tiles-failed" | "incomplete-terrain" = "all-tiles-failed") {
     super(message, cause === undefined ? undefined : { cause });
     this.name = "TerrainLoadError";
+    this.kind = kind;
   }
 }
 
@@ -700,7 +640,7 @@ export async function fetchTerrain(
             }
             firstFailure ??= error;
             failedCount++;
-            tileCache.set(key, new Float32Array(TILE_SIZE * TILE_SIZE));
+            // Never substitute zero elevations for missing source tiles.
           }
         },
     );
@@ -714,6 +654,7 @@ export async function fetchTerrain(
       throw new TerrainLoadError("All terrain tiles failed to load", firstFailure);
     }
 
+    if (failedCount > 0) throw new TerrainLoadError("Terrain coverage is incomplete. Retry instead of rendering invented zero-height areas.", firstFailure, "incomplete-terrain");
     const data = new Float32Array(grid.width * grid.height);
     const sourceWidth = maxX - minX;
     const sourceHeight = maxY - minY;

@@ -674,3 +674,14 @@ describe("overpass handler", () => {
     );
   });
 });
+test('scalar terrain route preserves legacy PNG behavior and validates bounded GeoTIFFs',async()=>{
+ const bytes=await Bun.file(new URL('../../../tests/launch/terrain-fixture.tif',import.meta.url)).arrayBuffer();
+ const {run,calls}=harness(()=>new Response(bytes,{headers:{'Content-Type':'image/tiff'}}));
+ const response=await run(request('/terrain-geotiff/12/1206/1538.tif'));
+ expect(response.status).toBe(200);expect(response.headers.get('Content-Type')).toBe('image/tiff');
+ expect(calls[0].url).toBe('https://s3.amazonaws.com/elevation-tiles-prod/geotiff/12/1206/1538.tif');
+ expect((await response.arrayBuffer()).byteLength).toBe(bytes.byteLength);
+ const bad=harness(()=>new Response(new Uint8Array([73,73,42,0,8,0,0,0]),{headers:{'Content-Type':'image/tiff'}}));
+ expect((await bad.run(request('/terrain-geotiff/12/1206/1538.tif'))).status).toBe(502);
+ expect((await run(request('/terrain-geotiff/012/1206/1538.tif'))).status).toBe(400);
+});

@@ -34,6 +34,7 @@ type Props = {
   isExportingAnimation: boolean;
   isSharing: boolean;
   animationAvailable: boolean;
+  mapDataReady?: boolean;
   capabilities: CapabilityMatrix;
   onCancel: () => void;
   onDismissErrors: () => void;
@@ -100,6 +101,7 @@ export function ExportDialog(props: Props) {
     isExportingAnimation,
     isSharing,
     animationAvailable,
+    mapDataReady = true,
     capabilities,
     onCancel,
     onDismissErrors,
@@ -128,7 +130,7 @@ export function ExportDialog(props: Props) {
 
   const animationBlocked = format === "animation" && !animationAvailable;
   const busy = isExporting || isExportingAnimation || isSharing || importStatus.phase === "reading";
-  const exportDisabled = busy || animationBlocked || availableFormats.length === 0;
+  const exportDisabled = busy || !mapDataReady || animationBlocked || availableFormats.length === 0;
 
   const handleExport = async () => {
     if (format === "png") {
@@ -264,6 +266,7 @@ export function ExportDialog(props: Props) {
                 </label>
               ))}
         </div>
+        {!mapDataReady && <p role="status" className="text-[12px] text-alarm">Map data is incomplete. Load streets, buildings and water before exporting. You can still save or copy the composition.</p>}
         {animationBlocked && (
           <p className="mt-2 text-[12px] leading-snug text-amber">
             Animation is set to none. Choose an animation style in the panel first.

@@ -650,6 +650,8 @@ export default function App() {
         hasArtwork={terrain.hasGenerated}
         isGenerating={isGenerating}
         statusText={statusText}
+        mapDataNotice={osm.features ? null : osm.status.phase === "error" ? "Incomplete preview: streets, buildings and water could not be loaded." : "Loading required streets, buildings and water…"}
+        onRetryMapData={osm.status.phase === "error" ? () => void fetchFeatures(true) : undefined}
         boundsDirty={terrain.boundsDirty}
         onRegenerate={handleGenerate}
         seed={params.seed}
@@ -729,6 +731,7 @@ export default function App() {
         isExportingAnimation={isExportingAnimation}
         isSharing={isSharing}
         animationAvailable={params.animationMode !== "none"}
+        mapDataReady={!!osm.features}
         capabilities={capabilities}
         onCancel={() => {
           exports.cancelExport();

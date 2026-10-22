@@ -28,7 +28,9 @@ export interface TileCoords {
 const TERRAIN_PATH_RE = /^\/terrain\/(\d{1,2})\/(\d{1,10})\/(\d{1,10})\.png$/;
 
 export function parseTerrainPath(pathname: string): TileCoords | null {
-  const match = TERRAIN_PATH_RE.exec(pathname);
+  const scalar = pathname.startsWith("/terrain-geotiff/");
+  const normalized = scalar ? pathname.replace(/^\/terrain-geotiff\/(\d+)\/(\d+)\/(\d+)\.tif$/, "/terrain/$1/$2/$3.png") : pathname;
+  const match = TERRAIN_PATH_RE.exec(normalized);
   if (!match) return null;
   const z = Number(match[1]);
   const x = Number(match[2]);
@@ -36,7 +38,7 @@ export function parseTerrainPath(pathname: string): TileCoords | null {
   if (!isValidTile(z, x, y)) return null;
   // One path per tile keeps the edge cache key canonical and prevents
   // leading-zero aliases from multiplying cache entries.
-  if (pathname !== `/terrain/${z}/${x}/${y}.png`) return null;
+  if (normalized !== `/terrain/${z}/${x}/${y}.png`) return null;
   return { z, x, y };
 }
 
@@ -51,6 +53,10 @@ export function isValidTile(z: number, x: number, y: number): boolean {
 
 export function terrainUpstreamUrl({ z, x, y }: TileCoords): string {
   return `${TERRAIN_UPSTREAM}/${z}/${x}/${y}.png`;
+}
+
+export function terrainGeoTiffUrl({z,x,y}:TileCoords):string {
+  return `https://s3.amazonaws.com/elevation-tiles-prod/geotiff/${z}/${x}/${y}.tif`;
 }
 
 export const MAX_BBOX_KM2 = 25;
@@ -255,4 +261,27 @@ export function sanitizeBuildId(value: string | undefined): string {
 
 export function enabledFlag(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "true";
+}
+
+/** Bound TIFF directory structure before caching; detailed scalar decoding stays client-side. */
+export function isValidTerrainTiff(body:Uint8Array):boolean {
+ if(body.length<8)return false;
+ const little=body[0]===73&&body[1]===73;
+ if(!little && !(body[0]===77&&body[1]===77))return false;
+ const view=new DataView(body.buffer,body.byteOffset,body.byteLength);
+ if(view.getUint16(2,little)!==42)return false;
+ const directory=view.getUint32(4,little);
+ if(directory<8 || directory+2>body.length)return false;
+ const count=view.getUint16(directory,little);
+ if(count>256 || directory+2+count*12+4>body.length)return false;
+ let width=0,height=0;
+ for(let i=0;i<count;i++){
+  const offset=directory+2+i*12,tag=view.getUint16(offset,little);
+  if(tag!==256 && tag!==257)continue;
+  const type=view.getUint16(offset+2,little);
+  if(view.getUint32(offset+4,little)!==1 || (type!==3 && type!==4))return false;
+  const value=type===3?view.getUint16(offset+8,little):view.getUint32(offset+8,little);
+  if(tag===256)width=value;else height=value;
+ }
+ return width===512 && height===512;
 }

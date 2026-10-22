@@ -76,7 +76,8 @@ jobs:
     name: Chromium launch smoke
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Leave room for variable public apt mirror speeds without skipping tests.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 

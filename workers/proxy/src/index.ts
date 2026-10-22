@@ -19,6 +19,8 @@ import {
   shouldRetryOverpass,
   terrainCacheControl,
   terrainUpstreamUrl,
+  terrainGeoTiffUrl,
+  isValidTerrainTiff,
 } from "./logic";
 import {
   MAP_TILE_METADATA,
@@ -139,7 +141,7 @@ function routeName(pathname: string): RouteName {
   if (pathname === "/health") return "health";
   if (pathname === "/overpass") return "overpass";
   if (pathname === "/map-features") return "map-features";
-  if (pathname.startsWith("/terrain/")) return "terrain";
+  if ((pathname.startsWith("/terrain/") || pathname.startsWith("/terrain-geotiff/"))) return "terrain";
   return "unknown";
 }
 
@@ -219,7 +221,7 @@ function passThrough(
 
 function validatePreflightTarget(url: URL): boolean {
   if (url.pathname === "/health") return url.search === "";
-  if (url.pathname.startsWith("/terrain/")) {
+  if ((url.pathname.startsWith("/terrain/") || url.pathname.startsWith("/terrain-geotiff/"))) {
     return url.search === "" && parseTerrainPath(url.pathname) !== null;
   }
   if (url.pathname === "/overpass" || url.pathname === "/map-features") return parseCanonicalBbox(url.search).ok;
@@ -599,6 +601,7 @@ async function handleTerrain(
       context,
     );
   }
+  const scalar = url.pathname.startsWith("/terrain-geotiff/");
   const tile = parseTerrainPath(url.pathname);
   if (!tile) {
     return errorResponse("invalid_tile", "invalid terrain tile coordinates", 400, context);
@@ -622,7 +625,7 @@ async function handleTerrain(
   try {
     const lease = await fetchWithDeadline(
       runtime,
-      terrainUpstreamUrl(tile),
+      scalar ? terrainGeoTiffUrl(tile) : terrainUpstreamUrl(tile),
       { method: "GET", redirect: "manual" },
       route.signal,
       runtime.terrainUpstreamTimeoutMs,
@@ -630,13 +633,14 @@ async function handleTerrain(
     const upstream = lease.response;
     try {
       if (upstream.status === 200) {
-        if (!isPngContentType(upstream.headers.get("Content-Type"))) {
+        const contentType=upstream.headers.get("Content-Type")?.split(";",1)[0]?.trim();
+        if (scalar ? contentType !== "image/tiff" : !isPngContentType(contentType ?? null)) {
           discardResponseBody(upstream);
           return failureResponse(
             new ProxyFailure(
               "upstream_bad_response",
               502,
-              "terrain upstream returned a non-PNG response",
+              "terrain upstream returned an unexpected image format",
             ),
             context,
           );
@@ -644,14 +648,14 @@ async function handleTerrain(
         const body = await readResponseBody(
           upstream,
           lease.signal,
-          MAX_TERRAIN_BODY_BYTES,
+          scalar ? 2 * MAX_TERRAIN_BODY_BYTES : MAX_TERRAIN_BODY_BYTES,
         );
-        if (!isValidTerrainPng(body)) {
+        if (scalar ? !isValidTerrainTiff(body) : !isValidTerrainPng(body)) {
           return failureResponse(
             new ProxyFailure(
               "upstream_bad_response",
               502,
-              "terrain upstream returned a malformed PNG response",
+              scalar ? "terrain upstream returned a malformed TIFF response" : "terrain upstream returned a malformed PNG response",
             ),
             context,
           );
@@ -1100,7 +1104,7 @@ async function dispatch(
   }
 
   if (url.pathname === "/health") return handleHealth(url, env, context);
-  if (url.pathname.startsWith("/terrain/")) {
+  if ((url.pathname.startsWith("/terrain/") || url.pathname.startsWith("/terrain-geotiff/"))) {
     return handleTerrain(request, url, env, runtime, telemetry, context);
   }
   if (url.pathname === "/overpass") {

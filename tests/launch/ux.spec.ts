@@ -525,7 +525,7 @@ test("@smoke native file sharing reuses the resident preview terrain", async ({
   await waitForArtwork(page);
   const terrainRequests = () =>
     externalRequests.filter((request) =>
-      request.includes("strata-proxy.example/terrain/"),
+      request.includes("strata-proxy.example/terrain-geotiff/"),
     ).length;
   const baseline = terrainRequests();
 
@@ -607,7 +607,7 @@ test("@smoke every aspect keeps URL, caption, OSM, variations, PNG, SVG, and res
 
     const matchingOsmRequests = () =>
       externalRequests
-        .filter((url) => url.includes("strata-proxy.example/overpass?"))
+        .filter((url) => url.includes("strata-proxy.example/map-features?"))
         .map((url) => new URL(url))
         .filter((candidate) => {
           const south = Number(candidate.searchParams.get("south"));

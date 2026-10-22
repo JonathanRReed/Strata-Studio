@@ -31,6 +31,8 @@ type Props = {
   isGenerating: boolean;
   /** Loading pill text while generating ("Loading tiles", "Rendering", retry notes). */
   statusText: string | null;
+  mapDataNotice?: string | null;
+  onRetryMapData?: () => void;
   boundsDirty: boolean;
   onRegenerate: () => void;
   seed: string;
@@ -118,6 +120,8 @@ export function Stage({
   hasArtwork,
   isGenerating,
   statusText,
+  mapDataNotice,
+  onRetryMapData,
   boundsDirty,
   onRegenerate,
   seed,
@@ -300,6 +304,7 @@ export function Stage({
         {/* Status pill rail — top-center of the artwork area, so it never
             covers the stacked viewfinder or the caption plate. */}
         <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex flex-col items-center gap-2 px-4 lg:top-6">
+          {mapDataNotice && <div role="status" className="pointer-events-auto flex max-w-xl flex-wrap items-center justify-center gap-2 rounded-sm border border-hairline bg-surface px-4 py-2 text-[12px] text-ink-muted"><span>{mapDataNotice}</span>{onRetryMapData && <button type="button" className="min-h-9 underline" onClick={onRetryMapData}>Retry map data</button>}</div>}
           {isGenerating && statusText && (
             <div className="enter-banner pointer-events-auto flex min-h-9 items-center rounded-sm border border-hairline bg-surface px-4">
               <span className="instrument-label status-live text-ink" role="status">
