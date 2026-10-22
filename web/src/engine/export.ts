@@ -267,10 +267,15 @@ export async function pngBlobWithAttribution(
   ctx.drawImage(canvas, 0, 0);
   const fontSize = fitFontSize(ctx, attribution, 10 * scale, copy.width - 16 * scale);
   ctx.font = `${fontSize}px sans-serif`;
-  ctx.fillStyle = isLightColor(backgroundColor)
-    ? "rgba(0,0,0,0.45)"
-    : "rgba(255,255,255,0.4)";
+  // A contrasting halo keeps attribution readable over both light and dark
+  // artwork strokes without adding an opaque rectangle to transparent exports.
+  const light = isLightColor(backgroundColor);
+  ctx.fillStyle = light ? "#000000" : "#ffffff";
+  ctx.strokeStyle = light ? "#ffffff" : "#000000";
+  ctx.lineWidth = 2 * scale;
+  ctx.lineJoin = "round";
   ctx.textAlign = "right";
+  ctx.strokeText(attribution, copy.width - 8 * scale, copy.height - 8 * scale);
   ctx.fillText(attribution, copy.width - 8 * scale, copy.height - 8 * scale);
   let blob = await canvasToPngBlob(copy, signal);
   if (dpi) blob = await withPngDpi(blob, dpi, signal);
@@ -365,9 +370,9 @@ export function downloadSvgWithAttribution(
   const dims = getSvgDimensions(modified);
   const width = dims?.width ?? 0;
   const height = dims?.height ?? 0;
-  const attributionFill = isLightColor(backgroundColor)
-    ? "rgba(0,0,0,0.45)"
-    : "rgba(255,255,255,0.4)";
+  const light = isLightColor(backgroundColor);
+  const attributionFill = light ? "#000000" : "#ffffff";
+  const attributionHalo = light ? "#ffffff" : "#000000";
   // Text is placed in viewBox (logical) units, so it scales with the export;
   // shrink from the 10-unit target if the attribution is wider than the art.
   let fontSize = 10;
@@ -375,7 +380,7 @@ export function downloadSvgWithAttribution(
   if (measureCtx && width > 16) {
     fontSize = fitFontSize(measureCtx, attribution, 10, width - 16);
   }
-  const textEl = `<text x="${width - 8}" y="${height - 8}" text-anchor="end" font-size="${fontSize.toFixed(2)}" font-family="sans-serif" fill="${attributionFill}">${escaped}</text>`;
+  const textEl = `<text x="${width - 8}" y="${height - 8}" text-anchor="end" font-size="${fontSize.toFixed(2)}" font-family="sans-serif" fill="${attributionFill}" stroke="${attributionHalo}" stroke-width="2" stroke-linejoin="round" paint-order="stroke fill">${escaped}</text>`;
   const closeIndex = modified.toLowerCase().lastIndexOf("</svg>");
   if (closeIndex >= 0) {
     modified = `${modified.slice(0, closeIndex)}${textEl}${modified.slice(closeIndex)}`;
