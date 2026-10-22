@@ -606,10 +606,12 @@ function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions):
     maxX,
     minY,
     maxY,
-    minTx: tileXForPixel(minX, zoom),
-    maxTx: tileXForPixel(maxX, zoom),
-    minTy: tileYForPixel(minY, zoom),
-    maxTy: tileYForPixel(maxY, zoom),
+    // Terrarium samples are pixel-centered. Include every integer sample
+    // needed by bilinear interpolation, even just beyond the selected tile.
+    minTx: tileXForPixel(Math.floor(minX - 0.5), zoom),
+    maxTx: tileXForPixel(Math.ceil(maxX - 0.5), zoom),
+    minTy: tileYForPixel(Math.floor(minY - 0.5), zoom),
+    maxTy: tileYForPixel(Math.ceil(maxY - 0.5), zoom),
   };
 }
 
@@ -622,30 +624,17 @@ export function tileCountForFetch(
   return (maxTx - minTx + 1) * (maxTy - minTy + 1);
 }
 
-function sampleBilinear(tile: Float32Array, px: number, py: number): number {
-  const x0 = Math.floor(px);
-  const y0 = Math.floor(py);
-  const x1 = Math.min(x0 + 1, TILE_SIZE - 1);
-  const y1 = Math.min(y0 + 1, TILE_SIZE - 1);
-  const fx = px - x0;
-  const fy = py - y0;
-
-  const i00 = y0 * TILE_SIZE + x0;
-  const i10 = y0 * TILE_SIZE + x1;
-  const i01 = y1 * TILE_SIZE + x0;
-  const i11 = y1 * TILE_SIZE + x1;
-
-  const v00 = tile[i00];
-  const v10 = tile[i10];
-  const v01 = tile[i01];
-  const v11 = tile[i11];
-
-  return (
-    v00 * (1 - fx) * (1 - fy) +
-    v10 * fx * (1 - fy) +
-    v01 * (1 - fx) * fy +
-    v11 * fx * fy
-  );
+function sampleBilinear(read: (x: number, y: number) => number, px: number, py: number): number {
+  const x0 = Math.floor(px), y0 = Math.floor(py);
+  const x1 = Math.ceil(px), y1 = Math.ceil(py);
+  const fx = px - x0, fy = py - y0;
+  const v00 = read(x0, y0);
+  const v10 = fx === 0 ? v00 : read(x1, y0);
+  const top = v00 * (1 - fx) + v10 * fx;
+  if (fy === 0) return top;
+  const v01 = read(x0, y1);
+  const v11 = fx === 0 ? v01 : read(x1, y1);
+  return top * (1 - fy) + (v01 * (1 - fx) + v11 * fx) * fy;
 }
 
 export type TerrainFetchOptions = {
@@ -686,14 +675,16 @@ export async function fetchTerrain(
     const { normalized, zoom, minX, maxX, minY, maxY, minTx, maxTx, minTy, maxTy } =
       computeTileRange(bounds, grid);
 
-    const tileCache = new Map<string, Float32Array>();
-    const tileKeys: { key: string; tx: number; ty: number }[] = [];
+    const tilesPerAxis = 2 ** zoom;
+    const worldLastSample = TILE_SIZE * tilesPerAxis - 1;
+    const tileCache = new Map<number, Float32Array>();
+    const tileKeys: { key: number; tx: number; ty: number }[] = [];
     let failedCount = 0;
     let firstFailure: unknown;
 
     for (let ty = minTy; ty <= maxTy; ty++) {
       for (let tx = minTx; tx <= maxTx; tx++) {
-        tileKeys.push({ key: `${zoom}/${tx}/${ty}`, tx, ty });
+        tileKeys.push({ key: ty * tilesPerAxis + tx, tx, ty });
       }
     }
 
@@ -727,22 +718,21 @@ export async function fetchTerrain(
     const sourceWidth = maxX - minX;
     const sourceHeight = maxY - minY;
 
+    // GDAL/Tilezen registers sample (0,0) at world pixel center (.5,.5).
+    // Clamp at the finite world's edges; latitude never wraps to another pole.
+    const readSample = (x: number, y: number): number => {
+      const tx = Math.floor(x / TILE_SIZE), ty = Math.floor(y / TILE_SIZE);
+      const tile = tileCache.get(ty * tilesPerAxis + tx);
+      if (!tile) throw new Error("Required terrain interpolation tile is missing");
+      return tile[(y - ty * TILE_SIZE) * TILE_SIZE + x - tx * TILE_SIZE];
+    };
     for (let row = 0; row < grid.height; row++) {
       const y = minY + (row / (grid.height - 1 || 1)) * sourceHeight;
-      const ty = tileYForPixel(y, zoom);
+      const py = Math.max(0, Math.min(worldLastSample, y - 0.5));
       for (let col = 0; col < grid.width; col++) {
         const x = minX + (col / (grid.width - 1 || 1)) * sourceWidth;
-        const tx = tileXForPixel(x, zoom);
-        const key = `${zoom}/${tx}/${ty}`;
-        const tile = tileCache.get(key);
-        const index = row * grid.width + col;
-        if (!tile) {
-          data[index] = 0;
-          continue;
-        }
-        const px = Math.min(Math.max(x - tx * TILE_SIZE, 0), TILE_SIZE - 0.001);
-        const py = Math.min(Math.max(y - ty * TILE_SIZE, 0), TILE_SIZE - 0.001);
-        data[index] = sampleBilinear(tile, px, py);
+        const px = Math.max(0, Math.min(worldLastSample, x - 0.5));
+        data[row * grid.width + col] = sampleBilinear(readSample, px, py);
       }
     }
 

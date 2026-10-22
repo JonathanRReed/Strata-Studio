@@ -43,8 +43,10 @@ export function elevationGradient(
   v: number,
   eps = 0.01,
 ): { dx: number; dy: number } {
-  const dx = (sample(clamp(u + eps, 0, 1), v) - sample(clamp(u - eps, 0, 1), v)) / (2 * eps);
-  const dy = (sample(u, clamp(v + eps, 0, 1)) - sample(u, clamp(v - eps, 0, 1))) / (2 * eps);
+  const u0 = clamp(u - eps, 0, 1), u1 = clamp(u + eps, 0, 1);
+  const v0 = clamp(v - eps, 0, 1), v1 = clamp(v + eps, 0, 1);
+  const dx = u1 === u0 ? 0 : (sample(u1, v) - sample(u0, v)) / (u1 - u0);
+  const dy = v1 === v0 ? 0 : (sample(u, v1) - sample(u, v0)) / (v1 - v0);
   return { dx, dy };
 }
 
@@ -386,13 +388,13 @@ export function generateRowSegments(
   params: StyleParams,
   pointFn: (u: number, v: number, x: number, baseY: number) => RowPointResult,
 ): WaveformRow[] {
-  const rowStep = params.spacing / clamp(params.compression, 0.5, 5);
+  const rowStep = Math.max(params.spacing / clamp(params.compression, 0.5, 5), height / MAX_ROWS);
   const xStep = Math.max(1, Math.round((1.1 - clamp(params.detail, 0.1, 1)) * 10));
 
   const rows: WaveformRow[] = [];
-  let rowCount = 0;
-
-  for (let baseY = 0; baseY < height && rowCount < MAX_ROWS; baseY += rowStep, rowCount++) {
+  for (let rowCount = 0; rowCount < MAX_ROWS; rowCount++) {
+    const baseY = rowCount * rowStep;
+    if (baseY >= height) break;
     const v = baseY / (height - 1 || 1);
     const segments: RowPoint[][] = [];
     let currentSegment: RowPoint[] = [];

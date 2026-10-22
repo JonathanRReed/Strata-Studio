@@ -318,15 +318,25 @@ export function overpassToGeoJSON(response: {
     const inners = collectRings("inner");
     if (outers.length === 0) continue;
 
-    // Assign each inner ring to the outer ring that contains it. This avoids
-    // duplicating inners across all outers, which would flip evenodd hole
-    // parity and fill holes with water.
-    const polygons: [number, number][][][] = outers.map((outer) => {
-      const contained = inners.filter((inner) =>
-        inner.length > 0 ? isPointInRing(inner[0], outer) : false,
-      );
-      return [outer, ...contained];
+    // A nested hole belongs to exactly one outer: its smallest container.
+    // Assigning it to every ancestor flips even-odd parity and floods islands.
+    const polygons: [number, number][][][] = outers.map((outer) => [outer]);
+    const areas = outers.map((ring) => {
+      const origin = ring[0];
+      let twiceArea = 0;
+      for (let i = 1; i < ring.length - 1; i++) {
+        twiceArea += (ring[i][0] - origin[0]) * (ring[i + 1][1] - origin[1]) -
+          (ring[i + 1][0] - origin[0]) * (ring[i][1] - origin[1]);
+      }
+      return Math.abs(twiceArea);
     });
+    for (const inner of inners) {
+      let owner = -1;
+      for (let i = 0; i < outers.length; i++) {
+        if ((owner < 0 || areas[i] < areas[owner]) && isPointInRing(inner[0], outers[i])) owner = i;
+      }
+      if (owner >= 0) polygons[owner].push(inner);
+    }
     const geometry: GeoGeometry =
       polygons.length === 1
         ? { type: "Polygon", coordinates: polygons[0] }
