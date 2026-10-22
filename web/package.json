@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "bun --check && vite build && bun run assert:proxy-first",
+    "build": "node ../scripts/bun-check.mjs && vite build && bun run assert:proxy-first",
     "assert:proxy-first": "bun run scripts/assert-proxy-first.ts",
     "lint": "oxlint",
-    "typecheck": "bun --check",
+    "typecheck": "node ../scripts/bun-check.mjs",
     "test": "bun test",
     "format": "prettier --write .",
     "preview": "vite preview",

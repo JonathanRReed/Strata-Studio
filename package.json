@@ -12,6 +12,7 @@
     "lint": "bun run lint:web",
     "lint:web": "bun run --cwd web lint",
     "typecheck": "bun run typecheck:web && bun run typecheck:proxy",
+    "test:bun-check": "node --test scripts/bun-check-regression.mjs",
     "typecheck:web": "bun run --cwd web typecheck",
     "typecheck:proxy": "bun run --cwd workers/proxy typecheck",
     "test:unit": "bun run test:deployment && bun run test:unit:web && bun run test:unit:proxy",
@@ -29,7 +30,7 @@
     "test:launch:a11y": "playwright test --project=chromium --grep @a11y",
     "test:launch:browsers": "playwright test --project=firefox --project=webkit --grep @smoke",
     "test:launch:all": "playwright test",
-    "verify:launch": "bun run install:frozen && bun run lint && bun run typecheck:proxy && bun run test:unit && bun run build:fixture && bun run check:wrangler && bun run test:launch:built",
+    "verify:launch": "bun run install:frozen && bun run lint && bun run test:bun-check && bun run typecheck:proxy && bun run test:unit && bun run build:fixture && bun run check:wrangler && bun run test:launch:built",
     "check:deployment": "bun scripts/deploymentHealth.ts",
     "test:deployment": "bun test scripts/deploymentHealth.test.ts"
   },
