@@ -116,7 +116,9 @@ export const flow: ArtStyle = {
           const u = clamp(x / (width - 1 || 1), 0, 1);
           const v = clamp(y / (height - 1 || 1), 0, 1);
           const grad = elevationGradient(sample, u, v, 0.02);
-          const baseAngle = Math.atan2(grad.dx, -grad.dy);
+          // The path advances in pixels, so rotate the screen-space gradient,
+          // not derivatives measured in normalized u/v coordinates.
+          const baseAngle = Math.atan2(grad.dx / (width - 1 || 1), -grad.dy / (height - 1 || 1));
           const angle = baseAngle + (noise(u * 4, v * 4, phase)) * Math.PI * (0.3 + params.noise);
           // Feature influence: break on interrupt, displace on amplify/flatten, glow
           const res = applyFeatureInfluence(stepLen, u, v, masks, params);

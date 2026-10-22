@@ -1,3 +1,5 @@
+import { latToPixelY, pixelYToLat } from "./projection.ts";
+
 export function clamp(n: number, min: number, max: number): number {
   if (Number.isNaN(n)) return min;
   if (n < min) return min;
@@ -109,14 +111,16 @@ export function cropGridToAspect(
   const u1 = (offX + cropW - 1) / (size - 1);
   const v0 = offY / (size - 1);
   const v1 = (offY + cropH - 1) / (size - 1);
+  const northY = latToPixelY(north, 0);
+  const southY = latToPixelY(south, 0);
   return {
     width: cropW,
     height: cropH,
     bounds: {
       west: west + (east - west) * u0,
       east: west + (east - west) * u1,
-      north: north + (south - north) * v0,
-      south: north + (south - north) * v1,
+      north: pixelYToLat(northY + (southY - northY) * v0, 0),
+      south: pixelYToLat(northY + (southY - northY) * v1, 0),
     },
     data,
   };
@@ -130,8 +134,11 @@ export function projectGeoPoint(
   height: number,
 ): { x: number; y: number } {
   const u = (lng - bounds.west) / (bounds.east - bounds.west || 1);
-  const v = (lat - bounds.south) / (bounds.north - bounds.south || 1);
-  return { x: u * width, y: (1 - v) * height };
+  // Terrain rows are sampled uniformly in Web Mercator, not latitude.
+  const northY = latToPixelY(bounds.north, 0);
+  const spanY = latToPixelY(bounds.south, 0) - northY;
+  const v = (latToPixelY(lat, 0) - northY) / (spanY || 1);
+  return { x: u * width, y: v * height };
 }
 
 type GeoBounds = import("./types.ts").GeoBounds;

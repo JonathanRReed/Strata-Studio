@@ -173,11 +173,13 @@ export const magneticField: ArtStyle = {
           const v = clamp(y / (height - 1 || 1), 0, 1);
           const grad = elevationGradient(sample, u, v, 0.02);
           const angleNoise = (noise(u * 5, v * 5, phase)) * Math.PI * params.noise * 2;
-          // Rotate gradient 90 degrees to follow iso-elevation lines.
-          let fx = -grad.dy;
-          let fy = grad.dx;
+          // Keep flatness independent of output resolution, then convert
+          // derivatives to pixels before rotating into an isoline tangent.
+          if (Math.hypot(grad.dx, grad.dy) < 0.02) break;
+          let fx = -grad.dy / (height - 1 || 1);
+          let fy = grad.dx / (width - 1 || 1);
           const mag = Math.hypot(fx, fy);
-          if (mag < 0.02) break;
+          if (mag === 0) break;
           fx /= mag;
           fy /= mag;
           const cos = Math.cos(angleNoise);

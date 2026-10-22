@@ -64,13 +64,38 @@ export function sceneWithDrawProgress(scene: Scene, progress: number): Scene {
     if (clamped >= 1) {
       visibleStrokes.push(strokes[i]);
     } else {
-      // Reveal a fraction of the stroke's points from the start, eased so
-      // the pen moves fast at first and slows as it reaches the end.
+      // Reveal by arc length, not point count. Two-point and unevenly
+      // sampled paths must advance continuously too.
       const eased = easeOut(clamped);
-      const points = strokes[i].points;
-      const visibleCount = Math.max(2, Math.ceil(points.length * eased));
-      const revealed: ScenePoint[] = points.slice(0, visibleCount);
-      visibleStrokes.push({ ...strokes[i], points: revealed });
+      const stroke = strokes[i];
+      if (stroke.fill) {
+        // A partial polygon invents a closing chord. Fade the real fill
+        // instead, while ordinary outlines trace their actual perimeter.
+        visibleStrokes.push({ ...stroke, opacity: (stroke.opacity ?? 1) * eased });
+        continue;
+      }
+      const points = stroke.closed && stroke.points.length > 1
+        ? [...stroke.points, stroke.points[0]] : stroke.points;
+      let total = 0;
+      for (let j = 1; j < points.length; j++) {
+        total += Math.hypot(points[j].x - points[j - 1].x, points[j].y - points[j - 1].y);
+      }
+      if (!(total > 0) || !Number.isFinite(total)) continue;
+      let remaining = total * eased;
+      const revealed: ScenePoint[] = [points[0]];
+      for (let j = 1; j < points.length; j++) {
+        const a = points[j - 1], b = points[j];
+        const length = Math.hypot(b.x - a.x, b.y - a.y);
+        if (length <= remaining) {
+          revealed.push(b);
+          remaining -= length;
+        } else {
+          const t = remaining / length;
+          revealed.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+          break;
+        }
+      }
+      visibleStrokes.push({ ...stroke, points: revealed, closed: false });
     }
   }
   return { strokes: visibleStrokes };
