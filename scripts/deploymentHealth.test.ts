@@ -8,6 +8,21 @@ function response(body: unknown, cors: string | null = origin, status = 200) {
 test('accepts the exact browser origin with both data routes enabled', async () => {
   expect(await inspectProxyHealth(response(healthy), origin)).toEqual([]);
 });
+test("accepts the explicitly enabled free feature fallback when raw Overpass is disabled", async () => {
+  expect(
+    await inspectProxyHealth(
+      response({
+        ...healthy,
+        routes: {
+          terrain: { enabled: true },
+          overpass: { enabled: false },
+          mapFeatures: { enabled: true },
+        },
+      }),
+      origin,
+    ),
+  ).toEqual([]);
+});
 test('rejects an HTTP-healthy proxy whose OSM route is disabled', async () => {
   expect(await inspectProxyHealth(response({ ...healthy, routes: { ...healthy.routes, overpass: { enabled: false } } }), origin)).toContain('Overpass route is disabled');
 });

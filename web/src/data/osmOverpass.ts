@@ -7,6 +7,11 @@ import type {
 } from "../engine/types.ts";
 import { getOsm, setOsm } from "./cache.ts";
 import {
+  decodeMapTileBundle,
+  MAP_BUNDLE_TYPE,
+  MAX_MAP_BUNDLE_BYTES,
+} from "./mapTiles.ts";
+import {
   abortErrorFromSignal,
   AttemptBudget,
   createRequestOperation,
@@ -141,7 +146,12 @@ export function classifyWaterType(
   if (classifyFeature(tags) !== "water") return undefined;
   if (tags.natural === "coastline") return "ocean";
   if (tags.water !== undefined) {
-    if (tags.water === "ocean" || tags.water === "sea" || tags.water === "lagoon") return "ocean";
+    if (
+      tags.water === "ocean" ||
+      tags.water === "sea" ||
+      tags.water === "lagoon"
+    )
+      return "ocean";
     if (RIVER_WATER_VALUES.has(tags.water)) return "river";
     return "lake";
   }
@@ -233,7 +243,10 @@ function chainOpenWays(memberNodeLists: number[][]): number[][] {
  * Ray-casting point-in-polygon test for a closed ring (first point == last
  * point). Returns true if the point is strictly inside the ring.
  */
-function isPointInRing(point: [number, number], ring: [number, number][]): boolean {
+function isPointInRing(
+  point: [number, number],
+  ring: [number, number][],
+): boolean {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const xi = ring[i][0];
@@ -248,9 +261,9 @@ function isPointInRing(point: [number, number], ring: [number, number][]): boole
   return inside;
 }
 
-export function overpassToGeoJSON(
-  response: { elements: OverpassElement[] },
-): GeoFeatureCollection {
+export function overpassToGeoJSON(response: {
+  elements: OverpassElement[];
+}): GeoFeatureCollection {
   const nodes = new Map<number, [number, number]>();
   const waysById = new Map<number, OverpassElement>();
   const relations: OverpassElement[] = [];
@@ -289,7 +302,11 @@ export function overpassToGeoJSON(
 
     const collectRings = (role: "outer" | "inner") => {
       const memberWays = (relation.members ?? [])
-        .filter((m) => m.type === "way" && (m.role === role || (role === "outer" && m.role === "")))
+        .filter(
+          (m) =>
+            m.type === "way" &&
+            (m.role === role || (role === "outer" && m.role === "")),
+        )
         .map((m) => waysById.get(m.ref))
         .filter((w): w is OverpassElement => w !== undefined);
       const rings = assembleRings(memberWays.map((w) => w.nodes ?? []));
@@ -360,10 +377,13 @@ export function overpassToGeoJSON(
     // Recursive relation output includes untagged member ways. They support
     // relation geometry but are not evidence of standalone buildings.
     if (
-      tags.building === undefined && tags.highway === undefined &&
-      tags.natural !== "water" && tags.natural !== "coastline" &&
+      tags.building === undefined &&
+      tags.highway === undefined &&
+      tags.natural !== "water" &&
+      tags.natural !== "coastline" &&
       tags.waterway === undefined
-    ) continue;
+    )
+      continue;
     const strataType = classifyFeature(tags);
     const waterType = classifyWaterType(tags);
 
@@ -444,7 +464,7 @@ export function proxyOverpassUrl(endpoint: string, bounds: GeoBounds): string {
 
 function boundsCacheKey(bounds: GeoBounds): string {
   // Older caches may contain a partial result accepted before remark validation.
-  return `v5:${canonicalProxyBboxParams(bounds)}`;
+  return `v6:${canonicalProxyBboxParams(bounds)}`;
 }
 
 /** Overpass API instances, each attempted at most once after the proxy. */
@@ -456,11 +476,12 @@ export const OVERPASS_MIRRORS = [
 
 export type OverpassEndpoint = {
   url: string;
-  kind: "proxy" | "direct";
+  kind: "proxy" | "tiles" | "direct";
 };
 
 export function overpassEndpoints(
-  proxyUrl: string | undefined = import.meta.env.VITE_OVERPASS_URL as string | undefined,
+  proxyUrl: string | undefined = import.meta.env.VITE_OVERPASS_URL as
+    string | undefined,
 ): OverpassEndpoint[] {
   const mirrors: OverpassEndpoint[] = OVERPASS_MIRRORS.map((url) => ({
     url,
@@ -468,11 +489,16 @@ export function overpassEndpoints(
   }));
   const configured = proxyUrl?.trim();
   if (!configured) return mirrors;
+  const proxy = configured.replace(/\/+$/, "");
+  const tileFallback = proxy.replace(/\/overpass$/, "/map-features");
   // The Worker already tries the first two providers. Keep one distinct direct
   // provider as the browser fallback so one operation cannot retry the same
   // upstreams and silently exceed its aggregate attempt budget.
   return [
-    { url: configured.replace(/\/+$/, ""), kind: "proxy" },
+    { url: proxy, kind: "proxy" },
+    ...(tileFallback !== proxy
+      ? [{ url: tileFallback, kind: "tiles" as const }]
+      : []),
     mirrors[mirrors.length - 1]!,
   ];
 }
@@ -494,7 +520,9 @@ function discardResponseBody(response: Response): void {
   }
 }
 
-function validateOverpassPayload(value: unknown): { elements: OverpassElement[] } {
+function validateOverpassPayload(value: unknown): {
+  elements: OverpassElement[];
+} {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -528,7 +556,10 @@ function boundedRetryDelayMs(
     runtime.random,
   );
   return Math.min(
-    Math.max(jitterMs, Math.min(failure.retryAfterMs ?? 0, OSM_MAX_RETRY_AFTER_MS)),
+    Math.max(
+      jitterMs,
+      Math.min(failure.retryAfterMs ?? 0, OSM_MAX_RETRY_AFTER_MS),
+    ),
     availableMs,
   );
 }
@@ -561,7 +592,9 @@ export function createOsmFeatureFetcher(
     dependencies.endpoints ?? overpassEndpoints(dependencies.proxyUrl);
   const operationTimeoutMs =
     dependencies.operationTimeoutMs ?? OSM_OPERATION_TIMEOUT_MS;
-  const attemptTimeoutMs = dependencies.attemptTimeoutMs ?? OSM_ATTEMPT_TIMEOUT_MS;
+  const attemptTimeoutMs =
+    dependencies.attemptTimeoutMs ?? OSM_ATTEMPT_TIMEOUT_MS;
+  const unavailableProxyUntil = new Map<string, number>();
 
   return async (bounds, signal) => {
     if (!isBboxSmallEnough(bounds)) {
@@ -590,6 +623,14 @@ export function createOsmFeatureFetcher(
       operation.throwIfAborted();
       for (let index = 0; index < endpoints.length; index++) {
         const endpoint = endpoints[index]!;
+        if (
+          endpoint.kind === "proxy" &&
+          runtime.now() < (unavailableProxyUntil.get(endpoint.url) ?? 0)
+        )
+          continue;
+        // This route shares the proxy's managed budget. Do not immediately
+        // retry that same protection boundary after a rate-limit response.
+        if (endpoint.kind === "tiles" && lastFailure?.status === 429) continue;
         try {
           const result = await runRequestAttempt({
             operation,
@@ -598,12 +639,12 @@ export function createOsmFeatureFetcher(
             provider: endpoint.kind,
             run: async ({ signal: attemptSignal }) => {
               const url =
-                endpoint.kind === "proxy"
+                endpoint.kind !== "direct"
                   ? proxyOverpassUrl(endpoint.url, snapped)
                   : endpoint.url;
               const response = await fetchImpl(
                 url,
-                endpoint.kind === "proxy"
+                endpoint.kind !== "direct"
                   ? { method: "GET", signal: attemptSignal }
                   : {
                       method: "POST",
@@ -621,6 +662,59 @@ export function createOsmFeatureFetcher(
                   provider: endpoint.kind,
                   nowMs: runtime.now(),
                 });
+              }
+              if (endpoint.kind === "tiles") {
+                if (
+                  response.headers
+                    .get("Content-Type")
+                    ?.split(";", 1)[0]
+                    ?.trim() !== MAP_BUNDLE_TYPE
+                ) {
+                  discardResponseBody(response);
+                  throw new RequestPolicyError(
+                    "decode",
+                    "Map snapshot has an unexpected media type",
+                    { provider: "tiles", retryable: true },
+                  );
+                }
+                const reader = response.body?.getReader();
+                if (!reader)
+                  throw new RequestPolicyError(
+                    "decode",
+                    "Map snapshot is empty",
+                    { retryable: true },
+                  );
+                const chunks: Uint8Array[] = [];
+                let total = 0;
+                try {
+                  for (;;) {
+                    if (attemptSignal.aborted)
+                      throw abortErrorFromSignal(attemptSignal);
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    total += value.byteLength;
+                    if (total > MAX_MAP_BUNDLE_BYTES)
+                      throw new Error("Map snapshot is too large");
+                    chunks.push(value);
+                  }
+                  const bytes = new Uint8Array(total);
+                  let offset = 0;
+                  for (const chunk of chunks) {
+                    bytes.set(chunk, offset);
+                    offset += chunk.byteLength;
+                  }
+                  return decodeMapTileBundle(bytes, snapped);
+                } catch (error) {
+                  if (attemptSignal.aborted)
+                    throw abortErrorFromSignal(attemptSignal);
+                  throw new RequestPolicyError(
+                    "decode",
+                    "Map snapshot is incomplete or invalid",
+                    { provider: "tiles", retryable: true, cause: error },
+                  );
+                } finally {
+                  void reader.cancel().catch(() => {});
+                }
               }
               if (!isJsonContentType(response.headers.get("Content-Type"))) {
                 discardResponseBody(response);
@@ -661,6 +755,16 @@ export function createOsmFeatureFetcher(
         } catch (error) {
           const failure = normalizeRequestFailure(error, endpoint.kind);
           lastFailure = failure;
+          if (
+            endpoint.kind === "proxy" &&
+            failure.status === 503 &&
+            (failure.retryAfterMs ?? 0) > 0
+          ) {
+            unavailableProxyUntil.set(
+              endpoint.url,
+              runtime.now() + failure.retryAfterMs!,
+            );
+          }
           if (isAbortFailure(failure) || failure.kind === "attempt-budget") {
             throw failure;
           }
@@ -668,7 +772,7 @@ export function createOsmFeatureFetcher(
           // deployment skew) must not suppress the deliberate direct fallback.
           // Once a direct provider reports a permanent failure, the shared
           // query itself is unlikely to succeed at another mirror.
-          if (!failure.retryable && endpoint.kind !== "proxy") break;
+          if (!failure.retryable && endpoint.kind === "direct") break;
 
           const endpointsRemaining = endpoints.length - index - 1;
           if (endpointsRemaining <= 0) break;

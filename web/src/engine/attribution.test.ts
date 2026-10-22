@@ -6,6 +6,7 @@ for (const [background, ink, halo] of [["#000000", "#ffffff", "#000000"], ["#fff
     const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
     const calls: string[] = [];
     const ctx = {
+      save() {}, restore() {}, setTransform() {},
       fillStyle: "", strokeStyle: "", lineWidth: 0, lineJoin: "", font: "", textAlign: "",
       drawImage: () => calls.push("artwork"), measureText: () => ({ width: 100 }),
       strokeText: () => calls.push("halo"), fillText: () => calls.push("ink"),

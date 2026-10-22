@@ -14,7 +14,7 @@ export function osmQueryKey(bounds: GeoBounds): string {
   return `${snapped.south.toFixed(4)},${snapped.west.toFixed(4)},${snapped.north.toFixed(4)},${snapped.east.toFixed(4)}`;
 }
 
-function summarizeFeatures(collected: GeoFeatureCollection): string {
+export function summarizeFeatures(collected: GeoFeatureCollection): string {
   const counts = { building: 0, road: 0, water: 0 };
   const waterCounts = { ocean: 0, lake: 0, river: 0 };
   for (const feature of collected.features) {
@@ -22,6 +22,10 @@ function summarizeFeatures(collected: GeoFeatureCollection): string {
     if (feature.properties.strataType === "water") {
       waterCounts[feature.properties.waterType ?? "lake"]++;
     }
+  }
+  if (collected.source?.kind === "openfreemap-tiles") {
+    const date = collected.source.dataset.slice(0, 8);
+    return `Tile fallback: ${counts.building} building shapes, ${counts.road} road segments, ${counts.water} water shapes. Generalized map geometry; snapshot ${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}.`;
   }
   const waterDetail =
     counts.water > 0

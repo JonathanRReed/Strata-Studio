@@ -357,6 +357,9 @@ export function FeaturesSection({
       <p role="status" className="instrument-label" title={featureInfo ?? osmAreaHint ?? undefined}>
         {featureChip}
       </p>
+      {featureInfo && !isFeatureLoading && !featureError && (
+        <p className="text-[12px] leading-relaxed text-ink-muted">{featureInfo}</p>
+      )}
       {featureError && !isFeatureLoading && (
         <p className="text-[12px] leading-snug text-alarm/80">{featureError}</p>
       )}
@@ -789,7 +792,16 @@ export function DataSection() {
         >
           OpenStreetMap contributors
         </a>{" "}
-        · OpenFreeMap. Terrain:{" "}
+        · OpenFreeMap · ©{" "}
+        <a
+          href="https://openmaptiles.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-hairline-2 underline-offset-2 transition-colors hover:text-ink-muted"
+        >
+          OpenMapTiles
+        </a>
+        . Terrain:{" "}
         <a
           href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
           target="_blank"

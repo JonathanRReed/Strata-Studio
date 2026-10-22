@@ -77,6 +77,8 @@ class StubCtx {
   stroke() { this.record("stroke"); }
   fill() { this.record("fill"); }
   fillText(...args: unknown[]) { this.record("fillText", ...args); }
+  strokeText(...args: unknown[]) { this.record("strokeText", ...args); }
+  measureText(text: string) { return { width: text.length * 5 }; }
   drawImage(...args: unknown[]) { this.record("drawImage", ...args); }
 
   asCtx(): CanvasRenderingContext2D {
@@ -255,6 +257,26 @@ describe("animation frame renderer", () => {
   }
 
   const paletteMap = { monochrome: PALETTE };
+
+  it("keeps required map attribution on every animation frame", () => {
+    const { style } = countingStyle();
+    const render = createFrameRenderer({
+      style,
+      input: { ...input, attribution: "© OpenMapTiles · OpenStreetMap" },
+      params: PARAMS,
+      paletteMap,
+      totalFrames: 2,
+      transparent: true,
+    });
+    const ctx = new StubCtx(100, 100);
+    render(ctx.asCtx(), 0);
+    render(ctx.asCtx(), 1);
+    expect(
+      ctx
+        .callsOf("fillText")
+        .filter((call) => call.args[0] === "© OpenMapTiles · OpenStreetMap"),
+    ).toHaveLength(2);
+  });
 
   it("generates the static scene exactly once for draw/parallax exports", () => {
     for (const animationMode of ["draw", "parallax"] as const) {

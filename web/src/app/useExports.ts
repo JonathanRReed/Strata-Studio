@@ -43,7 +43,9 @@ import type { CustomPaletteEntry } from "../presets/customPalettes.ts";
 import { osmQueryKey } from "./useOsmFeatures.ts";
 import { SHARE_LONG_EDGE } from "./shareSpec.ts";
 
-const ATTRIBUTION = `Map data © ${OSM_ATTRIBUTION} | ${TERRAIN_ATTRIBUTION}`;
+export function mapAttribution(features?: GeoFeatureCollection): string {
+  return `Map data © ${OSM_ATTRIBUTION}${features?.source?.kind === "openfreemap-tiles" ? " | © OpenMapTiles" : ""} | ${TERRAIN_ATTRIBUTION}`;
+}
 const STATIC_EXPORT_DEADLINE_MS = 75_000;
 const ANIMATION_EXPORT_DEADLINE_MS = 180_000;
 const STATUS_HOLD_MS = 6_000;
@@ -235,7 +237,7 @@ export function useExports({
       throwIfExportAborted(signal);
       const blob = await pngBlobWithAttribution(
         canvas,
-        ATTRIBUTION,
+        mapAttribution(currentFeatures),
         backgroundColor,
         width / logical.width,
         dpi,
@@ -386,7 +388,7 @@ export function useExports({
         const receipt = downloadSvgWithAttribution(
           svg,
           filename,
-          ATTRIBUTION,
+          mapAttribution(currentFeatures),
           backgroundColor,
           operation.signal,
         );
@@ -523,6 +525,7 @@ export function useExports({
           width,
           height,
         });
+        input.attribution = mapAttribution(currentFeatures);
         const onProgress: ExportProgress = (progress, note) => {
           if (
             !operation.signal.aborted &&

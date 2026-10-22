@@ -20,6 +20,16 @@ import {
   terrainCacheControl,
   terrainUpstreamUrl,
 } from "./logic";
+import {
+  MAP_TILE_METADATA,
+  MAP_BUNDLE_TYPE,
+  MAX_MAP_TILE_BYTES,
+  MAX_MAP_SNAPSHOT_BYTES,
+  mapTilesForBounds,
+  parseMapTileSource,
+  encodeMapTileBundle,
+  isVectorTilePayload,
+} from "./mapTiles";
 
 export type ManagedRateLimiter = { limit(options: { key: string }): Promise<{ success: boolean }> };
 
@@ -29,15 +39,16 @@ export interface Env {
   ALLOWED_ORIGINS?: string;
   TERRAIN_ENABLED?: string;
   OVERPASS_ENABLED?: string;
+  MAP_TILES_ENABLED?: string;
   OVERPASS_PROTECTION_STAGED?: string;
   BUILD_ID?: string;
 }
 
-type RouteName = "health" | "terrain" | "overpass" | "unknown";
+type RouteName = "health" | "terrain" | "overpass" | "map-features" | "unknown";
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 type UpstreamAttempt = {
-  upstream: "overpass-primary" | "overpass-mirror";
+  upstream: "overpass-primary" | "overpass-mirror" | "map-metadata" | "map-tile";
   status: number | null;
   durationMs: number;
 };
@@ -46,7 +57,7 @@ type Telemetry = {
   upstreamAttempts: UpstreamAttempt[];
   requestId: string;
   route: RouteName;
-  upstream: "none" | "terrain" | "overpass-primary" | "overpass-mirror";
+  upstream: "none" | "terrain" | UpstreamAttempt["upstream"];
   retryCount: number;
 };
 
@@ -127,6 +138,7 @@ type ResponseContext = {
 function routeName(pathname: string): RouteName {
   if (pathname === "/health") return "health";
   if (pathname === "/overpass") return "overpass";
+  if (pathname === "/map-features") return "map-features";
   if (pathname.startsWith("/terrain/")) return "terrain";
   return "unknown";
 }
@@ -210,7 +222,7 @@ function validatePreflightTarget(url: URL): boolean {
   if (url.pathname.startsWith("/terrain/")) {
     return url.search === "" && parseTerrainPath(url.pathname) !== null;
   }
-  if (url.pathname === "/overpass") return parseCanonicalBbox(url.search).ok;
+  if (url.pathname === "/overpass" || url.pathname === "/map-features") return parseCanonicalBbox(url.search).ok;
   return false;
 }
 
@@ -844,6 +856,185 @@ async function handleOverpass(
   }
 }
 
+async function handleMapFeatures(
+  request: Request,
+  url: URL,
+  env: Env,
+  runtime: WorkerRuntime,
+  telemetry: Telemetry,
+  context: ResponseContext,
+): Promise<Response> {
+  const parsed = parseCanonicalBbox(url.search);
+  if (!parsed.ok)
+    return errorResponse("invalid_bbox", parsed.error, 400, context);
+  let tiles: ReturnType<typeof mapTilesForBounds>;
+  try {
+    tiles = mapTilesForBounds(parsed.bounds);
+  } catch {
+    return errorResponse(
+      "map_tile_budget",
+      "zoom in for detailed map features",
+      400,
+      context,
+    );
+  }
+  const protectionFailure = await enforceOverpassProtection(
+    request,
+    env,
+    runtime,
+    context,
+  );
+  if (protectionFailure) return protectionFailure;
+  if (
+    !enabledFlag(env.MAP_TILES_ENABLED) ||
+    !enabledFlag(env.OVERPASS_PROTECTION_STAGED)
+  ) {
+    return errorResponse(
+      "map_tiles_disabled",
+      "map tile fallback is disabled",
+      503,
+      context,
+      "300",
+    );
+  }
+  const route = createRouteSignal(
+    request.signal,
+    runtime.overpassRouteTimeoutMs,
+    runtime,
+  );
+  const group = new AbortController();
+  const onAbort = () => group.abort(route.signal.reason);
+  if (route.signal.aborted) onAbort();
+  else route.signal.addEventListener("abort", onAbort, { once: true });
+  const fetchBytes = async (
+    target: string,
+    kind: "map-metadata" | "map-tile",
+    maxBytes: number,
+  ) => {
+    telemetry.upstream = kind;
+    const attempt: UpstreamAttempt = {
+      upstream: kind,
+      status: null,
+      durationMs: 0,
+    };
+    telemetry.upstreamAttempts.push(attempt);
+    const started = runtime.now();
+    try {
+      const lease = await fetchWithDeadline(
+        runtime,
+        target,
+        {
+          method: "GET",
+          redirect: "manual",
+          headers: {
+            "User-Agent":
+              "Strata-Studio/1.0 (+https://github.com/JonathanRReed/Strata-Studio)",
+            Accept:
+              kind === "map-metadata"
+                ? "application/json"
+                : "application/x-protobuf",
+          },
+        },
+        group.signal,
+        Math.min(runtime.overpassUpstreamTimeoutMs, 8_000),
+      );
+      try {
+        attempt.status = lease.response.status;
+        if (lease.response.status !== 200) {
+          discardResponseBody(lease.response);
+          throw upstreamFailure(lease.response);
+        }
+        const media = lease.response.headers
+          .get("Content-Type")
+          ?.split(";", 1)[0]
+          ?.trim()
+          .toLowerCase();
+        if (
+          kind === "map-metadata"
+            ? !isJsonContentType(media ?? null)
+            : ![
+                "application/x-protobuf",
+                "application/vnd.mapbox-vector-tile",
+                "application/octet-stream",
+              ].includes(media ?? "")
+        ) {
+          discardResponseBody(lease.response);
+          throw new Error("unexpected tile media type");
+        }
+        const bytes = await readResponseBody(
+          lease.response,
+          lease.signal,
+          maxBytes,
+        );
+        if (!bytes.byteLength) throw new Error("empty map response");
+        if (kind === "map-tile" && !isVectorTilePayload(bytes))
+          throw new Error("malformed vector tile framing");
+        return bytes;
+      } finally {
+        lease.dispose();
+      }
+    } finally {
+      attempt.durationMs = Math.max(0, runtime.now() - started);
+    }
+  };
+  try {
+    const metadata = await fetchBytes(
+      MAP_TILE_METADATA,
+      "map-metadata",
+      64 * 1024,
+    );
+    const source = parseMapTileSource(
+      JSON.parse(new TextDecoder().decode(metadata)),
+    );
+    const collected: ((typeof tiles)[number] & { bytes: Uint8Array })[] = [];
+    let total = 0;
+    // Two parallel requests, at most sixteen tiles and eight MiB per snapshot.
+    // No retry loops, arbitrary URL forwarding, or isolate-local rate counters.
+    for (let index = 0; index < tiles.length; index += 2) {
+      const pending = tiles.slice(index, index + 2).map(async (tile) => {
+        const target = source.template
+          .replace("{z}", String(tile.z))
+          .replace("{x}", String(tile.x))
+          .replace("{y}", String(tile.y));
+        const bytes = await fetchBytes(target, "map-tile", MAX_MAP_TILE_BYTES);
+        total += bytes.byteLength;
+        if (total > MAX_MAP_SNAPSHOT_BYTES)
+          throw new Error("snapshot size budget exceeded");
+        return { ...tile, bytes };
+      });
+      try {
+        collected.push(...(await Promise.all(pending)));
+      } catch (error) {
+        group.abort(error);
+        await Promise.allSettled(pending);
+        throw error;
+      }
+    }
+    const bundle = encodeMapTileBundle(source.dataset, collected);
+    const headers = corsHeaders(context.corsOrigin);
+    headers.set("Content-Type", MAP_BUNDLE_TYPE);
+    headers.set("Cache-Control", CACHE_OVERPASS_OK);
+    headers.set("X-Content-Type-Options", "nosniff");
+    return new Response(bundle, { headers });
+  } catch (error) {
+    group.abort(error);
+    return failureResponse(
+      error instanceof ProxyFailure
+        ? error
+        : new ProxyFailure(
+            "upstream_bad_response",
+            502,
+            "map snapshot is unavailable or invalid",
+          ),
+      context,
+    );
+  } finally {
+    group.abort();
+    route.signal.removeEventListener("abort", onAbort);
+    route.dispose();
+  }
+}
+
 function handleHealth(url: URL, env: Env, context: ResponseContext): Response {
   if (url.search !== "") {
     return errorResponse("unknown_query", "health does not accept query parameters", 400, context);
@@ -853,7 +1044,9 @@ function handleHealth(url: URL, env: Env, context: ResponseContext): Response {
   const protectionStaged = enabledFlag(env.OVERPASS_PROTECTION_STAGED);
   const protectionPresent = hasManagedProtection(env);
   const overpassEnabled = overpassRequested && protectionStaged && protectionPresent;
-  const configurationSafe = !overpassRequested || (protectionStaged && protectionPresent);
+  const mapTilesRequested = enabledFlag(env.MAP_TILES_ENABLED);
+  const mapTilesEnabled = mapTilesRequested && protectionStaged && protectionPresent;
+  const configurationSafe = !(overpassRequested || mapTilesRequested) || (protectionStaged && protectionPresent);
 
   return jsonResponse(
     {
@@ -867,6 +1060,7 @@ function handleHealth(url: URL, env: Env, context: ResponseContext): Response {
       routes: {
         terrain: { enabled: terrainEnabled },
         overpass: { enabled: overpassEnabled },
+        mapFeatures: { enabled: mapTilesEnabled },
       },
     },
     configurationSafe ? 200 : 503,
@@ -912,6 +1106,7 @@ async function dispatch(
   if (url.pathname === "/overpass") {
     return handleOverpass(request, url, env, runtime, telemetry, context);
   }
+  if (url.pathname === "/map-features") return handleMapFeatures(request, url, env, runtime, telemetry, context);
   return errorResponse("not_found", "route not found", 404, context);
 }
 
