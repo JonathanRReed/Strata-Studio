@@ -357,6 +357,9 @@ export function FeaturesSection({
       <p role="status" className="instrument-label" title={featureInfo ?? osmAreaHint ?? undefined}>
         {featureChip}
       </p>
+      {featureInfo && !isFeatureLoading && !featureError && (
+        <p className="text-[12px] leading-relaxed text-ink-muted">{featureInfo}</p>
+      )}
       {featureError && !isFeatureLoading && (
         <p className="text-[12px] leading-snug text-alarm/80">{featureError}</p>
       )}
