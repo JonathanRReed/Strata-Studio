@@ -36,7 +36,14 @@ export interface Env {
 type RouteName = "health" | "terrain" | "overpass" | "unknown";
 type TimerHandle = ReturnType<typeof setTimeout>;
 
+type UpstreamAttempt = {
+  upstream: "overpass-primary" | "overpass-mirror";
+  status: number | null;
+  durationMs: number;
+};
+
 type Telemetry = {
+  upstreamAttempts: UpstreamAttempt[];
   requestId: string;
   route: RouteName;
   upstream: "none" | "terrain" | "overpass-primary" | "overpass-mirror";
@@ -48,6 +55,7 @@ export type ProxyLogRecord = {
   requestId: string;
   route: RouteName;
   upstream: Telemetry["upstream"];
+  upstreamAttempts: UpstreamAttempt[];
   status: number;
   durationMs: number;
   retryCount: number;
@@ -747,6 +755,9 @@ async function handleOverpass(
       const endpoint = endpoints[index]!;
       telemetry.upstream = endpoint.name;
       telemetry.retryCount = index;
+      const attempt: UpstreamAttempt = { upstream: endpoint.name, status: null, durationMs: 0 };
+      telemetry.upstreamAttempts.push(attempt);
+      const attemptStarted = runtime.now();
       try {
         const lease = await fetchWithDeadline(
           runtime,
@@ -755,6 +766,9 @@ async function handleOverpass(
             method: "POST",
             headers: {
               Accept: "application/json",
+              // Identify this application honestly, as the public providers
+              // request. Never forward caller identifiers or credentials.
+              "User-Agent": "Strata-Studio/1.0 (+https://github.com/JonathanRReed/Strata-Studio)",
               "Content-Type": "application/x-www-form-urlencoded",
             },
             body: new URLSearchParams({ data: query }).toString(),
@@ -764,6 +778,7 @@ async function handleOverpass(
           runtime.overpassUpstreamTimeoutMs,
         );
         const upstream = lease.response;
+        attempt.status = upstream.status;
         try {
           if (upstream.status === 200) {
             if (!isJsonContentType(upstream.headers.get("Content-Type"))) {
@@ -808,6 +823,8 @@ async function handleOverpass(
                 "overpass upstream is unreachable",
                 { retryable: true, cause: error },
               );
+      } finally {
+        attempt.durationMs = Math.max(0, runtime.now() - attemptStarted);
       }
 
       if (!lastFailure.retryable || route.signal.aborted) break;
@@ -905,6 +922,7 @@ export function createWorker(
         requestId: runtime.requestId(),
         route: routeName(new URL(request.url).pathname),
         upstream: "none",
+        upstreamAttempts: [],
         retryCount: 0,
       };
       let response: Response;
@@ -931,6 +949,7 @@ export function createWorker(
         requestId: telemetry.requestId,
         route: telemetry.route,
         upstream: telemetry.upstream,
+        upstreamAttempts: telemetry.upstreamAttempts,
         status: response.status,
         durationMs: Math.max(0, runtime.now() - startedAt),
         retryCount: telemetry.retryCount,

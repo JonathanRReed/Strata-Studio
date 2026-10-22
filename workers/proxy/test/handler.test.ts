@@ -422,6 +422,25 @@ describe("terrain handler", () => {
 });
 
 describe("overpass handler", () => {
+  test("identifies the project to providers without forwarding caller credentials", async () => {
+    const { run, calls, logs } = harness(() => new Response("busy", { status: 429 }));
+    await run(request(`/overpass?${BBOX}`, { headers: {
+      "User-Agent": "caller-controlled", Authorization: "Bearer do-not-forward",
+    } }));
+    expect(calls).toHaveLength(2);
+    expect(logs[0]).toMatchObject({ upstreamAttempts: [
+      { upstream: "overpass-primary", status: 429 },
+      { upstream: "overpass-mirror", status: 429 },
+    ] });
+    expect(JSON.stringify(logs)).not.toContain("do-not-forward");
+    for (const call of calls) {
+      const headers = new Headers(call.init?.headers);
+      expect(headers.get("User-Agent")).toBe("Strata-Studio/1.0 (+https://github.com/JonathanRReed/Strata-Studio)");
+      expect(headers.get("Authorization")).toBeNull();
+      expect(headers.get("CF-Connecting-IP")).toBeNull();
+    }
+  });
+
   test("constructs the fixed server query and caches only JSON success", async () => {
     const { run, calls } = harness(
       () =>
@@ -626,6 +645,7 @@ describe("overpass handler", () => {
         "event",
         "requestId",
         "retryCount",
+        "upstreamAttempts",
         "route",
         "status",
         "upstream",
