@@ -152,10 +152,11 @@ test("line ink averages are weighted by length rather than vertex density", () =
     buildingInfluence: 100,
     buildingMode: "flatten" as const,
   };
+  // Keep the path within the two raster texel centers, where this mask is affine.
   const sparse = applyInfluenceToLine(
     [
-      { x: 0, y: 50 },
-      { x: 99, y: 50 },
+      { x: 24.75, y: 50 },
+      { x: 74.25, y: 50 },
     ],
     100,
     100,
@@ -169,10 +170,10 @@ test("line ink averages are weighted by length rather than vertex density", () =
   );
   const uneven = applyInfluenceToLine(
     [
-      { x: 0, y: 50 },
-      { x: 1, y: 50 },
-      { x: 2, y: 50 },
-      { x: 99, y: 50 },
+      { x: 24.75, y: 50 },
+      { x: 25.75, y: 50 },
+      { x: 26.75, y: 50 },
+      { x: 74.25, y: 50 },
     ],
     100,
     100,

@@ -13,26 +13,16 @@ export function normalizeTerrainSamples(
     values.length !== width * height
   )
     throw new Error("Unexpected terrain raster dimensions");
-  const result = new Float32Array(256 * 256),
-    factor = width / 256;
+  const result = new Float32Array(width * height);
   const missing = noData === null ? null : Math.fround(noData);
-  for (let y = 0; y < 256; y++)
-    for (let x = 0; x < 256; x++) {
-      let sum = 0;
-      for (let dy = 0; dy < factor; dy++)
-        for (let dx = 0; dx < factor; dx++) {
-          const value = values[(y * factor + dy) * width + x * factor + dx];
-          if (!Number.isFinite(value) || value === missing)
-            throw new Error(
-              "Terrain source contains missing elevation samples",
-            );
-          sum += value;
-        }
-      const value = Math.fround(sum / (factor * factor));
-      if (!Number.isFinite(value))
-        throw new Error("Terrain elevation cannot be represented safely");
-      result[y * 256 + x] = value;
-    }
+  for (let i = 0; i < result.length; i++) {
+    const value = values[i];
+    if (!Number.isFinite(value) || value === missing)
+      throw new Error("Terrain source contains missing elevation samples");
+    result[i] = value;
+    if (!Number.isFinite(result[i]))
+      throw new Error("Terrain elevation cannot be represented safely");
+  }
   return result;
 }
 

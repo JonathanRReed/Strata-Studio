@@ -29,8 +29,14 @@ resolution/source-age disagreement with current USGS remains.
   snapshot attribution. Whole-area coverage and resource bounds remain enforced.
 - The scalar `/terrain-geotiff` route serves fixed-source, validated GeoTIFFs.
   The legacy PNG route remains for older clients. GeoTIFF.js decodes Int16 and
-  Float32, including Deflate predictors 2/3. 512px scalar data is averaged at
-  canonical 256px pixel centers; encoded RGB is never resized.
+  Float32, including Deflate predictors 2/3. Native 512px scalar samples are
+  preserved, with source zoom capped at 14 (equivalent resolution to 256px z15).
+  Mosaic coordinates, pixel-center interpolation and halos use that native size;
+  encoded RGB is never resized.
+- Raster masks use their actual texel centers independently of endpoint-registered
+  elevation grids. Row styles add sub-texel samples around active mask transitions,
+  preventing low terrain detail from skipping thin roads, buildings or water.
+  Coarse sampling remains elsewhere to avoid a global detail/performance change.
 - Terrain cache keys are versioned so corrupt old PNG-derived elevations cannot
   be reused. Missing/invalid samples and incomplete tile coverage fail explicitly
   instead of inventing zero-height terrain. Legitimate negative heights remain.

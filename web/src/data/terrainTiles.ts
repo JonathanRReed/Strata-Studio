@@ -2,8 +2,6 @@ import { decodeTerrainGeoTiff } from "./terrainGeoTiff.ts";
 import {
   lngToPixelX,
   latToPixelY,
-  tileXForPixel,
-  tileYForPixel,
   normalizeBounds,
 } from "../engine/projection.ts";
 import type { ElevationGrid, GeoBounds } from "../engine/types.ts";
@@ -38,8 +36,8 @@ export const TERRAIN_TILE_URL: string =
 export const TERRAIN_ATTRIBUTION =
   "Terrain: Tilezen scalar GeoTIFF via AWS Open Data (elevation data courtesy of USGS, NASA SRTM, and other sources)";
 
-const TILE_SIZE = 256;
-const MAX_ZOOM = 15;
+const TILE_SIZE = 512;
+const MAX_ZOOM = 14;
 const TILE_ATTEMPT_TIMEOUT_MS = 8000;
 const TILE_OPERATION_TIMEOUT_MS = 30000;
 const TILE_ATTEMPT_LIMIT = 3;
@@ -212,6 +210,8 @@ export function attachSubscriber<T>(
 }
 
 export type TerrainTileLoader = {
+  /** Native scalar GeoTIFF size; injectable legacy fixtures may use 256. */
+  tileSize?: 256 | 512;
   getTileData: (
     z: number,
     x: number,
@@ -452,7 +452,7 @@ export function createTerrainTileLoader(
     return attachSubscriber(shared, signal);
   };
 
-  return { getTileData, circuit };
+  return { getTileData, circuit, tileSize: TILE_SIZE };
 }
 
 const terrainTileLoader = createTerrainTileLoader({
@@ -493,13 +493,15 @@ function normalizeGridDimensions(dimensions: TerrainGridDimensions): {
   return { width: safeWidth, height: safeHeight, longest: Math.max(safeWidth, safeHeight) };
 }
 
-function selectZoom(bounds: GeoBounds, longestDimension: number): number {
+function selectZoom(bounds: GeoBounds, longestDimension: number, tileSize: number): number {
+  const scale = tileSize / 256;
+  const maxZoom = tileSize === 512 ? MAX_ZOOM : 15;
   let selected = 0;
-  for (let z = 0; z <= MAX_ZOOM; z++) {
-    const west = lngToPixelX(bounds.west, z);
-    const east = lngToPixelX(bounds.east, z);
-    const north = latToPixelY(bounds.north, z);
-    const south = latToPixelY(bounds.south, z);
+  for (let z = 0; z <= maxZoom; z++) {
+    const west = lngToPixelX(bounds.west, z) * scale;
+    const east = lngToPixelX(bounds.east, z) * scale;
+    const north = latToPixelY(bounds.north, z) * scale;
+    const south = latToPixelY(bounds.south, z) * scale;
     const width = Math.abs(east - west);
     const height = Math.abs(south - north);
     if (Math.max(width, height) >= longestDimension) {
@@ -524,20 +526,22 @@ interface TileRange {
   maxTy: number;
 }
 
-function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions): TileRange {
+function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions, tileSize = TILE_SIZE): TileRange {
+  const scale = tileSize / 256;
   const normalized = normalizeBounds(bounds);
   const { longest } = normalizeGridDimensions(dimensions);
-  const zoom = selectZoom(normalized, longest);
-  const westPx = lngToPixelX(normalized.west, zoom);
-  const eastPx = lngToPixelX(normalized.east, zoom);
-  const northPx = latToPixelY(normalized.north, zoom);
-  const southPx = latToPixelY(normalized.south, zoom);
+  const zoom = selectZoom(normalized, longest, tileSize);
+  const westPx = lngToPixelX(normalized.west, zoom) * scale;
+  const eastPx = lngToPixelX(normalized.east, zoom) * scale;
+  const northPx = latToPixelY(normalized.north, zoom) * scale;
+  const southPx = latToPixelY(normalized.south, zoom) * scale;
 
   const minX = Math.min(westPx, eastPx);
   const maxX = Math.max(westPx, eastPx);
   const minY = Math.min(northPx, southPx);
   const maxY = Math.max(northPx, southPx);
 
+  const tileForPixel = (pixel: number) => Math.max(0, Math.min(2 ** zoom - 1, Math.floor(pixel / tileSize)));
   return {
     normalized,
     zoom,
@@ -545,12 +549,12 @@ function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions):
     maxX,
     minY,
     maxY,
-    // Terrarium samples are pixel-centered. Include every integer sample
+    // Scalar GeoTIFF samples are pixel-centered. Include every integer sample
     // needed by bilinear interpolation, even just beyond the selected tile.
-    minTx: tileXForPixel(Math.floor(minX - 0.5), zoom),
-    maxTx: tileXForPixel(Math.ceil(maxX - 0.5), zoom),
-    minTy: tileYForPixel(Math.floor(minY - 0.5), zoom),
-    maxTy: tileYForPixel(Math.ceil(maxY - 0.5), zoom),
+    minTx: tileForPixel(Math.floor(minX - 0.5)),
+    maxTx: tileForPixel(Math.ceil(maxX - 0.5)),
+    minTy: tileForPixel(Math.floor(minY - 0.5)),
+    maxTy: tileForPixel(Math.ceil(maxY - 0.5)),
   };
 }
 
@@ -558,8 +562,9 @@ function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions):
 export function tileCountForFetch(
   bounds: GeoBounds,
   dimensions: TerrainGridDimensions,
+  tileSize = TILE_SIZE,
 ): number {
-  const { minTx, maxTx, minTy, maxTy } = computeTileRange(bounds, dimensions);
+  const { minTx, maxTx, minTy, maxTy } = computeTileRange(bounds, dimensions, tileSize);
   return (maxTx - minTx + 1) * (maxTy - minTy + 1);
 }
 
@@ -580,7 +585,7 @@ export type TerrainFetchOptions = {
   onDiagnostics?: (diagnostics: { totalTiles: number; failedTiles: number }) => void;
   operationTimeoutMs?: number;
   runtime?: RequestPolicyRuntime;
-  tileLoader?: Pick<TerrainTileLoader, "getTileData">;
+  tileLoader?: Pick<TerrainTileLoader, "getTileData" | "tileSize">;
 };
 
 export class TerrainLoadError extends Error {
@@ -606,6 +611,7 @@ export async function fetchTerrain(
     label: "Terrain fetch",
   });
   const loader = options.tileLoader ?? terrainTileLoader;
+  const tileSize = loader.tileSize ?? 256;
 
   try {
     // Reject pre-aborted/zero-deadline operations before constructing tile
@@ -613,10 +619,10 @@ export async function fetchTerrain(
     operation.throwIfAborted();
     const grid = normalizeGridDimensions(dimensions);
     const { normalized, zoom, minX, maxX, minY, maxY, minTx, maxTx, minTy, maxTy } =
-      computeTileRange(bounds, grid);
+      computeTileRange(bounds, grid, tileSize);
 
     const tilesPerAxis = 2 ** zoom;
-    const worldLastSample = TILE_SIZE * tilesPerAxis - 1;
+    const worldLastSample = tileSize * tilesPerAxis - 1;
     const tileCache = new Map<number, Float32Array>();
     const tileKeys: { key: number; tx: number; ty: number }[] = [];
     let failedCount = 0;
@@ -662,10 +668,10 @@ export async function fetchTerrain(
     // GDAL/Tilezen registers sample (0,0) at world pixel center (.5,.5).
     // Clamp at the finite world's edges; latitude never wraps to another pole.
     const readSample = (x: number, y: number): number => {
-      const tx = Math.floor(x / TILE_SIZE), ty = Math.floor(y / TILE_SIZE);
+      const tx = Math.floor(x / tileSize), ty = Math.floor(y / tileSize);
       const tile = tileCache.get(ty * tilesPerAxis + tx);
       if (!tile) throw new Error("Required terrain interpolation tile is missing");
-      return tile[(y - ty * TILE_SIZE) * TILE_SIZE + x - tx * TILE_SIZE];
+      return tile[(y - ty * tileSize) * tileSize + x - tx * tileSize];
     };
     for (let row = 0; row < grid.height; row++) {
       const y = minY + (row / (grid.height - 1 || 1)) * sourceHeight;

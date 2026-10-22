@@ -14,6 +14,7 @@ import {
   applyInfluenceToLine,
   glowRuns,
   rowsToScene,
+  createFeatureAwareRowSampler,
 } from "../common.ts";
 import { generateRows } from "../experimental/waveformTerrain.ts";
 
@@ -239,6 +240,7 @@ export const woodcut: ArtStyle = {
     const rowStep = Math.max(2, params.spacing);
     const xStep = Math.max(2, Math.round((1.1 - clamp(params.detail, 0.1, 1)) * 10) + 1);
 
+    const rowSamples = createFeatureAwareRowSampler(width, xStep, params, masks);
     let flip = false;
     for (let baseY = 0; baseY < height; baseY += rowStep) {
       flip = !flip;
@@ -259,7 +261,7 @@ export const woodcut: ArtStyle = {
         segment = [];
         segElev = 0;
       };
-      for (let x = 0; x < width; x += xStep) {
+      for (const x of rowSamples(v)) {
         const u = x / (width - 1 || 1);
         const elev = sample(u, v);
         const jag = phase > 0 ? rough(u * 20, v * 20, phase) : rough(u * 20, v * 20);

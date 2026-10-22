@@ -34,7 +34,7 @@ export function generateRows(input: ArtworkInput, params: StyleParams): Waveform
       glowStrength: result.glowStrength,
       break_: result.break_,
     };
-  });
+  }, masks);
 }
 
 export const waveformTerrain: ArtStyle = {

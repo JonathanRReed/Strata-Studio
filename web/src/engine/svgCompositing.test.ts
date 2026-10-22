@@ -7,7 +7,7 @@ test("knockouts affect earlier ink but never later ink", () => {
     { xml: "ERASE", bounds, erase: true },
     { xml: "LAST", bounds },
   ]);
-  expect(result.content).toBe('<g mask="url(#knockout-0)">FIRST\n</g>LAST\n');
+  expect(result.content).toBe('<g mask="url(#knockout-0)"><g filter="url(#knockout-0-isolate)">FIRST\n</g></g>LAST\n');
   expect(result.defs.join("")).toContain("ERASE");
 });
 test("disjoint erasers do not allocate a mask for an unaffected paint batch", () => {
@@ -43,7 +43,7 @@ test("a later cut masks the entire composed prefix, not separate earlier layers"
     { xml: "CUT2", bounds, erase: true },
   ]);
   expect(result.content).toBe(
-    '<g mask="url(#knockout-1)"><g mask="url(#knockout-0)">FIRST\n</g>SECOND\n</g>',
+    '<g mask="url(#knockout-1)"><g filter="url(#knockout-1-isolate)"><g mask="url(#knockout-0)"><g filter="url(#knockout-0-isolate)">FIRST\n</g></g>SECOND\n</g></g>',
   );
 });
 test("pathological layer depth fails explicitly rather than hanging a viewer", () => {
@@ -54,4 +54,13 @@ test("pathological layer depth fails explicitly rather than hanging a viewer", (
   expect(() => composeSvgPaints(paints)).toThrow(
     "Transparent SVG is too complex",
   );
+});
+
+
+test("mask budgets include the prefix-isolation filter surface", () => {
+  expect(() => composeSvgPaints([{xml:"INK",bounds},{xml:"CUT",bounds,erase:true}],100,100)).toThrow("too complex");
+  const result=composeSvgPaints([{xml:"INK",bounds},{xml:"CUT",bounds,erase:true}]);
+  expect(result.defs[0]).toContain('filterUnits="userSpaceOnUse"');
+  expect(result.defs[0]).toContain('color-interpolation-filters="sRGB"');
+  expect(result.defs[0]).toContain('<feColorMatrix');
 });

@@ -8,12 +8,12 @@ test("the real NYC scalar TIFF does not contain the Terrarium kilometre-scale sp
     new URL("../../../tests/launch/terrain-fixture.tif", import.meta.url),
   ).arrayBuffer();
   const data = await decodeTerrainGeoTiff(bytes);
-  expect(data.length).toBe(256 * 256);
-  expect(Math.min(...data)).toBe(-29);
-  expect(Math.max(...data)).toBe(97);
-  expect(data[211 * 256 + 65]).toBeGreaterThan(-10);
+  expect(data.length).toBe(512 * 512);
+  expect(data.reduce((a, b) => Math.min(a, b), Infinity)).toBe(-29);
+  expect(data.reduce((a, b) => Math.max(a, b), -Infinity)).toBe(97);
+  expect(data[423 * 512 + 131]).toBeGreaterThan(-10);
 });
-test("floating-point Deflate predictor preserves heights and pixel-centered downsampling", async () => {
+test("floating-point Deflate predictor preserves heights and all native 512 pixel-center samples", async () => {
   const bytes = await Bun.file(
     new URL("./fixtures/float-terrain.tif", import.meta.url),
   ).arrayBuffer();
@@ -21,11 +21,9 @@ test("floating-point Deflate predictor preserves heights and pixel-centered down
   for (const [x, y] of [
     [0, 0],
     [100, 200],
-    [255, 255],
+    [511, 511],
   ])
-    expect(data[y * 256 + x]).toBe(
-      1 + (2 * x + 0.5) * 0.125 + (2 * y + 0.5) * 0.25,
-    );
+    expect(data[y * 512 + x]).toBe(1 + x * 0.125 + y * 0.25);
 });
 test("missing scalar samples fail explicitly rather than becoming fake terrain", () => {
   const values = new Float32Array(256 * 256).fill(-12);
