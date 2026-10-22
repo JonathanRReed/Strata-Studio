@@ -1,3 +1,4 @@
+import { awaitExportTask } from "./export.ts";
 import { POSTER_TITLE_FAMILY, POSTER_META_FAMILY } from "./scene.ts";
 
 /**
@@ -14,30 +15,37 @@ import { POSTER_TITLE_FAMILY, POSTER_META_FAMILY } from "./scene.ts";
  * are actually in memory before we draw with them.
  */
 
-let ensurePromise: Promise<void> | null = null;
+const fontLoads = new WeakMap<FontFaceSet, Promise<void>>();
 
-/**
- * Loads the poster font faces and resolves once they are ready to draw.
- * Idempotent — concurrent callers share the same promise. Safe to call in a
- * non-DOM context (tests, SSR), where it resolves immediately.
- */
-export function ensurePosterFonts(): Promise<void> {
-  if (ensurePromise) return ensurePromise;
+/** Shared font loading is bounded; cancelling one export does not cancel others. */
+export function ensurePosterFonts(signal?: AbortSignal): Promise<void> {
   if (typeof document === "undefined" || !document.fonts) {
-    ensurePromise = Promise.resolve();
-    return ensurePromise;
+    return awaitExportTask(Promise.resolve(), signal);
   }
-
   const faces = document.fonts;
-  // Load the specific faces the poster uses. The weight matches
-  // POSTER_TITLE_FONT_WEIGHT (600) and the meta line uses 400.
-  const loads = [
-    faces.load(`600 64px ${POSTER_TITLE_FAMILY}`),
-    faces.load(`400 16px ${POSTER_META_FAMILY}`),
-    faces.load(`500 16px ${POSTER_META_FAMILY}`),
-  ];
-  ensurePromise = Promise.all([faces.ready, ...loads])
-    .then(() => undefined)
-    .catch(() => undefined); // A failed load is not fatal — fallbacks apply.
-  return ensurePromise;
+  let ready = fontLoads.get(faces);
+  if (!ready) {
+    // Wait only for our faces, not document.fonts.ready (which includes
+    // unrelated page fonts). A stalled server falls back after five seconds.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    ready = Promise.race([
+      Promise.resolve()
+        .then(() =>
+          Promise.all([
+            faces.load(`600 64px ${POSTER_TITLE_FAMILY}`),
+            faces.load(`400 16px ${POSTER_META_FAMILY}`),
+            faces.load(`500 16px ${POSTER_META_FAMILY}`),
+          ]),
+        )
+        .then(() => undefined)
+        .catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 5000);
+      }),
+    ]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
+    fontLoads.set(faces, ready);
+  }
+  return awaitExportTask(ready, signal);
 }

@@ -1,3 +1,5 @@
+import { applyAlphaPreservingGrain } from "./grain.ts";
+import { composeSvgPaints, type SvgBounds, type SvgPaint } from "./svgCompositing.ts";
 import type { ArtworkMeta, Palette, StyleParams, FeatureMasks } from "./types.ts";
 import { hashSeed } from "./noise.ts";
 
@@ -680,7 +682,7 @@ export function renderSceneCanvas(
   }
 
   if (params.grain > 0) {
-    applyGrain(ctx, params, width, height, renderScale);
+    applyGrain(ctx, params, width, height, renderScale, transparent);
   }
 
   ctx.restore();
@@ -692,6 +694,7 @@ function applyGrain(
   width: number,
   height: number,
   scale = 1,
+  transparent = false,
 ): void {
   const rng = mulberry32(hashSeed(params.seed + ":grain"));
   // Tile layout stays in logical pixels (same tiling as the preview), but the
@@ -718,6 +721,13 @@ function applyGrain(
     // Alpha tapers with grain intensity; the soft cap keeps it from
     // overwhelming the artwork at high settings.
     data[i + 3] = Math.round(Math.min(100, params.grain * 75));
+  }
+  if (transparent) {
+    const pixels = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+    applyAlphaPreservingGrain(pixels.data, ctx.canvas.width, data, deviceTile,
+      ctx.canvas.width / width, ctx.canvas.height / height);
+    ctx.putImageData(pixels, 0, 0);
+    return;
   }
   noiseCtx.putImageData(imageData, 0, 0);
   const prev = ctx.globalCompositeOperation;
@@ -787,6 +797,22 @@ function posterTitleSvg(
   return `\n  ${parts.join("\n  ")}`;
 }
 
+/** Visible logical bounds, including strokes/glow and all possible rotations. */
+function strokeBounds(stroke: Stroke, lineWidth: number, width: number, height: number): SvgBounds {
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const point of stroke.points) {
+    left = Math.min(left, point.x); right = Math.max(right, point.x);
+    top = Math.min(top, point.y); bottom = Math.max(bottom, point.y);
+  }
+  const pad = (stroke.fill ? 1 : (stroke.width ?? lineWidth) / 2 + 1) + (stroke.glow ? 64 : 0);
+  const radius = Math.hypot(width, height) / 2 + pad;
+  left = Math.max(left - pad, width / 2 - radius);
+  right = Math.min(right + pad, width / 2 + radius);
+  top = Math.max(top - pad, height / 2 - radius);
+  bottom = Math.min(bottom + pad, height / 2 + radius);
+  return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
 /**
  * Serializes a scene to SVG. Geometry is always emitted in logical (preview)
  * coordinates via the viewBox; pass `exportSize` to set the rendered pixel
@@ -795,10 +821,8 @@ function posterTitleSvg(
  * grain turbulence) are defined in viewBox user units, they scale with the
  * artwork automatically and need no per-scale correction.
  *
- * In transparent mode, background-role occlusion shapes are OMITTED: SVG has
- * no equivalent of canvas `destination-out` without per-stroke nested masks,
- * so strokes that the canvas export would erase remain visible here. This is
- * a documented vector-export limitation.
+ * Transparent exports preserve ordered destination-out occlusion using bounded,
+ * ordered SVG masks, including later ink painted over an earlier knockout.
  */
 export function sceneToSvg(
   scene: Scene,
@@ -810,34 +834,51 @@ export function sceneToSvg(
   masks?: FeatureMasks,
   exportSize?: { width: number; height: number },
 ): string {
-  const hasGlow = scene.strokes.some((s) => s.glow);
-  const paths = scene.strokes
-    .filter((s) => s.points.length > 0)
-    .filter((s) => !(transparent && s.role === "background"))
-    .map((stroke) => {
-      const color = strokeColor(stroke, palette);
-      const d = strokeToPath(stroke);
-      const opacity = stroke.opacity !== undefined && stroke.opacity !== 1 ? ` opacity="${stroke.opacity.toFixed(3)}"` : "";
-      const glow = stroke.glow ? ` filter="url(#glow)"` : "";
-      if (stroke.fill) {
-        return `<path d="${d}" fill="${color}" stroke="none"${opacity}${glow}/>`;
-      }
-      const w = stroke.width ?? params.lineWidth;
-      return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"${opacity}${glow}/>`;
-    })
-    .join("\n    ");
-
   const defs: string[] = [];
-  if (hasGlow) {
-    // Two-stage blur: a wide halo (stdDeviation 5) merged under a tighter
-    // bloom (stdDeviation 2), then the source on top — mirrors the canvas
-    // two-pass glow so SVG exports have the same luminous quality.
-    defs.push('<filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5" result="halo"/><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="bloom"/><feMerge><feMergeNode in="halo"/><feMergeNode in="bloom"/><feMergeNode in="SourceGraphic"/></feMerge></filter>');
+  const paints: SvgPaint[] = [];
+  const fullBounds = { x: 0, y: 0, width, height };
+  if (masks) {
+    const waterPng = waterMaskToPng(masks, palette);
+    if (waterPng) paints.push({
+      xml: `<image width="${width}" height="${height}" href="data:image/png;base64,${waterPng}"/>`,
+      bounds: fullBounds,
+    });
   }
+  let glowIndex = 0;
+  for (const stroke of scene.strokes) {
+    if (stroke.points.length === 0) continue;
+    const erase = transparent && stroke.role === "background";
+    const color = erase ? "black" : strokeColor(stroke, palette);
+    const d = strokeToPath(stroke);
+    const opacity = stroke.opacity !== undefined && stroke.opacity !== 1 ? ` opacity="${stroke.opacity.toFixed(3)}"` : "";
+    const bounds = transparent || stroke.glow
+      ? strokeBounds(stroke, params.lineWidth, width, height) : fullBounds;
+    if (bounds.width <= 0 || bounds.height <= 0) continue;
+    let glow = "";
+    if (stroke.glow && !erase) {
+      const id = glowIndex++ === 0 ? "glow" : `glow-${glowIndex}`;
+      // User-space regions also work for perfectly horizontal/vertical paths,
+      // whose geometry bounding boxes have zero height/width. Tight regions
+      // avoid allocating a full-artwork filter surface for every accent.
+      defs.push(`<filter id="${id}" filterUnits="userSpaceOnUse" x="${bounds.x}" y="${bounds.y}" width="${bounds.width}" height="${bounds.height}"><feGaussianBlur stdDeviation="5" result="halo"/><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="bloom"/><feMerge><feMergeNode in="halo"/><feMergeNode in="bloom"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`);
+      glow = ` filter="url(#${id})"`;
+    }
+    const xml = stroke.fill
+      ? `<path d="${d}" fill="${color}" stroke="none"${opacity}${glow}/>`
+      : `<path d="${d}" fill="none" stroke="${color}" stroke-width="${stroke.width ?? params.lineWidth}" stroke-linejoin="round" stroke-linecap="round"${opacity}${glow}/>`;
+    paints.push({ xml, bounds, erase });
+  }
+  const composition = transparent ? composeSvgPaints(paints, (exportSize?.width ?? width) / width, (exportSize?.height ?? height) / height)
+    : { content: paints.map(paint => paint.xml).join("\n"), defs: [] };
+  const paths = composition.content;
+  defs.push(...composition.defs);
   if (params.grain > 0) {
-    const turbScale = 0.6 + params.grain * 1.5;
-    const opacity = (params.grain * 0.35).toFixed(2);
-    defs.push(`<filter id="grain" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="${turbScale.toFixed(3)}" numOctaves="2" seed="${hashSeed(params.seed + ":grain") % 1000}" result="noise"/><feColorMatrix in="noise" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 ${opacity} 0"/></filter>`);
+    const frequency = 0.6 + params.grain * 1.5;
+    const slope = params.grain * 0.24, intercept = 0.5 - slope / 2;
+    const alpha = Math.min(100, params.grain * 75) / 255;
+    // Blend gray grain against straight RGB made opaque, then restore the
+    // original coverage. A grain rectangle would fill transparent paper.
+    defs.push(`<filter id="grain" filterUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="${frequency}" numOctaves="2" seed="${hashSeed(params.seed + ":grain") % 1000}" result="noise"/><feColorMatrix in="noise" type="saturate" values="0" result="gray"/><feComponentTransfer in="gray" result="grainTint"><feFuncR type="linear" slope="${slope}" intercept="${intercept}"/><feFuncG type="linear" slope="${slope}" intercept="${intercept}"/><feFuncB type="linear" slope="${slope}" intercept="${intercept}"/><feFuncA type="linear" slope="0" intercept="${alpha}"/></feComponentTransfer><feComponentTransfer in="SourceGraphic" result="opaque"><feFuncA type="linear" slope="0" intercept="1"/></feComponentTransfer><feBlend in="grainTint" in2="opaque" mode="soft-light" result="colored"/><feComposite in="colored" in2="SourceGraphic" operator="in"/></filter>`);
   }
   const defsXml = defs.length > 0 ? `<defs>${defs.join("")}</defs>\n  ` : "";
 
@@ -857,23 +898,12 @@ export function sceneToSvg(
       : `\n  <text x="16" y="${height - 16}" font-size="${+plainLabelFit.fontSize.toFixed(2)}" font-family="sans-serif" fill="${palette.foreground}" opacity="0.6">${escapeXml(params.label)}</text>`
     : "";
 
-  const grainRect = params.grain > 0
-    ? `\n  <rect width="${width}" height="${height}" filter="url(#grain)" opacity="0.5"/>`
-    : "";
+  const grainOpen = params.grain > 0 ? '<g filter="url(#grain)">' : "";
+  const grainClose = params.grain > 0 ? "</g>" : "";
 
   const bgRect = transparent
     ? ""
     : `\n  <rect width="${width}" height="${height}" fill="${palette.background}"/>`;
-
-  // Water underlay as an embedded PNG image; lives inside the rotated group
-  // so water stays aligned with the rotated strokes.
-  let waterImg = "";
-  if (masks) {
-    const waterPng = waterMaskToPng(masks, palette);
-    if (waterPng) {
-      waterImg = `\n    <image width="${width}" height="${height}" href="data:image/png;base64,${waterPng}"/>`;
-    }
-  }
 
   const outW = exportSize?.width ?? width;
   const outH = exportSize?.height ?? height;
@@ -882,9 +912,9 @@ export function sceneToSvg(
   const preserve = exportSize ? ' preserveAspectRatio="none"' : "";
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${width} ${height}"${preserve}>
-  ${defsXml}${bgRect}
-  <g${rotation}>${waterImg}
+  ${defsXml}${grainOpen}${bgRect}
+  <g${rotation}>
     ${paths}
-  </g>${label}${grainRect}
+  </g>${label}${grainClose}
 </svg>`;
 }

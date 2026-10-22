@@ -20,7 +20,7 @@ import {
   type AnimationFormat,
   type ExportProgress,
 } from "../engine/animationExport.ts";
-import { DEFAULT_FRAMES, DEFAULT_FPS } from "../engine/animation.ts";
+import { DEFAULT_FRAMES } from "../engine/animation.ts";
 import { ensurePosterFonts } from "../engine/posterFonts.ts";
 import type {
   ArtworkInput,
@@ -230,10 +230,10 @@ export function useExports({
         });
       }
       report?.("rendering", `Rendering ${width}×${height} PNG…`);
-      await ensurePosterFonts();
+      await ensurePosterFonts(signal);
       throwIfExportAborted(signal);
       const { canvas, ctx } = createOffscreenCanvas(width, height);
-      renderStyleCanvas(styleId, ctx, input, params, allPalettes);
+      renderStyleCanvas(styleId, ctx, input, params, allPalettes, params.transparent);
       throwIfExportAborted(signal);
       const blob = await pngBlobWithAttribution(
         canvas,
@@ -382,7 +382,7 @@ export function useExports({
           width: logical.width,
           height: logical.height,
         });
-        const svg = renderStyleSvg(styleId, input, params, allPalettes, false, { width, height });
+        const svg = renderStyleSvg(styleId, input, params, allPalettes, params.transparent, { width, height });
         operation.throwIfAborted();
         const filename = exportFilename(styleId, params.seed, width, height, "svg");
         const receipt = downloadSvgWithAttribution(
@@ -536,7 +536,7 @@ export function useExports({
         };
         const result = await exportAnimation(styleId, input, params, allPalettes, format, {
           frames: DEFAULT_FRAMES,
-          fps: DEFAULT_FPS,
+          fps: DEFAULT_FRAMES * params.animationSpeed,
           transparent: params.transparent,
           onProgress,
           signal: operation.signal,

@@ -1109,7 +1109,7 @@ describe("transparent rendering", () => {
   it("SVG with transparent=true omits the background rect", () => {
     const svg = renderStyleSvg(waveformTerrain.id, testInput, { ...defaultStyleParams, ...waveformTerrain.defaultParams }, undefined, true);
     // Should NOT contain a standalone background <rect> (stroke fills are ok)
-    expect(svg).not.toMatch(/<rect[^>]*fill="[^"]*"[^>]*\/>/);
+    expect(svg.replace(/<defs>[\s\S]*?<\/defs>/g, "")).not.toMatch(/<rect[^>]*fill="[^"]*"[^>]*\/>/);
     // Should still have paths
     expect(svg).toContain("<path");
   });

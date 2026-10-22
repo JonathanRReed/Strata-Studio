@@ -122,6 +122,34 @@ export function throwIfExportAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortError(signal);
 }
 
+/** Cancel the caller's wait without cancelling shared work such as font loads. */
+export function awaitExportTask<T>(
+  task: Promise<T>,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(abortError(signal)));
+    // Attach both handlers even if already cancelled: a late rejection of the
+    // underlying operation must never become an unhandled browser rejection.
+    task.then(value => finish(() => resolve(value)), error => finish(() => reject(error)));
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => finish(() => reject(new DOMException("Export step timed out", "TimeoutError"))), timeoutMs);
+    }
+  });
+}
+
 export function canvasToPngBlob(
   canvas: HTMLCanvasElement,
   signal?: AbortSignal,

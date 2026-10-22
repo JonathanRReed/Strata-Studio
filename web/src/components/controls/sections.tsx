@@ -45,11 +45,11 @@ export type ParamsUpdate = (patch: Partial<StyleParams>) => void;
 
 const MASK_MODE_DESCRIPTIONS: Record<MaskMode, string> = {
   interrupt: "Breaks terrain lines where this feature is present",
-  amplify: "Makes terrain displacement larger over this feature",
-  flatten: "Damps terrain displacement toward zero over this feature",
+  amplify: "Raises terrain displacement or strengthens feature-line weight",
+  flatten: "Flattens terrain displacement or fades feature lines",
   glow: "Highlights terrain lines over this feature in accent color",
   outline: "Traces this feature's boundary with accent strokes",
-  invert: "Reverses terrain displacement over this feature",
+  invert: "Reverses terrain displacement or turns feature lines into negative ink",
 };
 
 const ANIMATION_MODE_DESCRIPTIONS: Record<AnimationMode, string> = {
