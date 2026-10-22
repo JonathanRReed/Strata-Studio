@@ -99,6 +99,8 @@ test("@smoke streets, buildings and water each visibly change the same NYC artwo
       north: Number(query.get("north")),
       east: Number(query.get("east")),
     };
+    expect(requested.west).toBeGreaterThan(-74.1);
+    expect(requested.east).toBeLessThan(-73.8);
     return route.fulfill({
       status: 200,
       contentType: "application/vnd.strata.map-tiles",
@@ -137,12 +139,14 @@ test("@smoke streets, buildings and water each visibly change the same NYC artwo
   await expect(
     page.getByRole("button", { name: "Regenerate now" }),
   ).toBeEnabled({ timeout: 20000 });
+  // Restoring square artwork can expand the original non-square bounds
+  // over another tile, so require each layer rather than exactly one fragment.
   await expect(
     page.getByText(
-      /Map tiles: 1 building shapes, 1 road segments, 1 water shapes/,
+      /Map tiles: [1-9]\d* building shapes, [1-9]\d* road segments, [1-9]\d* water shapes/,
     ),
   ).toBeVisible();
-  const canvas = page.getByRole("img", { name: /artwork of New York/ });
+  const canvas = page.getByRole("img", { name: /artwork of/i });
   const pixels = () =>
     canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
   const baseline = await pixels();

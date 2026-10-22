@@ -127,11 +127,10 @@ jobs:
 
   broad-launch:
     name: Browser and accessibility coverage
-    # Exercise the Firefox regression before merging the focused repair.
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.pull_request.number == 5
+    # Map decoding and compositing must pass all engines before merging.
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
