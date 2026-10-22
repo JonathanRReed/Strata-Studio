@@ -1,5 +1,6 @@
 import type { StyleParams, ArtworkInput, Palette, ArtStyle } from "./types.ts";
 import { renderSceneCanvas } from "./scene.ts";
+import { encodeApngFrames } from "./apngWorker.ts";
 import { ensurePosterFonts } from "./posterFonts.ts";
 import { getStyle } from "../studios/registry.ts";
 import {
@@ -154,23 +155,6 @@ async function loadGifEncoder(): Promise<GifencModule> {
   return import("gifenc") as Promise<GifencModule>;
 }
 
-type UpngModule = {
-  default: {
-    encode: (
-      frames: ArrayBuffer[],
-      width: number,
-      height: number,
-      colors: number,
-      delays: number[],
-    ) => ArrayBuffer;
-  };
-};
-
-async function loadApngEncoder(): Promise<UpngModule> {
-  // @ts-expect-error upng-js does not publish TypeScript declarations.
-  return import("upng-js") as Promise<UpngModule>;
-}
-
 async function exportGif(
   frames: ImageData[],
   fps: number,
@@ -231,39 +215,11 @@ async function exportGif(
 }
 
 async function exportApng(
-  frames: ImageData[],
-  fps: number,
-  filename: string,
-  UPNG: UpngModule["default"],
-  onProgress?: ExportProgress,
-  signal?: AbortSignal,
+  frames: ImageData[], fps: number, filename: string,
+  onProgress?: ExportProgress, signal?: AbortSignal,
 ): Promise<DownloadReceipt> {
-  if (frames.length === 0) throw new Error("No frames to export");
-  throwIfExportAborted(signal);
-
-  const width = frames[0].width;
-  const height = frames[0].height;
-  const frameBuffers: ArrayBuffer[] = [];
-  for (let index = 0; index < frames.length; index++) {
-    throwIfExportAborted(signal);
-    const frame = frames[index];
-    frameBuffers.push(
-      frame.data.buffer.slice(
-        frame.data.byteOffset,
-        frame.data.byteOffset + frame.data.byteLength,
-      ) as ArrayBuffer,
-    );
-    if (index % 2 === 1) await waitWithAbort(0, signal);
-  }
   onProgress?.(0.96, "Encoding APNG…");
-  throwIfExportAborted(signal);
-  const png = UPNG.encode(
-    frameBuffers,
-    width,
-    height,
-    0,
-    frames.map((_, index) => frameDelayMs(index, fps)),
-  );
+  const png = await encodeApngFrames(frames, fps, { signal });
   throwIfExportAborted(signal);
   return startBlobDownload(new Blob([png], { type: "image/png" }), filename);
 }
@@ -421,13 +377,9 @@ export async function exportAnimation(
     );
   } else {
     let gifEncoder: GifencModule | null = null;
-    let apngEncoder: UpngModule["default"] | null = null;
     if (format === "gif") {
       onProgress?.(0, "Loading GIF encoder…");
       gifEncoder = await awaitExportTask(loadGifEncoder(), signal);
-    } else {
-      onProgress?.(0, "Loading APNG encoder…");
-      apngEncoder = (await awaitExportTask(loadApngEncoder(), signal)).default;
     }
     throwIfExportAborted(signal);
     onProgress?.(0, "Rendering frames…");
@@ -459,7 +411,6 @@ export async function exportAnimation(
         frames,
         fps,
         filename,
-        apngEncoder!,
         onProgress,
         signal,
       );

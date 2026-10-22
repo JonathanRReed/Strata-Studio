@@ -87,7 +87,7 @@ if (!entryMatch) throw new Error("Compiled HTML is missing the Vite entry script
 const entrySource = await Bun.file(resolve(distDir, entryMatch[1])).text();
 const scriptNames = scriptPaths.map((path) => path.split("/").at(-1) ?? path);
 const gifChunk = scriptNames.find((name) => /^gifenc-[^.]+\.js$/.test(name));
-const apngChunk = scriptNames.find((name) => /^UPNG-[^.]+\.js$/.test(name));
+const apngChunk = scriptNames.find((name) => /^apng\.worker-[^.]+\.js$/.test(name));
 if (!gifChunk || !apngChunk) {
   throw new Error("GIF and APNG encoders must emit as separate lazy chunks.");
 }
@@ -95,9 +95,9 @@ if (
   indexHtml.includes(gifChunk) ||
   indexHtml.includes(apngChunk) ||
   !entrySource.includes("import(`./gifenc-") ||
-  !entrySource.includes("import(`./UPNG-")
+  !entrySource.includes("new Worker(new URL(`/assets/apng.worker-")
 ) {
-  throw new Error("GIF/APNG encoders must be dynamically imported and absent from initial preloads.");
+  throw new Error("GIF must be lazy-loaded and APNG must run in a separate worker; neither may be initially preloaded.");
 }
 if (
   !indexHtml.includes(`content="${CANONICAL_APP_ORIGIN}/"`) ||

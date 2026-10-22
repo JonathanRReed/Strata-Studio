@@ -1,0 +1,45 @@
+diff --git a/UPNG.js b/UPNG.js
+index 020127a1dab3c599592a56c203fed1708b23507e..aee5788e9974bf032fae76075509bc82ea3f5279 100644
+--- a/UPNG.js
++++ b/UPNG.js
+@@ -5,6 +5,6 @@
+-// Make available for import by `require()`
+-var pako;
+-if (typeof module == "object") {module.exports = UPNG;}  else {window.UPNG = UPNG;}
+-if (typeof require == "function") {pako = require("pako");}  else {pako = window.pako;}
++// This package is bundled as CommonJS, including inside browser workers.
++// Bundlers rewrite require calls, not runtime typeof-require guards.
++module.exports = UPNG;
++var pako = require("pako");
+ function log() { if (typeof process=="undefined" || process.env.NODE_ENV=="development") console.log.apply(console, arguments);  }
+ (function(UPNG, pako){
+@@ -386,13 +386,18 @@ UPNG.encode = function(bufs, w, h, ps, dels, forbidPlte)
+ {
+ 	if(ps==null) ps=0;
+ 	if(forbidPlte==null) forbidPlte = false;
+-	var data = new Uint8Array(bufs[0].byteLength*bufs.length+100);
++	var nimg = UPNG.encode.compressPNG(bufs, w, h, ps, forbidPlte);
++	// Size the container from compressed data and every chunk, not raw pixels.
++	// Small APNGs and incompressible frames can exceed raw byte length + 100.
++	var anim = bufs.length>1;
++	var size = 8 + 25 + 13 + 12 + (anim ? 20 : 0);
++	if(nimg.ctype==3) size += 12 + nimg.plte.length*3 + (nimg.gotAlpha ? 12+nimg.plte.length : 0);
++	for(var j=0; j<nimg.frames.length; j++) size += (anim ? 38 : 0) + 12 + (j==0 ? 0 : 4) + nimg.frames[j].cimg.length;
++	var data = new Uint8Array(size);
+ 	var wr=[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+ 	for(var i=0; i<8; i++) data[i]=wr[i];
+ 	var offset = 8,  bin = UPNG._bin, crc = UPNG.crc.crc, wUi = bin.writeUint, wUs = bin.writeUshort, wAs = bin.writeASCII;
+ 
+-	var nimg = UPNG.encode.compressPNG(bufs, w, h, ps, forbidPlte);
+-
+ 	wUi(data,offset, 13);     offset+=4;
+ 	wAs(data,offset,"IHDR");  offset+=4;
+ 	wUi(data,offset,w);  offset+=4;
+@@ -410,7 +415,6 @@ UPNG.encode = function(bufs, w, h, ps, dels, forbidPlte)
+ 	data[offset] = 1;  offset++;
+ 	wUi(data,offset,crc(data,offset-5,5));  offset+=4; // crc
+ 
+-	var anim = bufs.length>1;
+ 	if(anim) {
+ 		wUi(data,offset, 8);      offset+=4;
+ 		wAs(data,offset,"acTL");  offset+=4;
