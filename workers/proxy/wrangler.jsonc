@@ -24,6 +24,7 @@
     "ALLOWED_ORIGINS": "http://localhost:5173",
     "TERRAIN_ENABLED": "true",
     "OVERPASS_ENABLED": "false",
+    "MAP_TILES_ENABLED": "false",
     "OVERPASS_PROTECTION_STAGED": "false",
     "BUILD_ID": "local"
   },

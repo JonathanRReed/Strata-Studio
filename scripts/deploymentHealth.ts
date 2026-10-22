@@ -15,7 +15,7 @@ export async function inspectProxyHealth(response: Response, origin: string): Pr
   }
   if (health.ok !== true) problems.push('Proxy configuration is not healthy');
   if (health.routes.terrain.enabled !== true) problems.push('Terrain route is disabled');
-  if (health.routes.overpass.enabled !== true) problems.push('Overpass route is disabled');
+  if (health.routes.overpass.enabled !== true && health.routes.mapFeatures?.enabled !== true) problems.push('Overpass route is disabled');
   return problems;
 }
 

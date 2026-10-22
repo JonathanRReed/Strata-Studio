@@ -11,6 +11,7 @@ import {
 } from "./animation.ts";
 import {
   createOffscreenCanvas,
+  drawCanvasAttribution,
   startBlobDownload,
   throwIfExportAborted,
   type DownloadReceipt,
@@ -78,6 +79,15 @@ export function createFrameRenderer({
       transparent,
       input.masks,
     );
+    if (input.attribution)
+      drawCanvasAttribution(
+        ctx,
+        ctx.canvas.width,
+        ctx.canvas.height,
+        input.attribution,
+        palette.background,
+        ctx.canvas.width / input.width,
+      );
   };
 }
 

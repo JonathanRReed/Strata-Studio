@@ -113,7 +113,8 @@ export async function withPngDpi(
 
 function abortError(signal?: AbortSignal): DOMException {
   const reason = signal?.reason;
-  if (reason instanceof DOMException && reason.name === "AbortError") return reason;
+  if (reason instanceof DOMException && reason.name === "AbortError")
+    return reason;
   return new DOMException("Export was cancelled", "AbortError");
 }
 
@@ -156,7 +157,10 @@ export type DownloadReceipt = {
 };
 
 /** Starts a browser download and owns the object URL until disposal/auto-cleanup. */
-export function startBlobDownload(blob: Blob, filename: string): DownloadReceipt {
+export function startBlobDownload(
+  blob: Blob,
+  filename: string,
+): DownloadReceipt {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   let disposed = false;
@@ -197,7 +201,10 @@ export async function downloadPng(
   return startBlobDownload(blob, filename);
 }
 
-export function downloadSvg(svgString: string, filename: string): DownloadReceipt {
+export function downloadSvg(
+  svgString: string,
+  filename: string,
+): DownloadReceipt {
   return startBlobDownload(
     new Blob([svgString], { type: "image/svg+xml" }),
     filename,
@@ -247,6 +254,37 @@ function fitFontSize(
   return Math.max(1, target * (maxWidth / width));
 }
 
+export function drawCanvasAttribution(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  attribution: string,
+  backgroundColor = "#000000",
+  scale = 1,
+): void {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.shadowBlur = 0;
+  const fontSize = fitFontSize(
+    ctx,
+    attribution,
+    10 * scale,
+    width - 16 * scale,
+  );
+  ctx.font = `${fontSize}px sans-serif`;
+  const light = isLightColor(backgroundColor);
+  ctx.fillStyle = light ? "#000000" : "#ffffff";
+  ctx.strokeStyle = light ? "#ffffff" : "#000000";
+  ctx.lineWidth = 2 * scale;
+  ctx.lineJoin = "round";
+  ctx.textAlign = "right";
+  ctx.strokeText(attribution, width - 8 * scale, height - 8 * scale);
+  ctx.fillText(attribution, width - 8 * scale, height - 8 * scale);
+  ctx.restore();
+}
+
 export async function pngBlobWithAttribution(
   canvas: HTMLCanvasElement,
   attribution: string,
@@ -265,18 +303,16 @@ export async function pngBlobWithAttribution(
   const ctx = copy.getContext("2d");
   if (!ctx) throw new Error("Could not create attribution canvas context");
   ctx.drawImage(canvas, 0, 0);
-  const fontSize = fitFontSize(ctx, attribution, 10 * scale, copy.width - 16 * scale);
-  ctx.font = `${fontSize}px sans-serif`;
   // A contrasting halo keeps attribution readable over both light and dark
   // artwork strokes without adding an opaque rectangle to transparent exports.
-  const light = isLightColor(backgroundColor);
-  ctx.fillStyle = light ? "#000000" : "#ffffff";
-  ctx.strokeStyle = light ? "#ffffff" : "#000000";
-  ctx.lineWidth = 2 * scale;
-  ctx.lineJoin = "round";
-  ctx.textAlign = "right";
-  ctx.strokeText(attribution, copy.width - 8 * scale, copy.height - 8 * scale);
-  ctx.fillText(attribution, copy.width - 8 * scale, copy.height - 8 * scale);
+  drawCanvasAttribution(
+    ctx,
+    copy.width,
+    copy.height,
+    attribution,
+    backgroundColor,
+    scale,
+  );
   let blob = await canvasToPngBlob(copy, signal);
   if (dpi) blob = await withPngDpi(blob, dpi, signal);
   return blob;
@@ -327,7 +363,9 @@ function parseSvgLength(value: string | undefined): number | null {
  * overlays must be placed (and sized) in that logical space so they scale
  * with the artwork.
  */
-function getSvgDimensions(svgString: string): { width: number; height: number } | null {
+function getSvgDimensions(
+  svgString: string,
+): { width: number; height: number } | null {
   const openTag = svgString.match(/<svg([^>]*)>/i);
   if (!openTag) return null;
   const attrString = openTag[1];
@@ -338,7 +376,11 @@ function getSvgDimensions(svgString: string): { width: number; height: number } 
       .split(/[\s,]+/)
       .filter(Boolean)
       .map(parseFloat);
-    if (parts.length >= 4 && !Number.isNaN(parts[2]) && !Number.isNaN(parts[3])) {
+    if (
+      parts.length >= 4 &&
+      !Number.isNaN(parts[2]) &&
+      !Number.isNaN(parts[3])
+    ) {
       return { width: parts[2], height: parts[3] };
     }
   }

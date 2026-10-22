@@ -789,7 +789,16 @@ export function DataSection() {
         >
           OpenStreetMap contributors
         </a>{" "}
-        · OpenFreeMap. Terrain:{" "}
+        · OpenFreeMap · ©{" "}
+        <a
+          href="https://openmaptiles.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-hairline-2 underline-offset-2 transition-colors hover:text-ink-muted"
+        >
+          OpenMapTiles
+        </a>
+        . Terrain:{" "}
         <a
           href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
           target="_blank"

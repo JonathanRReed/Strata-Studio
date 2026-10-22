@@ -240,6 +240,7 @@ describe("health, methods, flags, and route abuse", () => {
       routes: {
         terrain: { enabled: true },
         overpass: { enabled: false },
+        mapFeatures: { enabled: false },
       },
     });
     const serialized = JSON.stringify(body);

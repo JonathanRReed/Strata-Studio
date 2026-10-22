@@ -124,6 +124,7 @@ export type GeoFeature = {
 export type GeoFeatureCollection = {
   type: "FeatureCollection";
   features: GeoFeature[];
+  source?: { kind: "openfreemap-tiles"; dataset: string; zoom: 14 };
 };
 
 export type GeoGeometry =
@@ -134,6 +135,8 @@ export type GeoGeometry =
   | { type: "MultiPolygon"; coordinates: [number, number][][][] };
 
 export type ArtworkInput = {
+  /** Export-only source credit, also retained on animated frames. */
+  attribution?: string;
   bounds: GeoBounds;
   elevationGrid: ElevationGrid;
   features?: GeoFeatureCollection;
