@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test, expect } from "./fixtures";
+import { encodeMapTileBundle, mapTilesForBounds } from "../../workers/proxy/src/mapTiles";
 
 test.describe.configure({ mode: "serial" });
 
@@ -383,4 +384,46 @@ test("@smoke evaluator can choose a place, change style, generate, and export", 
 
   expect(pageErrors).toEqual([]);
   expect(directDataRequests(externalRequests)).toEqual([]);
+});
+
+test("@smoke free tile fallback exposes snapshot provenance and preserves SVG attribution", async ({ page, externalRequests, pageErrors }) => {
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({ timeout: 20_000 });
+  let tileCalls = 0;
+  await page.route("https://strata-proxy.example/overpass?*", route => route.fulfill({
+    status: 503, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*", "Retry-After": "0" }, body: JSON.stringify({ error: { code: "overpass_disabled" } }),
+  }));
+  await page.route("https://strata-proxy.example/map-features?*", async route => {
+    tileCalls++;
+    const query = new URL(route.request().url()).searchParams;
+    const bounds = { south: Number(query.get("south")), west: Number(query.get("west")), north: Number(query.get("north")), east: Number(query.get("east")) };
+    // A real protobuf layer with a small closed building polygon in tile coordinates.
+    const bytes = new Uint8Array([26,39,10,8,98,117,105,108,100,105,110,103,120,2,40,128,32,18,22,8,123,24,3,34,16,9,208,15,208,15,26,200,1,0,0,200,1,199,1,0,15]);
+    const bundle = encodeMapTileBundle("20261018_080001_pt", mapTilesForBounds(bounds).map(tile => ({ ...tile, bytes })));
+    await route.fulfill({ status: 200, contentType: "application/vnd.strata.map-tiles", headers: { "Access-Control-Allow-Origin": "*" }, body: Buffer.from(bundle) });
+  });
+  await page.getByRole("button", { name: "Expand map" }).click();
+  await page.getByRole("group", { name: "Suggested places" }).getByRole("button", { name: /Manhattan/ }).click();
+  await expect.poll(() => tileCalls, { timeout: 20_000 }).toBe(1);
+  await page.getByRole("button", { name: "Collapse map" }).click();
+  const features = page.getByRole("button", { name: /^Features/ });
+  if (await features.getAttribute("aria-expanded") !== "true") await features.click();
+  await expect(page.getByText(/Generalized map geometry; snapshot 2026-10-18/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Export…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Export" });
+  const svgFormat = dialog.getByRole("radio", { name: "SVG" });
+  await svgFormat.focus();
+  await svgFormat.press("Space");
+  const downloadPromise = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "Export", exact: true }).click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  if (!path) throw new Error("SVG download was not available");
+  const svg = await readFile(path, "utf8");
+  expect(svg).toContain("OpenMapTiles");
+  expect(svg).toContain("OpenStreetMap");
+  expect(tileCalls).toBe(1);
+  expect(directDataRequests(externalRequests)).toEqual([]);
+  expect(pageErrors).toEqual([]);
 });

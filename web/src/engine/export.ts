@@ -113,7 +113,8 @@ export async function withPngDpi(
 
 function abortError(signal?: AbortSignal): DOMException {
   const reason = signal?.reason;
-  if (reason instanceof DOMException && reason.name === "AbortError") return reason;
+  if (reason instanceof DOMException && reason.name === "AbortError")
+    return reason;
   return new DOMException("Export was cancelled", "AbortError");
 }
 
@@ -156,7 +157,10 @@ export type DownloadReceipt = {
 };
 
 /** Starts a browser download and owns the object URL until disposal/auto-cleanup. */
-export function startBlobDownload(blob: Blob, filename: string): DownloadReceipt {
+export function startBlobDownload(
+  blob: Blob,
+  filename: string,
+): DownloadReceipt {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   let disposed = false;
@@ -197,7 +201,10 @@ export async function downloadPng(
   return startBlobDownload(blob, filename);
 }
 
-export function downloadSvg(svgString: string, filename: string): DownloadReceipt {
+export function downloadSvg(
+  svgString: string,
+  filename: string,
+): DownloadReceipt {
   return startBlobDownload(
     new Blob([svgString], { type: "image/svg+xml" }),
     filename,
@@ -247,6 +254,37 @@ function fitFontSize(
   return Math.max(1, target * (maxWidth / width));
 }
 
+export function drawCanvasAttribution(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  attribution: string,
+  backgroundColor = "#000000",
+  scale = 1,
+): void {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.shadowBlur = 0;
+  const fontSize = fitFontSize(
+    ctx,
+    attribution,
+    10 * scale,
+    width - 16 * scale,
+  );
+  ctx.font = `${fontSize}px sans-serif`;
+  const light = isLightColor(backgroundColor);
+  ctx.fillStyle = light ? "#000000" : "#ffffff";
+  ctx.strokeStyle = light ? "#ffffff" : "#000000";
+  ctx.lineWidth = 2 * scale;
+  ctx.lineJoin = "round";
+  ctx.textAlign = "right";
+  ctx.strokeText(attribution, width - 8 * scale, height - 8 * scale);
+  ctx.fillText(attribution, width - 8 * scale, height - 8 * scale);
+  ctx.restore();
+}
+
 export async function pngBlobWithAttribution(
   canvas: HTMLCanvasElement,
   attribution: string,
@@ -265,13 +303,16 @@ export async function pngBlobWithAttribution(
   const ctx = copy.getContext("2d");
   if (!ctx) throw new Error("Could not create attribution canvas context");
   ctx.drawImage(canvas, 0, 0);
-  const fontSize = fitFontSize(ctx, attribution, 10 * scale, copy.width - 16 * scale);
-  ctx.font = `${fontSize}px sans-serif`;
-  ctx.fillStyle = isLightColor(backgroundColor)
-    ? "rgba(0,0,0,0.45)"
-    : "rgba(255,255,255,0.4)";
-  ctx.textAlign = "right";
-  ctx.fillText(attribution, copy.width - 8 * scale, copy.height - 8 * scale);
+  // A contrasting halo keeps attribution readable over both light and dark
+  // artwork strokes without adding an opaque rectangle to transparent exports.
+  drawCanvasAttribution(
+    ctx,
+    copy.width,
+    copy.height,
+    attribution,
+    backgroundColor,
+    scale,
+  );
   let blob = await canvasToPngBlob(copy, signal);
   if (dpi) blob = await withPngDpi(blob, dpi, signal);
   return blob;
@@ -322,7 +363,9 @@ function parseSvgLength(value: string | undefined): number | null {
  * overlays must be placed (and sized) in that logical space so they scale
  * with the artwork.
  */
-function getSvgDimensions(svgString: string): { width: number; height: number } | null {
+function getSvgDimensions(
+  svgString: string,
+): { width: number; height: number } | null {
   const openTag = svgString.match(/<svg([^>]*)>/i);
   if (!openTag) return null;
   const attrString = openTag[1];
@@ -333,7 +376,11 @@ function getSvgDimensions(svgString: string): { width: number; height: number } 
       .split(/[\s,]+/)
       .filter(Boolean)
       .map(parseFloat);
-    if (parts.length >= 4 && !Number.isNaN(parts[2]) && !Number.isNaN(parts[3])) {
+    if (
+      parts.length >= 4 &&
+      !Number.isNaN(parts[2]) &&
+      !Number.isNaN(parts[3])
+    ) {
       return { width: parts[2], height: parts[3] };
     }
   }
@@ -365,9 +412,9 @@ export function downloadSvgWithAttribution(
   const dims = getSvgDimensions(modified);
   const width = dims?.width ?? 0;
   const height = dims?.height ?? 0;
-  const attributionFill = isLightColor(backgroundColor)
-    ? "rgba(0,0,0,0.45)"
-    : "rgba(255,255,255,0.4)";
+  const light = isLightColor(backgroundColor);
+  const attributionFill = light ? "#000000" : "#ffffff";
+  const attributionHalo = light ? "#ffffff" : "#000000";
   // Text is placed in viewBox (logical) units, so it scales with the export;
   // shrink from the 10-unit target if the attribution is wider than the art.
   let fontSize = 10;
@@ -375,7 +422,7 @@ export function downloadSvgWithAttribution(
   if (measureCtx && width > 16) {
     fontSize = fitFontSize(measureCtx, attribution, 10, width - 16);
   }
-  const textEl = `<text x="${width - 8}" y="${height - 8}" text-anchor="end" font-size="${fontSize.toFixed(2)}" font-family="sans-serif" fill="${attributionFill}">${escaped}</text>`;
+  const textEl = `<text x="${width - 8}" y="${height - 8}" text-anchor="end" font-size="${fontSize.toFixed(2)}" font-family="sans-serif" fill="${attributionFill}" stroke="${attributionHalo}" stroke-width="2" stroke-linejoin="round" paint-order="stroke fill">${escaped}</text>`;
   const closeIndex = modified.toLowerCase().lastIndexOf("</svg>");
   if (closeIndex >= 0) {
     modified = `${modified.slice(0, closeIndex)}${textEl}${modified.slice(closeIndex)}`;

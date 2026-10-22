@@ -77,7 +77,7 @@ describe("overpass endpoint contract", () => {
     expect(endpoints.every((endpoint) => endpoint.kind === "direct")).toBe(true);
   });
 
-  test("a configured proxy is followed by one distinct direct provider", () => {
+  test("a configured proxy has a protected tile fallback and one distinct direct provider", () => {
     const endpoints = overpassEndpoints(
       "https://strata-proxy.example.workers.dev/overpass/",
     );
@@ -86,6 +86,7 @@ describe("overpass endpoint contract", () => {
         url: "https://strata-proxy.example.workers.dev/overpass",
         kind: "proxy",
       },
+      { url: "https://strata-proxy.example.workers.dev/map-features", kind: "tiles" },
       { url: OVERPASS_MIRRORS[OVERPASS_MIRRORS.length - 1]!, kind: "direct" },
     ]);
   });
@@ -329,6 +330,23 @@ describe("browser Overpass fallback policy", () => {
     expect(calls).toHaveLength(4);
     expect(new Set(calls).size).toBe(4);
     expect(cacheWrites).toBe(0);
+  });
+
+  test("rejects partial HTTP 200 data and never caches it", async () => {
+    let cacheWrites = 0;
+    let requestedKey = "";
+    const fetcher = createOsmFeatureFetcher({
+      endpoints: [{ url: "https://proxy.test/overpass", kind: "proxy" }],
+      fetch: async () => new Response('{"elements":[],"remark":"runtime error: Query timed out"}', {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }),
+      getCached: async (key) => { requestedKey = key; return undefined; },
+      setCached: async () => { cacheWrites++; },
+      runtime: new FakeRuntime(),
+    });
+    await expect(fetcher(BOUNDS)).rejects.toThrow("OSM features are temporarily unavailable");
+    expect(cacheWrites).toBe(0);
+    expect(requestedKey.startsWith("v6:")).toBe(true);
   });
 
   test("the total deadline aborts in-flight fallback work", async () => {

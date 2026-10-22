@@ -13,11 +13,18 @@
 
   // Safe committed defaults. Production must replace ALLOWED_ORIGINS with the
   // exact Pages/custom-domain origin. OVERPASS_ENABLED must remain false until
-  // a route-specific Cloudflare rate-limit/WAF rule has been staged and tested.
+  // both route-specific managed rate-limit bindings have been staged and tested.
+  // Dedicated namespaces verified unused before the 2026-10-22 staging run.
+  // Recheck for collisions if deploying into another account/project.
+  "ratelimits": [
+    { "name": "OVERPASS_CLIENT_LIMITER", "namespace_id": "2026102201", "simple": { "limit": 6, "period": 60 } },
+    { "name": "OVERPASS_ROUTE_LIMITER", "namespace_id": "2026102202", "simple": { "limit": 30, "period": 60 } }
+  ],
   "vars": {
     "ALLOWED_ORIGINS": "http://localhost:5173",
     "TERRAIN_ENABLED": "true",
     "OVERPASS_ENABLED": "false",
+    "MAP_TILES_ENABLED": "false",
     "OVERPASS_PROTECTION_STAGED": "false",
     "BUILD_ID": "local"
   },

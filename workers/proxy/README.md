@@ -33,7 +33,7 @@ The committed `wrangler.jsonc` deliberately fails closed:
 - `OVERPASS_PROTECTION_STAGED` is the operator attestation that route-specific Cloudflare edge protection has been staged and tested. The route is effective only when both Overpass values are `true`.
 - `BUILD_ID` is optional public health metadata and is restricted to a short identifier. Do not put credentials or private environment data in it.
 
-`OVERPASS_ENABLED` must remain `false` until a Cloudflare route-specific rate-limit or WAF rule for `/overpass` is configured, staged, and observed. The account capability is currently unverified. This repository intentionally does not implement a process-local/global in-memory limiter: Worker isolates do not provide reliable global coordination, so such a limiter would give false protection.
+`OVERPASS_ENABLED` must remain `false` until both provider-backed rate-limit bindings for `/overpass` are configured, staged, and observed. A WAF rule on the application domain alone does not protect a separate `workers.dev` endpoint. The managed binding design below protects that endpoint directly without using misleading isolate-local counters.
 
 ## CORS and failures
 
@@ -88,9 +88,46 @@ Do not add account IDs or credentials to source or documentation. When deploymen
 
 1. configure an exact production origin allowlist;
 2. leave Overpass disabled and deploy/health-check terrain;
-3. create and stage the route-specific Cloudflare rate-limit/WAF rule for `/overpass`;
+3. configure both managed bindings with distinct, verified-unused namespaces and stage `/overpass` while both activation flags remain false;
 4. verify the rule with Overpass still disabled;
 5. set `OVERPASS_PROTECTION_STAGED=true`, then set `OVERPASS_ENABLED=true`;
 6. verify `/health`, structured failures, cache headers, and browser proxy-first/fallback behavior.
 
 `limits.cpu_ms` remains absent for free-plan compatibility. The Worker buffers only bounded terrain/Overpass success bodies long enough to validate cache eligibility and does not use `caches.default`.
+
+## Provider-backed Overpass protection
+
+The protected route requires both `OVERPASS_CLIENT_LIMITER` and
+`OVERPASS_ROUTE_LIMITER` Cloudflare Rate Limiting bindings. Missing bindings,
+missing client identity, or limiter errors/timeouts fail closed with a structured
+503 and no upstream request. A denied budget returns uncached 429 with
+`Retry-After: 60`. Protection runs on valid canonical requests even while the
+activation flags are false, permitting staging without upstream traffic.
+Health, terrain, preflight, and malformed bbox requests do not spend this budget.
+
+The client key uses Cloudflare's edge-provided `CF-Connecting-IP`, not Origin or
+query parameters. Shared IPs can share a budget; same-zone Worker subrequests
+must be treated as trusted account code, and the fixed route budget remains a
+second boundary. Client keys and addresses are not added to application logs.
+
+These are managed, approximate limits per Cloudflare location, not strict global
+quotas. They are not isolate-local counters. See the [Cloudflare binding
+contract](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).
+Use distinct account-verified namespaces. Keep both activation flags false until
+native enforcement and recovery have been observed with the final settings.
+Do not claim staging succeeded just because a binding exists or a unit test passes.
+
+
+## Public upstream identification and availability
+
+Overpass POST requests identify Strata Studio with a fixed project User-Agent
+and the public repository link. Caller credentials and client IP headers are not
+forwarded. [Private.coffee recommends a meaningful project identity](https://overpass.private.coffee/)
+and permits application use, while still requiring considerate resource use.
+The [primary public server guidance](https://dev.overpass-api.de/overpass-doc/en/preface/commons.html)
+warns that a public shared instance is not a reliability guarantee for an app backend.
+Do not promise production availability based on a successful test alone. Respect
+provider backoff and resource limits; do not rotate identities to evade them.
+An identified request is good API citizenship, not proof that a 429 is resolved.
+For sustained commercial traffic, evaluate an authorized dedicated or paid
+provider rather than silently increasing load on shared public infrastructure.

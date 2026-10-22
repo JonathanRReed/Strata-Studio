@@ -19,6 +19,8 @@ const TERRAIN_PNG = await Bun.file(
   new URL("../../../tests/launch/terrain-fixture.png", import.meta.url),
 ).arrayBuffer();
 const BASE_ENV: Env = {
+  OVERPASS_CLIENT_LIMITER: { limit: async () => ({ success: true }) },
+  OVERPASS_ROUTE_LIMITER: { limit: async () => ({ success: true }) },
   ALLOWED_ORIGINS: ALLOWED_ORIGIN,
   TERRAIN_ENABLED: "true",
   OVERPASS_ENABLED: "true",
@@ -65,6 +67,7 @@ function request(
   origin: string | null = ALLOWED_ORIGIN,
 ): Request {
   const headers = new Headers(init.headers);
+  headers.set("CF-Connecting-IP", "192.0.2.1");
   if (origin !== null) headers.set("Origin", origin);
   return new Request(`https://proxy.test${path}`, { ...init, headers });
 }
@@ -237,6 +240,7 @@ describe("health, methods, flags, and route abuse", () => {
       routes: {
         terrain: { enabled: true },
         overpass: { enabled: false },
+        mapFeatures: { enabled: false },
       },
     });
     const serialized = JSON.stringify(body);
@@ -419,6 +423,44 @@ describe("terrain handler", () => {
 });
 
 describe("overpass handler", () => {
+  test("allows a queued response beyond nine seconds within the unchanged route deadline", async () => {
+    const clock = new FakeClock();
+    const { run, calls } = harness(() => new Promise<Response>((resolve) => {
+      clock.schedule(() => resolve(new Response('{"elements":[]}', {
+        headers: { "Content-Type": "application/json" },
+      })), 16_000);
+    }), { now: clock.now, schedule: clock.schedule, cancel: clock.cancel });
+    const pending = run(request(`/overpass?${BBOX}`));
+    await flushMicrotasks();
+    clock.advance(16_000);
+    await flushMicrotasks();
+    const attemptsAtSixteenSeconds = calls.length;
+    clock.advance(60_000);
+    await flushMicrotasks();
+    const response = await pending;
+    expect(attemptsAtSixteenSeconds).toBe(1);
+    expect(response.status).toBe(200);
+  });
+
+  test("identifies the project to providers without forwarding caller credentials", async () => {
+    const { run, calls, logs } = harness(() => new Response("busy", { status: 429 }));
+    await run(request(`/overpass?${BBOX}`, { headers: {
+      "User-Agent": "caller-controlled", Authorization: "Bearer do-not-forward",
+    } }));
+    expect(calls).toHaveLength(2);
+    expect(logs[0]).toMatchObject({ upstreamAttempts: [
+      { upstream: "overpass-primary", status: 429 },
+      { upstream: "overpass-mirror", status: 429 },
+    ] });
+    expect(JSON.stringify(logs)).not.toContain("do-not-forward");
+    for (const call of calls) {
+      const headers = new Headers(call.init?.headers);
+      expect(headers.get("User-Agent")).toBe("Strata-Studio/1.0 (+https://github.com/JonathanRReed/Strata-Studio)");
+      expect(headers.get("Authorization")).toBeNull();
+      expect(headers.get("CF-Connecting-IP")).toBeNull();
+    }
+  });
+
   test("constructs the fixed server query and caches only JSON success", async () => {
     const { run, calls } = harness(
       () =>
@@ -461,6 +503,7 @@ describe("overpass handler", () => {
       "{",
       '{"remark":"missing elements"}',
       '{"elements":[null]}',
+      '{"elements":[],"remark":"runtime error: Query timed out"}',
     ]) {
       const { run, calls } = harness(
         () =>
@@ -623,6 +666,7 @@ describe("overpass handler", () => {
         "event",
         "requestId",
         "retryCount",
+        "upstreamAttempts",
         "route",
         "status",
         "upstream",

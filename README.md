@@ -53,7 +53,7 @@ Optional metadata includes `VITE_BUILD_CONTEXT`, `VITE_BUILD_COMMIT`, `VITE_BUIL
 
 The Worker requires exact `ALLOWED_ORIGINS` and separate `TERRAIN_ENABLED` and `OVERPASS_ENABLED` switches. Committed settings keep `OVERPASS_ENABLED=false` and `OVERPASS_PROTECTION_STAGED=false`.
 
-Both Overpass flags must be true to enable the route. Do not enable them before a route-specific Cloudflare rate-limit or WAF rule is configured, staged, and verified. Account capability remains unverified. The Worker does not pretend that an isolate-local counter provides a global rate limit.
+Both Overpass flags must be true and both managed rate-limit bindings must be present to enable the route. Stage and observe native enforcement and recovery before enabling either flag. The reviewed mechanism is Cloudflare Rate Limiting bindings, which protect the `workers.dev` endpoint directly. Limits are approximate per Cloudflare location, not strict worldwide quotas or isolate-local counters. See `workers/proxy/README.md` for the activation checklist.
 
 `/overpass` accepts only `south`, `west`, `north`, and `east` in canonical four-decimal form. It checks Mercator ranges, ordering, a 25 km² area cap, and 25 km edge caps, then constructs the fixed query server-side.
 
@@ -108,3 +108,13 @@ Build information must report `dataPolicy: "proxy-first"`, the deployment `appOr
 Open the site and check that the daily artwork renders. Choose Manhattan and confirm proxy-backed loading. Switch from Classic Studio to Experimental Lab, change a preset, add a Composition label, and verify the caption and canvas accessible name.
 
 Export a 1024 PNG and inspect its filename and image. Open a shared composition URL in a private window and confirm that place, style, seed, palette, and parameters restore. Check both health endpoints before signing off.
+
+### Verify a deployed site's data configuration
+
+Run `bun run check:deployment https://your-strata-domain.example` against the
+actual URL visitors use. This read-only preflight reads public build metadata
+and tests proxy health with that site's browser origin. It fails if CORS rejects
+the origin or either data route is disabled, even when `/health` returns 200.
+It does not change Cloudflare settings or replace live browser/export testing.
+See [the deployment audit](docs/deployment-audit-2026-10-22.md) for the observed
+custom-domain failure and the protection-preserving repair requirements.
