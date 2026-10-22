@@ -83,9 +83,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install pinned Bun in the browser image
+        # The official Playwright image intentionally omits unzip.
+        run: npm install --global bun@${BUN_VERSION} && test "$(bun --version)" = "$BUN_VERSION"
 
       - name: Cache Bun downloads
         uses: actions/cache@v4
@@ -130,9 +130,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install pinned Bun in the browser image
+        # The official Playwright image intentionally omits unzip.
+        run: npm install --global bun@${BUN_VERSION} && test "$(bun --version)" = "$BUN_VERSION"
 
       - name: Cache Bun downloads
         uses: actions/cache@v4

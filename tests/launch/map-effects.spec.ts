@@ -84,84 +84,90 @@ function featureTile() {
   return pbf.finish();
 }
 
-test("@smoke streets, buildings and water each visibly change the same NYC artwork", async ({
-  page,
-  pageErrors,
-}) => {
-  test.setTimeout(60000);
-  const bounds = { south: 40.75, west: -74.003, north: 40.763, east: -73.982 };
-  const payload = featureTile();
-  await page.route("https://strata-proxy.example/map-features?*", (route) => {
-    const query = new URL(route.request().url()).searchParams;
-    const requested = {
-      south: Number(query.get("south")),
-      west: Number(query.get("west")),
-      north: Number(query.get("north")),
-      east: Number(query.get("east")),
+for (const style of ["ridge", "waveform-terrain"])
+  test(`@smoke streets, buildings and water each visibly change NYC artwork (${style})`, async ({
+    page,
+    pageErrors,
+  }) => {
+    test.setTimeout(60000);
+    const bounds = {
+      south: 40.75,
+      west: -74.003,
+      north: 40.763,
+      east: -73.982,
     };
-    expect(requested.west).toBeGreaterThan(-74.1);
-    expect(requested.east).toBeLessThan(-73.8);
-    return route.fulfill({
-      status: 200,
-      contentType: "application/vnd.strata.map-tiles",
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: Buffer.from(
-        encodeMapTileBundle(
-          "20261018_080001_pt",
-          mapTilesForBounds(requested).map((tile) => ({
-            ...tile,
-            bytes: payload,
-          })),
+    const payload = featureTile();
+    await page.route("https://strata-proxy.example/map-features?*", (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      const requested = {
+        south: Number(query.get("south")),
+        west: Number(query.get("west")),
+        north: Number(query.get("north")),
+        east: Number(query.get("east")),
+      };
+      expect(requested.west).toBeGreaterThan(-74.1);
+      expect(requested.east).toBeLessThan(-73.8);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/vnd.strata.map-tiles",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: Buffer.from(
+          encodeMapTileBundle(
+            "20261018_080001_pt",
+            mapTilesForBounds(requested).map((tile) => ({
+              ...tile,
+              bytes: payload,
+            })),
+          ),
         ),
+      });
+    });
+    const composition = Buffer.from(
+      JSON.stringify({
+        kind: "strata-composition",
+        version: 1,
+        bounds,
+        zoom: 13,
+        style,
+        params: {
+          ...defaultStyleParams,
+          grain: 0,
+          noise: 0,
+          occlusion: 0,
+          label: "New York",
+          buildingInfluence: 0,
+          roadInfluence: 0,
+          waterInfluence: 0,
+        },
+      }),
+    ).toString("base64url");
+    await page.goto(`/?composition=${composition}`);
+    await expect(
+      page.getByRole("button", { name: "Regenerate now" }),
+    ).toBeEnabled({ timeout: 20000 });
+    // Restoring square artwork can expand the original non-square bounds
+    // over another tile, so require each layer rather than exactly one fragment.
+    await expect(
+      page.getByText(
+        /Map tiles: [1-9]\d* building shapes, [1-9]\d* road segments, [1-9]\d* water shapes/,
       ),
-    });
+    ).toBeVisible();
+    const canvas = page.getByRole("img", { name: /artwork of/i });
+    const pixels = () =>
+      canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
+    const baseline = await pixels();
+    for (const name of ["Building", "Road", "Water"]) {
+      await page
+        .getByRole("combobox", { name: `${name} mode`, exact: true })
+        .selectOption("interrupt");
+      const slider = page.getByRole("slider", {
+        name: name === "Water" ? "Water influence (all)" : `${name} influence`,
+        exact: true,
+      });
+      await slider.press("End");
+      await expect.poll(pixels, { timeout: 10000 }).not.toBe(baseline);
+      await slider.press("Home");
+      await expect.poll(pixels, { timeout: 10000 }).toBe(baseline);
+    }
+    expect(pageErrors).toEqual([]);
   });
-  const composition = Buffer.from(
-    JSON.stringify({
-      kind: "strata-composition",
-      version: 1,
-      bounds,
-      zoom: 13,
-      style: "ridge",
-      params: {
-        ...defaultStyleParams,
-        grain: 0,
-        noise: 0,
-        occlusion: 0,
-        label: "New York",
-        buildingInfluence: 0,
-        roadInfluence: 0,
-        waterInfluence: 0,
-      },
-    }),
-  ).toString("base64url");
-  await page.goto(`/?composition=${composition}`);
-  await expect(
-    page.getByRole("button", { name: "Regenerate now" }),
-  ).toBeEnabled({ timeout: 20000 });
-  // Restoring square artwork can expand the original non-square bounds
-  // over another tile, so require each layer rather than exactly one fragment.
-  await expect(
-    page.getByText(
-      /Map tiles: [1-9]\d* building shapes, [1-9]\d* road segments, [1-9]\d* water shapes/,
-    ),
-  ).toBeVisible();
-  const canvas = page.getByRole("img", { name: /artwork of/i });
-  const pixels = () =>
-    canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
-  const baseline = await pixels();
-  for (const name of ["Building", "Road", "Water"]) {
-    await page
-      .getByRole("combobox", { name: `${name} mode`, exact: true })
-      .selectOption("interrupt");
-    const slider = page.getByRole("slider", {
-      name: name === "Water" ? "Water influence (all)" : `${name} influence`,
-      exact: true,
-    });
-    await slider.press("End");
-    await expect.poll(pixels, { timeout: 10000 }).not.toBe(baseline);
-    await slider.press("Home");
-    await expect.poll(pixels, { timeout: 10000 }).toBe(baseline);
-  }
-  expect(pageErrors).toEqual([]);
-});
