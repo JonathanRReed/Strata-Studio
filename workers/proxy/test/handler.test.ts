@@ -422,6 +422,25 @@ describe("terrain handler", () => {
 });
 
 describe("overpass handler", () => {
+  test("allows a queued response beyond nine seconds within the unchanged route deadline", async () => {
+    const clock = new FakeClock();
+    const { run, calls } = harness(() => new Promise<Response>((resolve) => {
+      clock.schedule(() => resolve(new Response('{"elements":[]}', {
+        headers: { "Content-Type": "application/json" },
+      })), 16_000);
+    }), { now: clock.now, schedule: clock.schedule, cancel: clock.cancel });
+    const pending = run(request(`/overpass?${BBOX}`));
+    await flushMicrotasks();
+    clock.advance(16_000);
+    await flushMicrotasks();
+    const attemptsAtSixteenSeconds = calls.length;
+    clock.advance(60_000);
+    await flushMicrotasks();
+    const response = await pending;
+    expect(attemptsAtSixteenSeconds).toBe(1);
+    expect(response.status).toBe(200);
+  });
+
   test("identifies the project to providers without forwarding caller credentials", async () => {
     const { run, calls, logs } = harness(() => new Response("busy", { status: 429 }));
     await run(request(`/overpass?${BBOX}`, { headers: {
