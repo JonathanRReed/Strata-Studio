@@ -1,3 +1,4 @@
+import { EMPTY_MAP_TILE_BYTES } from "./map-fixtures";
 import { encodeMapTileBundle, mapTilesForBounds } from "../../workers/proxy/src/mapTiles";
 import { readFileSync } from "node:fs";
 import { test as base, expect } from "@playwright/test";
@@ -86,7 +87,7 @@ export const test = base.extend<LaunchOptions & LaunchFixtures>({
       ) {
         const q=url.searchParams;
         const bounds={south:Number(q.get("south")),west:Number(q.get("west")),north:Number(q.get("north")),east:Number(q.get("east"))};
-        const bytes=new Uint8Array([26,15,10,8,98,117,105,108,100,105,110,103,120,2,40,128,32]);
+        const bytes=EMPTY_MAP_TILE_BYTES;
         await route.fulfill({status:200,contentType:"application/vnd.strata.map-tiles",headers:{"Access-Control-Allow-Origin":"*"},body:Buffer.from(encodeMapTileBundle("20261018_080001_pt",mapTilesForBounds(bounds).map(tile=>({...tile,bytes}))))});
         return;
       }

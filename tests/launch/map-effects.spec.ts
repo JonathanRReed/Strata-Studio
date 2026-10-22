@@ -65,8 +65,8 @@ function featureTile() {
     "transportation",
     2,
     [
-      [100, 2300],
-      [3900, 2300],
+      [100, 100],
+      [3900, 3900],
     ],
     "minor",
   );

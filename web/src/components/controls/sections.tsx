@@ -380,7 +380,7 @@ export function FeaturesSection({
 
       {!hasFeatures && <p className="text-[12px] leading-relaxed text-ink-muted">Terrain-only preview. Street, building and water effects require a successful map-feature download.</p>}
       {hasFeatureControls && (
-      <fieldset aria-label="Map feature effects" disabled={!hasFeatures} className="flex flex-col gap-3.5 border-l border-hairline pl-2.5 disabled:opacity-50">
+      <fieldset aria-label="Map feature effects" disabled={!hasFeatures || !!featureError || isFeatureLoading} className="flex flex-col gap-3.5 border-l border-hairline pl-2.5 disabled:opacity-50">
         {/* Buildings */}
         {controls.has("buildingInfluence") && (
           <>
