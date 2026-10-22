@@ -16,6 +16,14 @@ describe("committed proxy safety configuration", () => {
     expect(wrangler).not.toMatch(/account_id|zone_id/i);
   });
 
+  test("configures distinct provider-backed client and route budgets", () => {
+    const config = JSON.parse(read("wrangler.jsonc").replace(/^\s*\/\/.*$/gm, ""));
+    expect(config.ratelimits).toEqual([
+      { name: "OVERPASS_CLIENT_LIMITER", namespace_id: "2026102201", simple: { limit: 6, period: 60 } },
+      { name: "OVERPASS_ROUTE_LIMITER", namespace_id: "2026102202", simple: { limit: 30, period: 60 } },
+    ]);
+  });
+
   test("has no dynamic OG route source or runtime dependency", () => {
     const packageJson = JSON.parse(read("package.json")) as {
       dependencies?: Record<string, string>;
