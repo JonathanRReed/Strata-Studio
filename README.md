@@ -53,7 +53,7 @@ Optional metadata includes `VITE_BUILD_CONTEXT`, `VITE_BUILD_COMMIT`, `VITE_BUIL
 
 The Worker requires exact `ALLOWED_ORIGINS` and separate `TERRAIN_ENABLED` and `OVERPASS_ENABLED` switches. Committed settings keep `OVERPASS_ENABLED=false` and `OVERPASS_PROTECTION_STAGED=false`.
 
-Both Overpass flags must be true to enable the route. Do not enable them before a route-specific Cloudflare rate-limit or WAF rule is configured, staged, and verified. Account capability remains unverified. The Worker does not pretend that an isolate-local counter provides a global rate limit.
+Both Overpass flags must be true and both managed rate-limit bindings must be present to enable the route. Stage and observe native enforcement and recovery before enabling either flag. The reviewed mechanism is Cloudflare Rate Limiting bindings, which protect the `workers.dev` endpoint directly. Limits are approximate per Cloudflare location, not strict worldwide quotas or isolate-local counters. See `workers/proxy/README.md` for the activation checklist.
 
 `/overpass` accepts only `south`, `west`, `north`, and `east` in canonical four-decimal form. It checks Mercator ranges, ordering, a 25 km² area cap, and 25 km edge caps, then constructs the fixed query server-side.
 

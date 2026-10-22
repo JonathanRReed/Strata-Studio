@@ -19,6 +19,8 @@ const TERRAIN_PNG = await Bun.file(
   new URL("../../../tests/launch/terrain-fixture.png", import.meta.url),
 ).arrayBuffer();
 const BASE_ENV: Env = {
+  OVERPASS_CLIENT_LIMITER: { limit: async () => ({ success: true }) },
+  OVERPASS_ROUTE_LIMITER: { limit: async () => ({ success: true }) },
   ALLOWED_ORIGINS: ALLOWED_ORIGIN,
   TERRAIN_ENABLED: "true",
   OVERPASS_ENABLED: "true",
@@ -65,6 +67,7 @@ function request(
   origin: string | null = ALLOWED_ORIGIN,
 ): Request {
   const headers = new Headers(init.headers);
+  headers.set("CF-Connecting-IP", "192.0.2.1");
   if (origin !== null) headers.set("Origin", origin);
   return new Request(`https://proxy.test${path}`, { ...init, headers });
 }

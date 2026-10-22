@@ -21,7 +21,11 @@ import {
   terrainUpstreamUrl,
 } from "./logic";
 
+export type ManagedRateLimiter = { limit(options: { key: string }): Promise<{ success: boolean }> };
+
 export interface Env {
+  OVERPASS_CLIENT_LIMITER?: ManagedRateLimiter;
+  OVERPASS_ROUTE_LIMITER?: ManagedRateLimiter;
   ALLOWED_ORIGINS?: string;
   TERRAIN_ENABLED?: string;
   OVERPASS_ENABLED?: string;
@@ -660,6 +664,42 @@ async function handleTerrain(
   }
 }
 
+function hasManagedProtection(env: Env): boolean {
+  return typeof env.OVERPASS_CLIENT_LIMITER?.limit === "function" &&
+    typeof env.OVERPASS_ROUTE_LIMITER?.limit === "function";
+}
+
+async function enforceOverpassProtection(
+  request: Request, env: Env, runtime: WorkerRuntime, context: ResponseContext,
+): Promise<Response | null> {
+  // Cloudflare supplies this header at its public edge. Never use an Origin,
+  // bbox, or caller-selected query parameter as the client budget identity.
+  const client = request.headers.get("CF-Connecting-IP")?.trim().toLowerCase();
+  const unavailable = () => errorResponse("overpass_protection_unavailable",
+    "OSM protection is unavailable", 503, context, "60");
+  if (!hasManagedProtection(env) || !client || client.length > 64 || !/^[0-9a-f:.]+$/.test(client)) {
+    return unavailable();
+  }
+  const deadline = createRouteSignal(request.signal, 2_000, runtime);
+  try {
+    for (const [binding, key] of [
+      [env.OVERPASS_CLIENT_LIMITER!, client],
+      [env.OVERPASS_ROUTE_LIMITER!, "overpass"],
+    ] as const) {
+      if (deadline.signal.aborted) return unavailable();
+      const result = await raceWithSignal(binding.limit({ key }), deadline.signal);
+      if (result?.success !== true) {
+        return errorResponse("overpass_rate_limited", "OSM request limit reached", 429, context, "60");
+      }
+    }
+    return null;
+  } catch {
+    return unavailable();
+  } finally {
+    deadline.dispose();
+  }
+}
+
 async function handleOverpass(
   request: Request,
   url: URL,
@@ -672,6 +712,11 @@ async function handleOverpass(
   if (!parsed.ok) {
     return errorResponse("invalid_bbox", parsed.error, 400, context);
   }
+
+  // Run protection while disabled as well, so it can be staged and observed
+  // without sending any request to the public Overpass providers.
+  const protectionFailure = await enforceOverpassProtection(request, env, runtime, context);
+  if (protectionFailure) return protectionFailure;
 
   const requested = enabledFlag(env.OVERPASS_ENABLED);
   const protectionStaged = enabledFlag(env.OVERPASS_PROTECTION_STAGED);
@@ -785,8 +830,9 @@ function handleHealth(url: URL, env: Env, context: ResponseContext): Response {
   const terrainEnabled = enabledFlag(env.TERRAIN_ENABLED);
   const overpassRequested = enabledFlag(env.OVERPASS_ENABLED);
   const protectionStaged = enabledFlag(env.OVERPASS_PROTECTION_STAGED);
-  const overpassEnabled = overpassRequested && protectionStaged;
-  const configurationSafe = !overpassRequested || protectionStaged;
+  const protectionPresent = hasManagedProtection(env);
+  const overpassEnabled = overpassRequested && protectionStaged && protectionPresent;
+  const configurationSafe = !overpassRequested || (protectionStaged && protectionPresent);
 
   return jsonResponse(
     {
