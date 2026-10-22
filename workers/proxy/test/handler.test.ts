@@ -483,6 +483,7 @@ describe("overpass handler", () => {
       "{",
       '{"remark":"missing elements"}',
       '{"elements":[null]}',
+      '{"elements":[],"remark":"runtime error: Query timed out"}',
     ]) {
       const { run, calls } = harness(
         () =>

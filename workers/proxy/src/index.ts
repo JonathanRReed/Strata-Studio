@@ -532,6 +532,8 @@ function isValidOverpassJson(body: Uint8Array): boolean {
     return (
       isRecord(value) &&
       Array.isArray(value.elements) &&
+      // HTTP 200 does not guarantee completeness after an Overpass timeout.
+      !("remark" in value) &&
       value.elements.every(isValidOverpassElement)
     );
   } catch {
