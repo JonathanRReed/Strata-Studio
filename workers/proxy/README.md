@@ -116,3 +116,18 @@ contract](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-l
 Use distinct account-verified namespaces. Keep both activation flags false until
 native enforcement and recovery have been observed with the final settings.
 Do not claim staging succeeded just because a binding exists or a unit test passes.
+
+
+## Public upstream identification and availability
+
+Overpass POST requests identify Strata Studio with a fixed project User-Agent
+and the public repository link. Caller credentials and client IP headers are not
+forwarded. [Private.coffee recommends a meaningful project identity](https://overpass.private.coffee/)
+and permits application use, while still requiring considerate resource use.
+The [primary public server guidance](https://dev.overpass-api.de/overpass-doc/en/preface/commons.html)
+warns that a public shared instance is not a reliability guarantee for an app backend.
+Do not promise production availability based on a successful test alone. Respect
+provider backoff and resource limits; do not rotate identities to evade them.
+An identified request is good API citizenship, not proof that a 429 is resolved.
+For sustained commercial traffic, evaluate an authorized dedicated or paid
+provider rather than silently increasing load on shared public infrastructure.
