@@ -13,3 +13,8 @@ test("generalized geometry provenance is visible text, not only a hover tooltip"
 test("an active feature error does not present a stale snapshot as current", () => {
   expect(render("Fetch failed")).not.toContain(summary);
 });
+test('missing map data disables feature controls and explains the terrain-only preview',()=>{
+ const html=renderToStaticMarkup(<FeaturesSection params={defaultStyleParams} controls={new Set(['buildingInfluence'])} update={()=>{}} onFetchFeatures={()=>{}} isFeatureLoading={false} featureInfo={null} featureError="Download failed" hasFeatures={false}/>);
+ expect(html).toContain('Terrain-only preview');
+ expect(html).toMatch(/<fieldset[^>]*aria-label="Map feature effects"[^>]*disabled/);
+});

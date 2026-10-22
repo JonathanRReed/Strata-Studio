@@ -142,7 +142,7 @@ export default function App() {
   const { previewInput, renderArtwork, notifyCanvasResized } = useArtworkRenderer({
     canvasRef,
     grid: terrain.grid,
-    features: osm.features,
+    features: osm.status.phase === "done" ? osm.features : undefined,
     params,
     styleId,
     allPalettes,
@@ -156,7 +156,7 @@ export default function App() {
     bounds,
     terrainGrid: terrain.boundsDirty ? null : terrain.grid,
     previewInput: terrain.boundsDirty ? null : previewInput,
-    features: osm.features,
+    features: osm.status.phase === "done" ? osm.features : undefined,
     featureKey: osm.activeKey,
     params,
     styleId,
@@ -650,6 +650,8 @@ export default function App() {
         hasArtwork={terrain.hasGenerated}
         isGenerating={isGenerating}
         statusText={statusText}
+        mapDataNotice={osm.status.phase === "done" && osm.features ? null : osm.status.phase === "error" ? "Incomplete preview: streets, buildings and water could not be loaded." : "Loading required streets, buildings and water…"}
+        onRetryMapData={osm.status.phase === "error" ? () => void fetchFeatures(true) : undefined}
         boundsDirty={terrain.boundsDirty}
         onRegenerate={handleGenerate}
         seed={params.seed}
@@ -729,6 +731,7 @@ export default function App() {
         isExportingAnimation={isExportingAnimation}
         isSharing={isSharing}
         animationAvailable={params.animationMode !== "none"}
+        mapDataReady={osm.status.phase === "done" && !!osm.features}
         capabilities={capabilities}
         onCancel={() => {
           exports.cancelExport();

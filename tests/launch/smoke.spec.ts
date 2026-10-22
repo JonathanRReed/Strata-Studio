@@ -82,7 +82,7 @@ test("@smoke fresh visit renders proxy-backed artwork exactly once", async ({
   await expect
     .poll(() =>
       externalRequests.some((request) =>
-        request.includes("strata-proxy.example/terrain/"),
+        request.includes("strata-proxy.example/terrain-geotiff/"),
       ),
     )
     .toBe(true);
@@ -122,7 +122,7 @@ test("@smoke artwork boots and location choices work without the map chunk", asy
   await expect
     .poll(() =>
       externalRequests.some((request) =>
-        request.includes("strata-proxy.example/terrain/"),
+        request.includes("strata-proxy.example/terrain-geotiff/"),
       ),
     )
     .toBe(true);
@@ -230,66 +230,17 @@ test("@smoke map recovery preserves the active selection", async ({
   expect(directDataRequests(externalRequests)).toEqual([]);
 });
 
-test("@smoke Overpass proxy failure uses one bounded direct fallback", async ({
-  page,
-  pageErrors,
-}) => {
-  await page.goto("/");
-  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({
-    timeout: 20_000,
-  });
-
-  let proxyCalls = 0;
-  let directCalls = 0;
-  let proxyRequestUrl = "";
-  let directPostBody = "";
-  await page.route("https://strata-proxy.example/overpass?*", async (route) => {
-    proxyCalls++;
-    proxyRequestUrl = route.request().url();
-    await route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Retry-After": "0",
-      },
-      body: JSON.stringify({ error: { code: "overpass_disabled" } }),
-    });
-  });
-  await page.route(
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    async (route) => {
-      directCalls++;
-      directPostBody = route.request().postData() ?? "";
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ elements: [] }),
-      });
-    },
-  );
-
-  await page.getByRole("button", { name: "Expand map" }).click();
-  const curatedPlaces = page.getByRole("group", { name: "Suggested places" });
-  await curatedPlaces.getByRole("button", { name: /Manhattan/ }).click();
-
-  await expect.poll(() => directCalls, { timeout: 20_000 }).toBe(1);
-  expect(proxyCalls).toBe(1);
-  const proxyUrl = new URL(proxyRequestUrl);
-  expect(proxyUrl.search).toMatch(
-    /^\?south=-?\d+\.\d{4}&west=-?\d+\.\d{4}&north=-?\d+\.\d{4}&east=-?\d+\.\d{4}$/,
-  );
-  expect([...proxyUrl.searchParams.keys()]).toEqual([
-    "south",
-    "west",
-    "north",
-    "east",
-  ]);
-  expect(new URLSearchParams(directPostBody).get("data")).toContain(
-    'way["building"]',
-  );
-  expect(pageErrors).toEqual([]);
+test("@smoke map-feature failure disables ineffective controls without probing public Overpass",async({page,externalRequests,pageErrors})=>{
+ await page.route("https://strata-proxy.example/map-features?*",route=>route.fulfill({status:503,contentType:"application/json",headers:{"Access-Control-Allow-Origin":"*"},body:JSON.stringify({error:{code:"unavailable"}})}));
+ await page.goto("/");
+ await expect(page.getByRole("button",{name:"Regenerate now"})).toBeEnabled({timeout:20000});
+ const features=page.getByRole("button",{name:/^Features/});
+ if(await features.getAttribute("aria-expanded")==="false")await features.click();
+ await expect(page.getByText("Feature fetch failed",{exact:true})).toBeVisible({timeout:20000});
+ await expect(page.getByText(/Terrain-only preview/)).toBeVisible();
+ await expect(page.getByRole("slider",{name:"Building influence",exact:true})).toBeDisabled();
+ expect(externalRequests.some(url=>url.includes("/overpass")||url.includes("/interpreter"))).toBe(false);
+ expect(pageErrors).toEqual([]);
 });
 
 test("@smoke evaluator can choose a place, change style, generate, and export", async ({
@@ -315,7 +266,7 @@ test("@smoke evaluator can choose a place, change style, generate, and export", 
       () =>
         externalRequests.some((request) =>
           request.includes(
-            "strata-proxy.example/overpass?south=",
+            "strata-proxy.example/map-features?south=",
           ),
         ),
       { timeout: 20_000 },
@@ -386,7 +337,7 @@ test("@smoke evaluator can choose a place, change style, generate, and export", 
   expect(directDataRequests(externalRequests)).toEqual([]);
 });
 
-test("@smoke free tile fallback exposes snapshot provenance and preserves SVG attribution", async ({ page, externalRequests, pageErrors }) => {
+test("@smoke primary map tiles expose snapshot provenance and preserves SVG attribution", async ({ page, externalRequests, pageErrors }) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({ timeout: 20_000 });
   let tileCalls = 0;

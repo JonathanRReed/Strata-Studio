@@ -25,7 +25,7 @@ export function summarizeFeatures(collected: GeoFeatureCollection): string {
   }
   if (collected.source?.kind === "openfreemap-tiles") {
     const date = collected.source.dataset.slice(0, 8);
-    return `Tile fallback: ${counts.building} building shapes, ${counts.road} road segments, ${counts.water} water shapes. Generalized map geometry; snapshot ${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}.`;
+    return `Map tiles: ${counts.building} building shapes, ${counts.road} road segments, ${counts.water} water shapes. Generalized map geometry; snapshot ${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}.`;
   }
   const waterDetail =
     counts.water > 0

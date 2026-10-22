@@ -1,3 +1,4 @@
+import { EMPTY_MAP_TILE_BYTES } from "../../../tests/launch/map-fixtures.ts";
 import { expect, test } from "bun:test";
 import Pbf from "pbf";
 import {
@@ -157,4 +158,9 @@ test("a tile bundle must cover the whole requested area with truthful metadata",
   const repeatedBytes = new Uint8Array(payload.length * repeated.length);
   repeated.forEach((_, index) => repeatedBytes.set(payload, index * payload.length));
   expect(() => decodeMapTileBundle(forge({ ...good, tiles: repeated }, repeatedBytes), wider)).toThrow();
+});
+
+test("browser empty-map fixture is a valid complete snapshot, not an invalid empty tile",()=>{
+ const bundle=encodeMapTileBundle("20261018_080001_pt",mapTilesForBounds(bounds).map(tile=>({...tile,bytes:EMPTY_MAP_TILE_BYTES})));
+ expect(decodeMapTileBundle(bundle,bounds).features).toHaveLength(0);
 });

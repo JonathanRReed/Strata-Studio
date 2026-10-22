@@ -1,8 +1,7 @@
+import { decodeTerrainGeoTiff } from "./terrainGeoTiff.ts";
 import {
   lngToPixelX,
   latToPixelY,
-  tileXForPixel,
-  tileYForPixel,
   normalizeBounds,
 } from "../engine/projection.ts";
 import type { ElevationGrid, GeoBounds } from "../engine/types.ts";
@@ -22,12 +21,12 @@ import {
 
 /** Direct AWS is a deliberate runtime fallback, never the preferred production provider. */
 export const DIRECT_TERRAIN_TILE_URL =
-  "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+  "https://s3.amazonaws.com/elevation-tiles-prod/geotiff/{z}/{x}/{y}.tif";
 
 const configuredTerrainUrl = import.meta.env.VITE_TERRAIN_TILE_URL?.trim();
 const CONFIGURED_TERRAIN_PROXY_URL =
   configuredTerrainUrl && configuredTerrainUrl !== DIRECT_TERRAIN_TILE_URL
-    ? configuredTerrainUrl
+    ? configuredTerrainUrl.replace(/\/terrain\/?$/, "/terrain-geotiff/{z}/{x}/{y}.tif")
     : undefined;
 
 /** Preferred tile URL retained as a public export for diagnostics/build assertions. */
@@ -35,10 +34,10 @@ export const TERRAIN_TILE_URL: string =
   CONFIGURED_TERRAIN_PROXY_URL || DIRECT_TERRAIN_TILE_URL;
 
 export const TERRAIN_ATTRIBUTION =
-  "Terrain: Mapzen/Tilezen terrain tiles via AWS Open Data (elevation data courtesy of USGS, NASA SRTM, and other sources)";
+  "Terrain: Tilezen scalar GeoTIFF via AWS Open Data (elevation data courtesy of USGS, NASA SRTM, and other sources)";
 
-const TILE_SIZE = 256;
-const MAX_ZOOM = 15;
+const TILE_SIZE = 512;
+const MAX_ZOOM = 14;
 const TILE_ATTEMPT_TIMEOUT_MS = 8000;
 const TILE_OPERATION_TIMEOUT_MS = 30000;
 const TILE_ATTEMPT_LIMIT = 3;
@@ -58,12 +57,9 @@ function tileUrl(template: string, z: number, x: number, y: number): string {
       .replace("{x}", String(x))
       .replace("{y}", String(y));
   }
-  return `${template.replace(/\/$/, "")}/${z}/${x}/${y}.png`;
+  return `${template.replace(/\/$/, "")}/${z}/${x}/${y}.${template.includes("terrain-geotiff") ? "tif" : "png"}`;
 }
 
-function decodeElevation(r: number, g: number, b: number): number {
-  return r * 256 + g + b / 256 - 32768;
-}
 
 function discardResponseBody(response: Response): void {
   try {
@@ -76,80 +72,21 @@ function discardResponseBody(response: Response): void {
   }
 }
 
-async function decodeTerrainImage(
-  blob: Blob,
-  signal: AbortSignal,
-): Promise<{ source: CanvasImageSource; close: () => void }> {
-  if (typeof createImageBitmap === "function") {
-    const bitmap = await createImageBitmap(blob);
-    return { source: bitmap, close: () => bitmap.close() };
+async function decodeTerrainResponse(response: Response, signal: AbortSignal): Promise<Float32Array> {
+  const contentType=response.headers.get("Content-Type")?.split(";",1)[0]?.trim();
+  if(contentType!=="image/tiff" && contentType!=="image/geotiff" && contentType!=="application/octet-stream") {
+    discardResponseBody(response);
+    throw new RequestPolicyError("decode","Terrain source did not return a scalar GeoTIFF");
   }
-
-  const url = URL.createObjectURL(blob);
-  const image = new Image();
+  const reader=response.body?.getReader();
+  if(!reader)throw new RequestPolicyError("decode","Terrain source returned no data");
+  const chunks:Uint8Array[]=[];let length=0;
   try {
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => signal.removeEventListener("abort", onAbort);
-      const onAbort = () => {
-        cleanup();
-        image.src = "";
-        reject(abortErrorFromSignal(signal));
-      };
-      image.onload = () => {
-        cleanup();
-        resolve();
-      };
-      image.onerror = () => {
-        cleanup();
-        reject(new Error("Image decode failed"));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) onAbort();
-      else image.src = url;
-    });
-    return { source: image, close: () => URL.revokeObjectURL(url) };
-  } catch (error) {
-    URL.revokeObjectURL(url);
-    throw error;
-  }
-}
-
-async function decodeTerrainResponse(
-  response: Response,
-  signal: AbortSignal,
-): Promise<Float32Array> {
-  const blob = await response.blob();
-  if (signal.aborted) throw abortErrorFromSignal(signal);
-
-  let decoded: { source: CanvasImageSource; close: () => void };
-  try {
-    decoded = await decodeTerrainImage(blob, signal);
-  } catch (error) {
-    if (signal.aborted) throw abortErrorFromSignal(signal);
-    throw new RequestPolicyError("decode", "Terrain tile image could not be decoded", {
-      cause: error,
-    });
-  }
-
-  try {
-    if (signal.aborted) throw abortErrorFromSignal(signal);
-    const canvas = document.createElement("canvas");
-    canvas.width = TILE_SIZE;
-    canvas.height = TILE_SIZE;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      throw new RequestPolicyError("decode", "Could not get canvas context for terrain tile");
-    }
-    ctx.drawImage(decoded.source, 0, 0);
-    const pixels = ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE).data;
-    const data = new Float32Array(TILE_SIZE * TILE_SIZE);
-    for (let i = 0, j = 0; i < pixels.length; i += 4, j++) {
-      data[j] = decodeElevation(pixels[i], pixels[i + 1], pixels[i + 2]);
-    }
-    return data;
-  } finally {
-    decoded.close();
-  }
+    for(;;){const {value,done}=await reader.read();if(done)break;length+=value.byteLength;
+      if(length>2*1024*1024)throw new RequestPolicyError("decode","Terrain raster exceeded its size limit");chunks.push(value);}
+  } finally {void reader.cancel().catch(()=>{});}
+  const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+  return decodeTerrainGeoTiff(bytes.buffer,signal);
 }
 
 function isCircuitFailure(error: RequestPolicyError): boolean {
@@ -273,6 +210,8 @@ export function attachSubscriber<T>(
 }
 
 export type TerrainTileLoader = {
+  /** Native scalar GeoTIFF size; injectable legacy fixtures may use 256. */
+  tileSize?: 256 | 512;
   getTileData: (
     z: number,
     x: number,
@@ -513,7 +452,7 @@ export function createTerrainTileLoader(
     return attachSubscriber(shared, signal);
   };
 
-  return { getTileData, circuit };
+  return { getTileData, circuit, tileSize: TILE_SIZE };
 }
 
 const terrainTileLoader = createTerrainTileLoader({
@@ -554,13 +493,15 @@ function normalizeGridDimensions(dimensions: TerrainGridDimensions): {
   return { width: safeWidth, height: safeHeight, longest: Math.max(safeWidth, safeHeight) };
 }
 
-function selectZoom(bounds: GeoBounds, longestDimension: number): number {
+function selectZoom(bounds: GeoBounds, longestDimension: number, tileSize: number): number {
+  const scale = tileSize / 256;
+  const maxZoom = tileSize === 512 ? MAX_ZOOM : 15;
   let selected = 0;
-  for (let z = 0; z <= MAX_ZOOM; z++) {
-    const west = lngToPixelX(bounds.west, z);
-    const east = lngToPixelX(bounds.east, z);
-    const north = latToPixelY(bounds.north, z);
-    const south = latToPixelY(bounds.south, z);
+  for (let z = 0; z <= maxZoom; z++) {
+    const west = lngToPixelX(bounds.west, z) * scale;
+    const east = lngToPixelX(bounds.east, z) * scale;
+    const north = latToPixelY(bounds.north, z) * scale;
+    const south = latToPixelY(bounds.south, z) * scale;
     const width = Math.abs(east - west);
     const height = Math.abs(south - north);
     if (Math.max(width, height) >= longestDimension) {
@@ -585,20 +526,22 @@ interface TileRange {
   maxTy: number;
 }
 
-function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions): TileRange {
+function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions, tileSize = TILE_SIZE): TileRange {
+  const scale = tileSize / 256;
   const normalized = normalizeBounds(bounds);
   const { longest } = normalizeGridDimensions(dimensions);
-  const zoom = selectZoom(normalized, longest);
-  const westPx = lngToPixelX(normalized.west, zoom);
-  const eastPx = lngToPixelX(normalized.east, zoom);
-  const northPx = latToPixelY(normalized.north, zoom);
-  const southPx = latToPixelY(normalized.south, zoom);
+  const zoom = selectZoom(normalized, longest, tileSize);
+  const westPx = lngToPixelX(normalized.west, zoom) * scale;
+  const eastPx = lngToPixelX(normalized.east, zoom) * scale;
+  const northPx = latToPixelY(normalized.north, zoom) * scale;
+  const southPx = latToPixelY(normalized.south, zoom) * scale;
 
   const minX = Math.min(westPx, eastPx);
   const maxX = Math.max(westPx, eastPx);
   const minY = Math.min(northPx, southPx);
   const maxY = Math.max(northPx, southPx);
 
+  const tileForPixel = (pixel: number) => Math.max(0, Math.min(2 ** zoom - 1, Math.floor(pixel / tileSize)));
   return {
     normalized,
     zoom,
@@ -606,12 +549,12 @@ function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions):
     maxX,
     minY,
     maxY,
-    // Terrarium samples are pixel-centered. Include every integer sample
+    // Scalar GeoTIFF samples are pixel-centered. Include every integer sample
     // needed by bilinear interpolation, even just beyond the selected tile.
-    minTx: tileXForPixel(Math.floor(minX - 0.5), zoom),
-    maxTx: tileXForPixel(Math.ceil(maxX - 0.5), zoom),
-    minTy: tileYForPixel(Math.floor(minY - 0.5), zoom),
-    maxTy: tileYForPixel(Math.ceil(maxY - 0.5), zoom),
+    minTx: tileForPixel(Math.floor(minX - 0.5)),
+    maxTx: tileForPixel(Math.ceil(maxX - 0.5)),
+    minTy: tileForPixel(Math.floor(minY - 0.5)),
+    maxTy: tileForPixel(Math.ceil(maxY - 0.5)),
   };
 }
 
@@ -619,8 +562,9 @@ function computeTileRange(bounds: GeoBounds, dimensions: TerrainGridDimensions):
 export function tileCountForFetch(
   bounds: GeoBounds,
   dimensions: TerrainGridDimensions,
+  tileSize = TILE_SIZE,
 ): number {
-  const { minTx, maxTx, minTy, maxTy } = computeTileRange(bounds, dimensions);
+  const { minTx, maxTx, minTy, maxTy } = computeTileRange(bounds, dimensions, tileSize);
   return (maxTx - minTx + 1) * (maxTy - minTy + 1);
 }
 
@@ -641,15 +585,16 @@ export type TerrainFetchOptions = {
   onDiagnostics?: (diagnostics: { totalTiles: number; failedTiles: number }) => void;
   operationTimeoutMs?: number;
   runtime?: RequestPolicyRuntime;
-  tileLoader?: Pick<TerrainTileLoader, "getTileData">;
+  tileLoader?: Pick<TerrainTileLoader, "getTileData" | "tileSize">;
 };
 
 export class TerrainLoadError extends Error {
-  readonly kind = "all-tiles-failed";
+  readonly kind: "all-tiles-failed" | "incomplete-terrain";
 
-  constructor(message: string, cause?: unknown) {
+  constructor(message: string, cause?: unknown, kind: "all-tiles-failed" | "incomplete-terrain" = "all-tiles-failed") {
     super(message, cause === undefined ? undefined : { cause });
     this.name = "TerrainLoadError";
+    this.kind = kind;
   }
 }
 
@@ -666,6 +611,7 @@ export async function fetchTerrain(
     label: "Terrain fetch",
   });
   const loader = options.tileLoader ?? terrainTileLoader;
+  const tileSize = loader.tileSize ?? 256;
 
   try {
     // Reject pre-aborted/zero-deadline operations before constructing tile
@@ -673,10 +619,10 @@ export async function fetchTerrain(
     operation.throwIfAborted();
     const grid = normalizeGridDimensions(dimensions);
     const { normalized, zoom, minX, maxX, minY, maxY, minTx, maxTx, minTy, maxTy } =
-      computeTileRange(bounds, grid);
+      computeTileRange(bounds, grid, tileSize);
 
     const tilesPerAxis = 2 ** zoom;
-    const worldLastSample = TILE_SIZE * tilesPerAxis - 1;
+    const worldLastSample = tileSize * tilesPerAxis - 1;
     const tileCache = new Map<number, Float32Array>();
     const tileKeys: { key: number; tx: number; ty: number }[] = [];
     let failedCount = 0;
@@ -700,7 +646,7 @@ export async function fetchTerrain(
             }
             firstFailure ??= error;
             failedCount++;
-            tileCache.set(key, new Float32Array(TILE_SIZE * TILE_SIZE));
+            // Never substitute zero elevations for missing source tiles.
           }
         },
     );
@@ -714,6 +660,7 @@ export async function fetchTerrain(
       throw new TerrainLoadError("All terrain tiles failed to load", firstFailure);
     }
 
+    if (failedCount > 0) throw new TerrainLoadError("Terrain coverage is incomplete. Retry instead of rendering invented zero-height areas.", firstFailure, "incomplete-terrain");
     const data = new Float32Array(grid.width * grid.height);
     const sourceWidth = maxX - minX;
     const sourceHeight = maxY - minY;
@@ -721,10 +668,10 @@ export async function fetchTerrain(
     // GDAL/Tilezen registers sample (0,0) at world pixel center (.5,.5).
     // Clamp at the finite world's edges; latitude never wraps to another pole.
     const readSample = (x: number, y: number): number => {
-      const tx = Math.floor(x / TILE_SIZE), ty = Math.floor(y / TILE_SIZE);
+      const tx = Math.floor(x / tileSize), ty = Math.floor(y / tileSize);
       const tile = tileCache.get(ty * tilesPerAxis + tx);
       if (!tile) throw new Error("Required terrain interpolation tile is missing");
-      return tile[(y - ty * TILE_SIZE) * TILE_SIZE + x - tx * TILE_SIZE];
+      return tile[(y - ty * tileSize) * tileSize + x - tx * tileSize];
     };
     for (let row = 0; row < grid.height; row++) {
       const y = minY + (row / (grid.height - 1 || 1)) * sourceHeight;

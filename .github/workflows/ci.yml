@@ -76,13 +76,16 @@ jobs:
     name: Chromium launch smoke
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    container:
+      # Official browser/dependency image, matched to the frozen Playwright package.
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install pinned Bun in the browser image
+        # The official Playwright image intentionally omits unzip.
+        run: npm install --global bun@${BUN_VERSION} && test "$(bun --version)" = "$BUN_VERSION"
 
       - name: Cache Bun downloads
         uses: actions/cache@v4
@@ -101,17 +104,10 @@ jobs:
           name: web-dist
           path: web/dist
 
-      - name: Cache Playwright Chromium
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-
-      - name: Install Chromium and system dependencies
-        run: bunx playwright install --with-deps chromium
-
       - name: Run launch smoke tests
         run: bun run test:launch:built
+        env:
+          HOME: /root
 
       - name: Upload Playwright diagnostics
         if: failure()
@@ -126,17 +122,19 @@ jobs:
 
   broad-launch:
     name: Browser and accessibility coverage
-    # Exercise the Firefox regression before merging the focused repair.
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.pull_request.number == 5
+    # Map decoding and compositing must pass all engines before merging.
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    container:
+      # Official browser/dependency image, matched to the frozen Playwright package.
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install pinned Bun in the browser image
+        # The official Playwright image intentionally omits unzip.
+        run: npm install --global bun@${BUN_VERSION} && test "$(bun --version)" = "$BUN_VERSION"
 
       - name: Cache Bun downloads
         uses: actions/cache@v4
@@ -155,20 +153,15 @@ jobs:
           name: web-dist
           path: web/dist
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-all-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-
-      - name: Install browser engines and system dependencies
-        run: bunx playwright install --with-deps chromium firefox webkit
-
       - name: Run Firefox and WebKit launch smoke
         run: bun run test:launch:browsers
+        env:
+          HOME: /root
 
       - name: Run Chromium accessibility gate
         run: bun run test:launch:a11y
+        env:
+          HOME: /root
 
       - name: Upload Playwright diagnostics
         if: failure()

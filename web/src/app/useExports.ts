@@ -1,3 +1,4 @@
+import { requireMapGeometry } from "./dataCompleteness.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchTerrain,
@@ -191,6 +192,7 @@ export function useExports({
       reusePreview = false,
     ): Promise<PngArtifact> => {
       if (!capabilities.pngExport) throw new Error("PNG export is not supported in this browser");
+      requireMapGeometry(currentFeatures);
       const { width, height } = getExportDimensions(params.aspectRatio, size);
       const logical = getPreviewDimensions(params.aspectRatio);
       const gridDimensions = getExportDimensions(params.aspectRatio, exportGridSize(size));
@@ -370,6 +372,7 @@ export function useExports({
       const { controller, operation } = beginStaticOperation();
       setStatus({ phase: "fetching", note: `Fetching terrain for ${width}×${height} SVG…` });
       try {
+        requireMapGeometry(currentFeatures);
         const grid = await fetchTerrain(bounds, gridDimensions, operation.signal, {
           operationTimeoutMs: STATIC_EXPORT_DEADLINE_MS,
         });
@@ -514,6 +517,7 @@ export function useExports({
       });
       setAnimationStatus({ phase: "exporting", progress: 0, note: "Fetching terrain…" });
       try {
+        requireMapGeometry(currentFeatures);
         const grid = await fetchTerrain(bounds, previewDimensions, operation.signal, {
           operationTimeoutMs: STATIC_EXPORT_DEADLINE_MS,
         });

@@ -64,6 +64,13 @@ export function sampleMask(
   );
 }
 
+/** Raster masks are cell-centered; elevation grids above are endpoint-registered. */
+export function sampleRasterMask(mask: Float32Array, width: number, height: number, u: number, v: number): number {
+  return sampleMask(mask, width, height,
+    width > 1 ? (clamp(u, 0, 1) * width - 0.5) / (width - 1) : 0,
+    height > 1 ? (clamp(v, 0, 1) * height - 0.5) / (height - 1) : 0);
+}
+
 export function normalizeGrid(grid: Float32Array): {
   min: number;
   max: number;

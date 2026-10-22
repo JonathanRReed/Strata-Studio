@@ -3,6 +3,10 @@ import { classifyError, isRetryableError, retryWithBackoff, type AppErrorKind } 
 
 describe("classifyError", () => {
   const cases: [string, AppErrorKind][] = [
+    ["Terrain coverage is incomplete. Retry.", "incomplete-terrain"],
+    ["Map-feature requests are temporarily rate-limited.", "rate-limited"],
+    ["Map features could not be downloaded.", "network"],
+    ["This selection exceeds the detailed map download limits.", "area-too-large"],
     ["All terrain tiles failed to load", "all-tiles-failed"],
     ["Tile load timeout: https://example.com/1/2/3.png", "network"],
     ["Tile fetch failed (500): https://example.com/1/2/3.png", "network"],
@@ -189,4 +193,8 @@ describe("retryWithBackoff", () => {
     expect(result).toBe("grid");
     expect(loadingDuringWaits).toEqual([true, true, true, true]);
   });
+});
+
+it("incomplete terrain can be retried without treating missing cells as sea level",()=>{
+ expect(isRetryableError(classifyError(new Error("Terrain coverage is incomplete. Retry.")))).toBe(true);
 });

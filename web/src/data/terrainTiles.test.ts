@@ -480,11 +480,11 @@ describe("terrain grid failure aggregation", () => {
     );
   });
 
-  test("returns partial terrain with diagnostics when only some tiles fail", async () => {
+  test("rejects partial coverage with diagnostics rather than inventing zero elevations", async () => {
     expect(tileCountForFetch(bounds, 64)).toBe(2);
     let calls = 0;
     let diagnostics: { totalTiles: number; failedTiles: number } | undefined;
-    const grid = await fetchTerrain(bounds, 64, undefined, {
+    const pending = fetchTerrain(bounds, 64, undefined, {
       tileLoader: {
         getTileData: async () => {
           calls++;
@@ -497,15 +497,14 @@ describe("terrain grid failure aggregation", () => {
       },
     });
 
+    await expect(pending).rejects.toMatchObject({kind:"incomplete-terrain"});
     expect(diagnostics).toEqual({ totalTiles: 2, failedTiles: 1 });
-    expect(grid.data.some((value) => value === 0)).toBe(true);
-    expect(grid.data.some((value) => value === 321)).toBe(true);
   });
 
-  test("treats a tile-local deadline as a partial failure, not an outer abort", async () => {
+  test("reports incomplete coverage for a tile-local deadline, not an outer abort", async () => {
     let calls = 0;
     let diagnostics: { totalTiles: number; failedTiles: number } | undefined;
-    const grid = await fetchTerrain(bounds, 64, undefined, {
+    const pending = fetchTerrain(bounds, 64, undefined, {
       tileLoader: {
         getTileData: async () => {
           calls++;
@@ -523,9 +522,8 @@ describe("terrain grid failure aggregation", () => {
       },
     });
 
+    await expect(pending).rejects.toMatchObject({kind:"incomplete-terrain"});
     expect(diagnostics).toEqual({ totalTiles: 2, failedTiles: 1 });
-    expect(grid.data.some((value) => value === 0)).toBe(true);
-    expect(grid.data.some((value) => value === 222)).toBe(true);
   });
 
   test("reports diagnostics and fails when all tiles fail", async () => {

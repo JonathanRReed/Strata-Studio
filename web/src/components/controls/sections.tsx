@@ -351,7 +351,7 @@ export function FeaturesSection({
   return (
     <Section
       title="Features"
-      defaultOpen={hasFeatures}
+      defaultOpen={hasFeatures || !!featureError}
       badge={hasFeatures ? "loaded" : undefined}
     >
       <p role="status" className="instrument-label" title={featureInfo ?? osmAreaHint ?? undefined}>
@@ -370,16 +370,17 @@ export function FeaturesSection({
         className={secondaryButtonClass}
       >
         {isFeatureLoading
-          ? "Fetching OSM data…"
+          ? "Fetching map features…"
           : featureError
-            ? "Retry OSM fetch"
+            ? "Retry map download"
             : hasFeatures
-              ? "Re-fetch OSM features"
-              : "Fetch OSM features (buildings, roads, water)"}
+              ? "Re-fetch map features"
+              : "Fetch map features (buildings, roads, water)"}
       </button>
 
+      {!hasFeatures && <p className="text-[12px] leading-relaxed text-ink-muted">Terrain-only preview. Street, building and water effects require a successful map-feature download.</p>}
       {hasFeatureControls && (
-      <div className="flex flex-col gap-3.5 border-l border-hairline pl-2.5">
+      <fieldset aria-label="Map feature effects" disabled={!hasFeatures || !!featureError || isFeatureLoading} className="flex flex-col gap-3.5 border-l border-hairline pl-2.5 disabled:opacity-50">
         {/* Buildings */}
         {controls.has("buildingInfluence") && (
           <>
@@ -514,7 +515,7 @@ export function FeaturesSection({
             )}
           </>
         )}
-      </div>
+      </fieldset>
       )}
     </Section>
   );

@@ -474,7 +474,7 @@ export function proxyOverpassUrl(endpoint: string, bounds: GeoBounds): string {
 
 function boundsCacheKey(bounds: GeoBounds): string {
   // Older caches may contain a partial result accepted before remark validation.
-  return `v6:${canonicalProxyBboxParams(bounds)}`;
+  return `v7:${canonicalProxyBboxParams(bounds)}`;
 }
 
 /** Overpass API instances, each attempted at most once after the proxy. */
@@ -500,17 +500,11 @@ export function overpassEndpoints(
   const configured = proxyUrl?.trim();
   if (!configured) return mirrors;
   const proxy = configured.replace(/\/+$/, "");
-  const tileFallback = proxy.replace(/\/overpass$/, "/map-features");
-  // The Worker already tries the first two providers. Keep one distinct direct
-  // provider as the browser fallback so one operation cannot retry the same
-  // upstreams and silently exceed its aggregate attempt budget.
-  return [
-    { url: proxy, kind: "proxy" },
-    ...(tileFallback !== proxy
-      ? [{ url: tileFallback, kind: "tiles" as const }]
-      : []),
-    mirrors[mirrors.length - 1]!,
-  ];
+  const tileUrl = proxy.replace(/\/overpass$/, "/map-features");
+  // Precomputed vector geometry is the production primary, not a recovery
+  // path after a slow/disabled public query service. Do not spend the shared
+  // managed request budget probing Overpass or retry arbitrary public mirrors.
+  return tileUrl !== proxy ? [{ url: tileUrl, kind: "tiles" }] : [{ url: proxy, kind: "proxy" }];
 }
 
 function isJsonContentType(value: string | null): boolean {
@@ -814,10 +808,16 @@ export function createOsmFeatureFetcher(
       }
 
       if (lastFailure?.kind === "rate-limited") {
-        throw new Error(
-          "Overpass API rate limits are busy. Please wait a moment and try again.",
-          { cause: lastFailure },
-        );
+        const seconds = Math.max(1, Math.ceil((lastFailure.retryAfterMs ?? 60_000) / 1000));
+        throw new Error(`Map-feature requests are temporarily rate-limited. Wait ${seconds} seconds, then retry.`, { cause: lastFailure });
+      }
+      if (lastFailure?.provider === "tiles") {
+        const message = lastFailure.status === 400
+          ? "This selection exceeds the detailed map download limits. Zoom in and retry."
+          : lastFailure.kind === "decode"
+            ? "The map download was incomplete or could not be decoded. Retry or select a smaller area."
+            : "Map features could not be downloaded. Streets, buildings and water effects are unavailable; retry the map download.";
+        throw new Error(message, { cause: lastFailure });
       }
       throw new Error("OSM features are temporarily unavailable.", {
         cause: lastFailure,

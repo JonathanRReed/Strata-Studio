@@ -9,7 +9,7 @@ import type {
   WaterType,
 } from "../engine/types.ts";
 import type { Scene, ScenePoint, Stroke, StrokeRole } from "../engine/scene.ts";
-import { sampleMask, normalizeGrid, clamp } from "../engine/grid.ts";
+import { sampleMask, sampleRasterMask, normalizeGrid, clamp } from "../engine/grid.ts";
 import { projectGeoPoint } from "../engine/grid.ts";
 import { hashSeed } from "../engine/noise.ts";
 
@@ -96,19 +96,19 @@ export function applyFeatureInfluence(
   let break_ = false;
 
   const sampleAt = (mask: Float32Array) =>
-    sampleMask(mask, masks.width, masks.height, u, v);
+    sampleRasterMask(mask, masks.width, masks.height, u, v);
 
   // Mask edge magnitude at (u, v): finite differences over one mask texel,
   // so a hard 0-to-1 boundary reads as ~1 and mask interiors read as 0.
   const edgeAt = (mask: Float32Array) => {
-    const eu = 1 / (masks.width - 1 || 1);
-    const ev = 1 / (masks.height - 1 || 1);
+    const eu = 1 / masks.width;
+    const ev = 1 / masks.height;
     const gx =
-      sampleMask(mask, masks.width, masks.height, clamp(u + eu, 0, 1), v) -
-      sampleMask(mask, masks.width, masks.height, clamp(u - eu, 0, 1), v);
+      sampleRasterMask(mask, masks.width, masks.height, clamp(u + eu, 0, 1), v) -
+      sampleRasterMask(mask, masks.width, masks.height, clamp(u - eu, 0, 1), v);
     const gy =
-      sampleMask(mask, masks.width, masks.height, u, clamp(v + ev, 0, 1)) -
-      sampleMask(mask, masks.width, masks.height, u, clamp(v - ev, 0, 1));
+      sampleRasterMask(mask, masks.width, masks.height, u, clamp(v + ev, 0, 1)) -
+      sampleRasterMask(mask, masks.width, masks.height, u, clamp(v - ev, 0, 1));
     return clamp(Math.hypot(gx, gy), 0, 1);
   };
 
@@ -426,15 +426,58 @@ export type RowPointResult = {
  * (spacing/compression apart, capped at MAX_ROWS), samples points via
  * pointFn, and splits row segments wherever pointFn reports a break.
  */
+/** Adaptive row samples retain thin map features without globally increasing terrain detail. */
+export function createFeatureAwareRowSampler(width: number, xStep: number, params: StyleParams, masks?: FeatureMasks): (v: number) => number[] {
+  // Keep terrain's chosen detail outside geographic features, but never let
+  // coarse row vertices step completely over a thin loaded road/building.
+  const activeMasks = masks ? [
+    [masks.building, params.buildingInfluence], [masks.road, params.roadInfluence],
+    [masks.water, params.waterInfluence], [masks.ocean, params.oceanInfluence],
+    [masks.lake, params.lakeInfluence], [masks.river, params.riverInfluence],
+  ].filter((entry) => (entry[1] as number) > 0).map((entry) => entry[0] as Float32Array) : [];
+  return (v) => {
+    const sampleXs = new Set<number>();
+    for (let x = 0; x < width; x += xStep) sampleXs.add(x);
+    sampleXs.add(Math.max(0, width - 1));
+    if (masks && activeMasks.length) {
+      const maskY = clamp(v * masks.height - 0.5, 0, masks.height - 1);
+      const y0 = Math.floor(maskY), y1 = Math.ceil(maskY);
+      for (let column = 0; column < masks.width; column++) {
+        const crossesFeature = activeMasks.some((mask) => {
+          for (const row of [y0, y1]) {
+            const offset = row * masks.width;
+            const center = mask[offset + column];
+            const left = mask[offset + Math.max(0, column - 1)];
+            const right = mask[offset + Math.min(masks.width - 1, column + 1)];
+            if (Math.max(center, left, right) >= 0.01 &&
+              (Math.abs(center - left) > 1e-6 || Math.abs(center - right) > 1e-6)) return true;
+          }
+          return false;
+        });
+        if (!crossesFeature) continue;
+        // Include the texel center and sub-texel threshold crossings. Sampling
+        // only whole output pixels can miss even a fully occupied thin mask.
+        for (let quarter = -3; quarter <= 3; quarter++) {
+          const x = ((column + 0.5 + quarter / 4) / masks.width) * (width - 1);
+          if (x >= 0 && x < width) sampleXs.add(x);
+        }
+      }
+    }
+    return [...sampleXs].sort((a, b) => a - b);
+  };
+}
+
 export function generateRowSegments(
   width: number,
   height: number,
   params: StyleParams,
   pointFn: (u: number, v: number, x: number, baseY: number) => RowPointResult,
+  masks?: FeatureMasks,
 ): WaveformRow[] {
   const rowStep = Math.max(params.spacing / clamp(params.compression, 0.5, 5), height / MAX_ROWS);
   const xStep = Math.max(1, Math.round((1.1 - clamp(params.detail, 0.1, 1)) * 10));
 
+  const rowSamples = createFeatureAwareRowSampler(width, xStep, params, masks);
   const rows: WaveformRow[] = [];
   for (let rowCount = 0; rowCount < MAX_ROWS; rowCount++) {
     const baseY = rowCount * rowStep;
@@ -443,7 +486,7 @@ export function generateRowSegments(
     const segments: RowPoint[][] = [];
     let currentSegment: RowPoint[] = [];
 
-    for (let x = 0; x < width; x += xStep) {
+    for (const x of rowSamples(v)) {
       const u = x / (width - 1 || 1);
       const r = pointFn(u, v, x, baseY);
       if (r.break_) {

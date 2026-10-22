@@ -12,6 +12,7 @@ export type AppErrorKind =
   | "rate-limited"
   | "area-too-large"
   | "all-tiles-failed"
+  | "incomplete-terrain"
   | "aborted"
   | "unknown";
 
@@ -30,13 +31,14 @@ export function classifyError(err: unknown): AppError {
   if (/all terrain tiles failed/i.test(message)) {
     return { kind: "all-tiles-failed", message };
   }
-  if (/too large/i.test(message)) {
+  if (/terrain coverage is incomplete/i.test(message)) return { kind: "incomplete-terrain", message };
+  if (/too large|exceeds the detailed map download limits/i.test(message)) {
     return { kind: "area-too-large", message };
   }
-  if (/too busy|rate limit/i.test(message)) {
+  if (/too busy|rate[- ]limit/i.test(message)) {
     return { kind: "rate-limited", message };
   }
-  if (/tile load (error|timeout)|timeout|fetch|network/i.test(message)) {
+  if (/tile load (error|timeout)|timeout|fetch|network|map features could not be downloaded|map download was incomplete/i.test(message)) {
     return { kind: "network", message };
   }
   return { kind: "unknown", message };
@@ -47,7 +49,8 @@ export function isRetryableError(error: AppError): boolean {
   return (
     error.kind === "network" ||
     error.kind === "rate-limited" ||
-    error.kind === "all-tiles-failed"
+    error.kind === "all-tiles-failed" ||
+    error.kind === "incomplete-terrain"
   );
 }
 

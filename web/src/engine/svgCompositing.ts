@@ -43,7 +43,7 @@ export function composeSvgPaints(
     } while (index < paints.length && paints[index].erase);
     index--;
     if (!bounds || erasers.length === 0) continue;
-    pixels += bounds.width * bounds.height * pixelScaleX * pixelScaleY;
+    pixels += 2 * bounds.width * bounds.height * pixelScaleX * pixelScaleY;
     if (defs.length >= 128 || pixels > 128 * 1024 * 1024) {
       throw new Error(
         "Transparent SVG is too complex; use PNG or reduce detail/export size",
@@ -51,10 +51,13 @@ export function composeSvgPaints(
     }
     const id = `knockout-${defs.length}`;
     const region = `x="${bounds.x}" y="${bounds.y}" width="${bounds.width}" height="${bounds.height}"`;
+    // WebKit bug 172338 applies group masks per child unless the composed
+    // prefix is isolated first. An inner identity filter creates that surface.
+    // https://bugs.webkit.org/show_bug.cgi?id=172338
     defs.push(
-      `<mask id="${id}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" style="mask-type:luminance" color-interpolation="sRGB" ${region}><rect ${region} fill="white"/>${erasers.join("")}</mask>`,
+      `<filter id="${id}-isolate" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB" ${region}><feColorMatrix type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0"/></filter><mask id="${id}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" style="mask-type:luminance" color-interpolation="sRGB" ${region}><rect ${region} fill="white"/>${erasers.join("")}</mask>`,
     );
-    content = `<g mask="url(#${id})">${content}</g>`;
+    content = `<g mask="url(#${id})"><g filter="url(#${id}-isolate)">${content}</g></g>`;
   }
   return { content, defs };
 }

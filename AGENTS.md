@@ -6,7 +6,7 @@ The repository intentionally has three independent Bun package boundaries and is
 
 - root: launch verification, Playwright, and CI orchestration;
 - `web/`: Vite + React static app deployed to Cloudflare Pages;
-- `workers/proxy/`: hardened Cloudflare Worker for terrain, canonical bbox-only Overpass, and health; social metadata uses static `web/public/og.png`.
+- `workers/proxy/`: hardened Cloudflare Worker for scalar/legacy terrain, bounded map-feature snapshots, optional raw Overpass, and health; social metadata uses static `web/public/og.png`.
 
 Use the Bun version pinned by `packageManager` in the root `package.json`. The `--cwd` flag belongs after the Bun subcommand, for example `bun run --cwd web test` and `bun install --cwd web --frozen-lockfile`.
 
@@ -57,7 +57,7 @@ bun run check:wrangler
 bun run test:launch:built
 ```
 
-Playwright launch tests use roles and stable accessible names, not pixel snapshots. Network fixtures must keep terrain and Overpass proxy-first and must not silently allow direct AWS/Overpass traffic.
+Playwright launch tests use roles and stable accessible names, not pixel snapshots. Network fixtures must keep scalar GeoTIFF terrain and map geometry proxy-first and must not silently allow direct AWS/Overpass traffic.
 
 ## Deployment
 
@@ -76,6 +76,6 @@ Do not commit, push, deploy, or modify Cloudflare resources unless the user expl
 ## Data sources
 
 - Basemap: OpenFreeMap vector styles through MapLibre.
-- Terrain: Mapzen/Tilezen Terrarium tiles on AWS Open Data, reached through the proxy in production.
-- OSM features: Overpass, proxy-first with direct mirrors retained only as runtime fallback.
+- Terrain: Native 512px Tilezen scalar GeoTIFF (source zooms 0–14) on AWS Open Data through `/terrain-geotiff`. The configured legacy `/terrain` base is adapted by the client. Never interpolate encoded RGB or reuse legacy PNG-derived cache entries.
+- OSM features: protected OpenFreeMap z14 snapshots via `/map-features` are primary. Raw Overpass is off the production critical path. Missing geometry means an incomplete preview and must block artwork exports.
 - Geocoding: policy-compliant one-shot Nominatim requests.
