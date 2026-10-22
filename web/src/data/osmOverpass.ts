@@ -357,6 +357,13 @@ export function overpassToGeoJSON(
     if (coords.length < 2) continue;
 
     const tags = way.tags ?? {};
+    // Recursive relation output includes untagged member ways. They support
+    // relation geometry but are not evidence of standalone buildings.
+    if (
+      tags.building === undefined && tags.highway === undefined &&
+      tags.natural !== "water" && tags.natural !== "coastline" &&
+      tags.waterway === undefined
+    ) continue;
     const strataType = classifyFeature(tags);
     const waterType = classifyWaterType(tags);
 
