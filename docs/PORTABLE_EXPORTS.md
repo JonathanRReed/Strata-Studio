@@ -1,5 +1,12 @@
 # Portable export reliability
 
+Browser integration verification also exercises the production APNG bundle in
+a worker-like realm without `window`, `require`, or `module`. UPNG's legacy
+runtime CommonJS detection is patched to unconditional package imports because
+bundlers rewrite require calls but can leave their environment guards intact.
+Real download tests surface export alerts immediately instead of misreporting
+an initialization exception as a long encoding timeout.
+
 APNG compression runs in an on-demand module worker instead of blocking the UI.
 Cancel, worker failure, timeout, and success all terminate the worker. Frames are
 transferred rather than copied where safe; duplicated or sliced backing buffers

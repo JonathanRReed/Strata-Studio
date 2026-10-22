@@ -1,4 +1,5 @@
 import Pbf from "../../web/node_modules/pbf/index.js";
+import { createHash } from "node:crypto";
 import { test, expect } from "./fixtures";
 import {
   encodeMapTileBundle,
@@ -153,8 +154,29 @@ for (const style of ["ridge", "waveform-terrain"])
       ),
     ).toBeVisible();
     const canvas = page.getByRole("img", { name: /artwork of/i });
-    const pixels = () =>
-      canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
+    // Completed terrain adds elevation metadata beneath the artboard; font
+    // metrics can also change its available height. Wait for the debounced
+    // backing-store resize, not just the fetch, before taking a pixel baseline.
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    await expect.poll(() => canvas.evaluate((element) => {
+      const c = element as HTMLCanvasElement;
+      const frame = c.parentElement!;
+      const container = frame.parentElement!;
+      const css = getComputedStyle(frame);
+      const insetX = parseFloat(css.paddingLeft) + parseFloat(css.paddingRight)
+        + parseFloat(css.borderLeftWidth) + parseFloat(css.borderRightWidth);
+      const insetY = parseFloat(css.paddingTop) + parseFloat(css.paddingBottom)
+        + parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth);
+      // This composition is square. Measure the available container, not the
+      // canvas's still-stale CSS size before ResizeObserver has run.
+      const size = Math.round(Math.max(1, Math.floor(Math.min(
+        container.clientWidth - insetX, container.clientHeight - insetY,
+      ))) * devicePixelRatio);
+      return c.width === size && c.height === size;
+    })).toBe(true);
+    const pixels = async () => createHash("sha256").update(
+      await canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL()),
+    ).digest("hex");
     const baseline = await pixels();
     for (const name of ["Building", "Road", "Water"]) {
       await page

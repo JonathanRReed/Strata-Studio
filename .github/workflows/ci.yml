@@ -61,6 +61,9 @@ jobs:
       - name: Build production fixture and assert proxy-first bundle
         run: bun run build
 
+      - name: Verify bundled APNG worker without CommonJS or window globals
+        run: node --test scripts/apng-bundle-regression.mjs
+
       - name: Dry-run the proxy Worker bundle
         run: bun run check:wrangler
 

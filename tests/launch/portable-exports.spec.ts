@@ -31,7 +31,12 @@ test("@smoke APNG worker downloads a complete animation at preview speed", async
   const { dialog, speed } = await prepareAnimation(page);
   const downloadPromise = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "Export", exact: true }).click();
-  const download = await downloadPromise,
+  const download = await Promise.race([
+    downloadPromise,
+    dialog.getByRole("alert").waitFor({ state: "visible" }).then(async () => {
+      throw new Error(`APNG export failed: ${await dialog.getByRole("alert").innerText()}`);
+    }),
+  ]),
     path = await download.path();
   if (!path) throw new Error("APNG download missing");
   const bytes = await readFile(path);
