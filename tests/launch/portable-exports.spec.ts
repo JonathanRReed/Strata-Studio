@@ -130,14 +130,22 @@ test("@smoke poster SVG carries its licensed fonts for standalone viewing", asyn
   expect(parsed.fonts).toContain("IBM Plex Mono");
   // A fresh SVG document must load its own embedded faces. The app's loaded
   // CSS/fonts cannot make this check pass for broken standalone font data.
-  const standaloneUrl = await page.evaluate(
-    (source) =>
-      URL.createObjectURL(new Blob([source], { type: "image/svg+xml" })),
-    svg,
-  );
+  // Serve the exact downloaded bytes as an independent SVG document. WebKit
+  // rejects navigation to another tab's blob URL in this test environment.
+  const standaloneUrl = new URL("/__downloaded-poster.svg", page.url()).href;
   const standalone = await page.context().newPage();
+  const externalResources: string[] = [];
   try {
+    await standalone.route("**/*", (route) => {
+      if (route.request().url() === standaloneUrl) return route.fulfill({
+        contentType: "image/svg+xml", body: svg,
+      });
+      externalResources.push(route.request().url());
+      return route.abort();
+    });
     await standalone.goto(standaloneUrl);
+    expect(await standalone.evaluate(() => document.documentElement.namespaceURI))
+      .toBe("http://www.w3.org/2000/svg");
     const loaded = await standalone.evaluate(async () => {
       const title = await document.fonts.load(
         '650 48px "Archivo Variable"',
@@ -156,9 +164,9 @@ test("@smoke poster SVG carries its licensed fonts for standalone viewing", asyn
       expect(face.count).toBeGreaterThan(0);
       expect(face.loaded).toBe(true);
     }
+    expect(externalResources).toEqual([]);
   } finally {
     await standalone.close();
-    await page.evaluate((url) => URL.revokeObjectURL(url), standaloneUrl);
   }
   expect(pageErrors).toEqual([]);
 });

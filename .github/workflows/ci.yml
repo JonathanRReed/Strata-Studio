@@ -124,7 +124,11 @@ jobs:
           retention-days: 7
 
   broad-launch:
-    name: Browser and accessibility coverage
+    name: Browser coverage (${{ matrix.browser }})
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [firefox, webkit]
     # Map decoding and compositing must pass all engines before merging.
     needs: verify
     runs-on: ubuntu-latest
@@ -156,12 +160,13 @@ jobs:
           name: web-dist
           path: web/dist
 
-      - name: Run Firefox and WebKit launch smoke
-        run: bun run test:launch:browsers
+      - name: Run ${{ matrix.browser }} launch smoke
+        run: bun run playwright test --project=${{ matrix.browser }} --grep @smoke
         env:
           HOME: /root
 
       - name: Run Chromium accessibility gate
+        if: matrix.browser == 'firefox'
         run: bun run test:launch:a11y
         env:
           HOME: /root
@@ -170,7 +175,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-broad-diagnostics
+          name: playwright-${{ matrix.browser }}-diagnostics
           path: |
             playwright-report
             test-results
