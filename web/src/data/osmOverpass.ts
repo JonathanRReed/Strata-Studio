@@ -443,7 +443,8 @@ export function proxyOverpassUrl(endpoint: string, bounds: GeoBounds): string {
 }
 
 function boundsCacheKey(bounds: GeoBounds): string {
-  return `v4:${canonicalProxyBboxParams(bounds)}`;
+  // Older caches may contain a partial result accepted before remark validation.
+  return `v5:${canonicalProxyBboxParams(bounds)}`;
 }
 
 /** Overpass API instances, each attempted at most once after the proxy. */
@@ -497,11 +498,13 @@ function validateOverpassPayload(value: unknown): { elements: OverpassElement[] 
   if (
     typeof value !== "object" ||
     value === null ||
-    !Array.isArray((value as { elements?: unknown }).elements)
+    !Array.isArray((value as { elements?: unknown }).elements) ||
+    // Overpass can return HTTP 200 with partial elements plus a runtime remark.
+    "remark" in value
   ) {
     throw new RequestPolicyError(
       "decode",
-      "Overpass response is missing an elements array",
+      "Overpass response is incomplete or missing an elements array",
       { retryable: true },
     );
   }

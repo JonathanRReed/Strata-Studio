@@ -331,6 +331,23 @@ describe("browser Overpass fallback policy", () => {
     expect(cacheWrites).toBe(0);
   });
 
+  test("rejects partial HTTP 200 data and never caches it", async () => {
+    let cacheWrites = 0;
+    let requestedKey = "";
+    const fetcher = createOsmFeatureFetcher({
+      endpoints: [{ url: "https://proxy.test/overpass", kind: "proxy" }],
+      fetch: async () => new Response('{"elements":[],"remark":"runtime error: Query timed out"}', {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }),
+      getCached: async (key) => { requestedKey = key; return undefined; },
+      setCached: async () => { cacheWrites++; },
+      runtime: new FakeRuntime(),
+    });
+    await expect(fetcher(BOUNDS)).rejects.toThrow("OSM features are temporarily unavailable");
+    expect(cacheWrites).toBe(0);
+    expect(requestedKey.startsWith("v5:")).toBe(true);
+  });
+
   test("the total deadline aborts in-flight fallback work", async () => {
     const runtime = new FakeRuntime();
     const signals: AbortSignal[] = [];

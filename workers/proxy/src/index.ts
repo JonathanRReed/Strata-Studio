@@ -84,7 +84,9 @@ const defaultRuntime: WorkerRuntime = {
   terrainRouteTimeoutMs: 12_000,
   terrainUpstreamTimeoutMs: 8_000,
   overpassRouteTimeoutMs: 22_000,
-  overpassUpstreamTimeoutMs: 9_000,
+  // Public Overpass can queue a request for up to 15 seconds. Permit that
+  // queue without increasing the unchanged 22-second whole-route ceiling.
+  overpassUpstreamTimeoutMs: 18_000,
 };
 
 type FailureCode =
@@ -532,6 +534,8 @@ function isValidOverpassJson(body: Uint8Array): boolean {
     return (
       isRecord(value) &&
       Array.isArray(value.elements) &&
+      // HTTP 200 does not guarantee completeness after an Overpass timeout.
+      !("remark" in value) &&
       value.elements.every(isValidOverpassElement)
     );
   } catch {
