@@ -108,3 +108,13 @@ Build information must report `dataPolicy: "proxy-first"`, the deployment `appOr
 Open the site and check that the daily artwork renders. Choose Manhattan and confirm proxy-backed loading. Switch from Classic Studio to Experimental Lab, change a preset, add a Composition label, and verify the caption and canvas accessible name.
 
 Export a 1024 PNG and inspect its filename and image. Open a shared composition URL in a private window and confirm that place, style, seed, palette, and parameters restore. Check both health endpoints before signing off.
+
+### Verify a deployed site's data configuration
+
+Run `bun run check:deployment https://your-strata-domain.example` against the
+actual URL visitors use. This read-only preflight reads public build metadata
+and tests proxy health with that site's browser origin. It fails if CORS rejects
+the origin or either data route is disabled, even when `/health` returns 200.
+It does not change Cloudflare settings or replace live browser/export testing.
+See [the deployment audit](docs/deployment-audit-2026-10-22.md) for the observed
+custom-domain failure and the protection-preserving repair requirements.
