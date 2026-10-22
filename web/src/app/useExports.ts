@@ -22,6 +22,7 @@ import {
   type ExportProgress,
 } from "../engine/animationExport.ts";
 import { DEFAULT_FRAMES } from "../engine/animation.ts";
+import { embedPosterFonts } from "../engine/svgFonts.ts";
 import { ensurePosterFonts } from "../engine/posterFonts.ts";
 import type {
   ArtworkInput,
@@ -385,7 +386,9 @@ export function useExports({
           width: logical.width,
           height: logical.height,
         });
-        const svg = renderStyleSvg(styleId, input, params, allPalettes, params.transparent, { width, height });
+        if (params.label && params.labelStyle === "poster") await ensurePosterFonts(operation.signal);
+        let svg = renderStyleSvg(styleId, input, params, allPalettes, params.transparent, { width, height });
+        svg = await embedPosterFonts(svg, operation.signal);
         operation.throwIfAborted();
         const filename = exportFilename(styleId, params.seed, width, height, "svg");
         const receipt = downloadSvgWithAttribution(

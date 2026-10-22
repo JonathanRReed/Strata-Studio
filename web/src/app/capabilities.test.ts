@@ -52,10 +52,14 @@ describe("capability matrix", () => {
     expect(DEFAULT_FRAMES).toBe(24);
   });
 
-  it("keeps GIF and APNG encoders behind dynamic import boundaries", async () => {
+  it("keeps GIF lazy and APNG isolated in its on-demand worker", async () => {
     const source = await Bun.file(new URL("../engine/animationExport.ts", import.meta.url)).text();
     expect(source).toContain('import("gifenc")');
-    expect(source).toContain('import("upng-js")');
+    const bridge = await Bun.file(new URL("../engine/apngWorker.ts", import.meta.url)).text();
+    const worker = await Bun.file(new URL("../engine/apng.worker.ts", import.meta.url)).text();
+    expect(bridge).toContain('new Worker(new URL("./apng.worker.ts", import.meta.url)');
+    expect(worker).toContain('from "upng-js"');
+    expect(bridge).not.toMatch(/from\s+["']upng-js["']/);
     expect(source).not.toMatch(/from\s+["']gifenc["']/);
     expect(source).not.toMatch(/from\s+["']upng-js["']/);
   });
