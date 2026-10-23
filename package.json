@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "engines": {
-    "bun": "1.4.3"
+    "bun": "1.4.4",
+    "node": ">=24.22.1 <25"
   },
   "scripts": {
     "install:frozen": "bun install --frozen-lockfile && bun install --cwd web --frozen-lockfile && bun install --cwd workers/proxy --frozen-lockfile",
@@ -32,7 +33,8 @@
     "test:launch:all": "playwright test",
     "verify:launch": "bun run install:frozen && bun run lint && bun run test:bun-check && bun run typecheck:proxy && bun run test:unit && bun run build:fixture && bun run check:wrangler && bun run test:launch:built",
     "check:deployment": "bun scripts/deploymentHealth.ts",
-    "test:deployment": "bun test scripts/deploymentHealth.test.ts"
+    "test:deployment": "bun test scripts/deploymentHealth.test.ts",
+    "audit": "bun audit && bun audit --production && bun run --cwd web audit && bun run --cwd workers/proxy audit"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",

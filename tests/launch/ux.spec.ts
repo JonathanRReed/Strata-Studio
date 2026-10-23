@@ -387,6 +387,10 @@ test("@smoke first-session guide never covers the artwork across supported layou
       viewport.width,
     );
   }
+  // Observe the deferred resize/moveend callback, not just the immediate layout.
+  await page.waitForTimeout(500);
+  await expect(guide).toBeVisible();
+  expect(await page.evaluate((key) => localStorage.getItem(key), ORIENTATION_KEY)).toBeNull();
 });
 
 test("@smoke dialog fallback traps focus, inerts background, restores openers, and copies links", async ({

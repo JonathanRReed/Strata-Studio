@@ -6,7 +6,7 @@ Root tooling, `web/`, and `workers/proxy/` are three independent Bun packages, n
 
 ## Run locally
 
-Requires Bun 1.4.3 and Playwright Chromium for launch tests.
+Requires the Bun version pinned by `packageManager` in `package.json`, the Node version in `.node-version`, and Playwright Chromium for launch tests.
 
 ```bash
 bun run install:frozen

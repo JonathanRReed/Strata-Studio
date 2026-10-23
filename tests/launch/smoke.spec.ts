@@ -139,6 +139,74 @@ test("@smoke artwork boots and location choices work without the map chunk", asy
   expect(directDataRequests(externalRequests)).toEqual([]);
 });
 
+test("@smoke MapLibre loads its same-origin module worker", async ({
+  page,
+  externalRequests,
+  pageErrors,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Worker startup is verified with Chromium WebGL2.");
+  const workerUrls: string[] = [];
+  page.on("worker", (worker) => workerUrls.push(worker.url()));
+  await page.route("https://tiles.openfreemap.org/styles/dark", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    headers: { "Access-Control-Allow-Origin": "*" },
+    body: JSON.stringify({
+      version: 8,
+      sources: {
+        fixture: {
+          type: "geojson",
+          data: {
+            type: "Feature",
+            properties: {},
+            geometry: { type: "Point", coordinates: [-122.4783, 37.8199] },
+          },
+        },
+      },
+      layers: [
+        { id: "background", type: "background", paint: { "background-color": "#101014" } },
+        { id: "point", type: "circle", source: "fixture", paint: { "circle-radius": 8 } },
+      ],
+    }),
+  }));
+  await page.goto("/");
+  await expect(page.getByLabel("Interactive area selection map")).toBeVisible();
+  await expect.poll(() => workerUrls.some((url) => url.includes("maplibre-gl-worker"))).toBe(true);
+  // The load event requires successful source processing, not just Worker construction.
+  await expect(page.getByLabel("Map for area selection", { exact: true })).toHaveAttribute("aria-busy", "false", { timeout: 15_000 });
+  const mapWorkers = workerUrls.filter((url) => url.includes("maplibre-gl-worker"));
+  for (const url of mapWorkers) {
+    expect(new URL(url).origin).toBe(new URL(page.url()).origin);
+    expect(new URL(url).pathname).toMatch(/\/assets\/maplibre-gl-worker-[^/]+\.js$/);
+  }
+  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({ timeout: 20_000 });
+  await expect(page.getByLabel("Map unavailable")).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(directDataRequests(externalRequests)).toEqual([]);
+});
+
+test("@smoke WebGL1-only devices use the functional map fallback", async ({ page, pageErrors }) => {
+  await page.addInitScript(() => {
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    let webGl1Probes = 0;
+    Object.defineProperty(window, "__strataWebGl1Probes", { get: () => webGl1Probes });
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: function (this: HTMLCanvasElement, contextId: string, ...args: unknown[]) {
+        if (contextId === "webgl2") return null;
+        if (contextId === "webgl") webGl1Probes++;
+        return Reflect.apply(originalGetContext, this, [contextId, ...args]);
+      },
+    });
+  });
+  await page.goto("/");
+  await expect(page.getByLabel("Map unavailable")).toBeVisible();
+  await expect(page.getByText("WebGL2 is unavailable in this browser or device")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({ timeout: 20_000 });
+  expect(await page.evaluate(() => (window as Window & { __strataWebGl1Probes: number }).__strataWebGl1Probes)).toBe(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test("@smoke artwork continues when WebGL is unavailable", async ({
   page,
   externalRequests,

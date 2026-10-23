@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   buildCapabilityMatrix,
+  supportsMapWebGl,
   supportedAnimationFormats,
   supportedExportFormats,
   type CapabilityProbe,
@@ -62,5 +63,27 @@ describe("capability matrix", () => {
     expect(bridge).not.toMatch(/from\s+["']upng-js["']/);
     expect(source).not.toMatch(/from\s+["']gifenc["']/);
     expect(source).not.toMatch(/from\s+["']upng-js["']/);
+  });
+});
+
+
+describe("MapLibre WebGL2 requirement", () => {
+  it("does not treat a WebGL1-only device as map-capable", () => {
+    const requested: string[] = [];
+    const canvas = { getContext: (kind: string) => {
+      requested.push(kind);
+      return kind === "webgl" ? {} : null;
+    } } as Pick<HTMLCanvasElement, "getContext">;
+    expect(supportsMapWebGl(canvas)).toBe(false);
+    expect(requested).toEqual(["webgl2"]);
+  });
+
+  it("accepts WebGL2 and handles unavailable or throwing contexts", () => {
+    const supported = { getContext: () => ({}) } as unknown as Pick<HTMLCanvasElement, "getContext">;
+    const unavailable = { getContext: () => null } as Pick<HTMLCanvasElement, "getContext">;
+    const throwing = { getContext: () => { throw new Error("GPU unavailable"); } };
+    expect(supportsMapWebGl(supported)).toBe(true);
+    expect(supportsMapWebGl(unavailable)).toBe(false);
+    expect(supportsMapWebGl(throwing)).toBe(false);
   });
 });

@@ -52,10 +52,19 @@ export function buildCapabilityMatrix(probe: CapabilityProbe): CapabilityMatrix 
   };
 }
 
+/** The map selector requires WebGL2; canvas artwork/export does not. */
+export function supportsMapWebGl(canvas: Pick<HTMLCanvasElement, "getContext">): boolean {
+  try {
+    return Boolean(canvas.getContext("webgl2"));
+  } catch {
+    return false;
+  }
+}
+
 function probeWebGl(): boolean {
   try {
     const canvas = document.createElement("canvas");
-    return Boolean(canvas.getContext("webgl2") || canvas.getContext("webgl"));
+    return supportsMapWebGl(canvas);
   } catch {
     return false;
   }
