@@ -1,5 +1,6 @@
 import type { AspectRatio, GeoBounds } from "../engine/types.ts";
 import type { CuratedPlace } from "../data/places.ts";
+import type { MapSelectionCause } from "../components/mapSelectionTypes.ts";
 import type { ParsedShareState } from "./urlState.ts";
 import {
   deriveSelectionBounds,
@@ -72,18 +73,19 @@ export function mapSelectionAcknowledgesFlyTo(
   );
 }
 
-/** Validates a map report and identifies equal boot-bound synchronization. */
+/** Camera echoes are tolerant; explicit zoom intent preserves exact bounds. */
 export function reconcileMapSelection(
   activeBounds: GeoBounds,
   reportedBounds: unknown,
   reportedZoom: unknown,
   fallbackZoom: number,
+  cause: MapSelectionCause = "restore",
 ): MapSelectionReconciliation | null {
   const bounds = validateGeoBounds(reportedBounds);
   if (!bounds) return null;
   return {
     bounds,
     zoom: normalizeMapZoom(reportedZoom, fallbackZoom),
-    changed: !geoBoundsEquivalent(activeBounds, bounds),
+    changed: !geoBoundsEquivalent(activeBounds, bounds, cause === "zoom" ? 0 : undefined),
   };
 }

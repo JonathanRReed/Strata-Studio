@@ -14,6 +14,7 @@ export type FlyToRequest = {
 export type MapSelectionCause =
   | "restore"
   | "manual"
+  | "zoom"
   | "search"
   | "curated"
   | "aspect";

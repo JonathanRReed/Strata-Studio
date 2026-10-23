@@ -118,3 +118,12 @@ describe("initial generation and map synchronization", () => {
     ).toBeNull();
   });
 });
+
+test("camera echoes keep their tolerance while explicit zoom honors exact bounds", () => {
+  const shifted = { ...EXACT_BOUNDS, west: EXACT_BOUNDS.west + 0.000001 };
+  for (const cause of ["manual", "restore", "aspect", "curated", "search"] as const) {
+    expect(reconcileMapSelection(EXACT_BOUNDS, shifted, 12, 11, cause)?.changed).toBe(false);
+  }
+  expect(reconcileMapSelection(EXACT_BOUNDS, shifted, 12, 11, "zoom")?.changed).toBe(true);
+  expect(reconcileMapSelection(EXACT_BOUNDS, { ...EXACT_BOUNDS }, 12, 11, "zoom")?.changed).toBe(false);
+});
