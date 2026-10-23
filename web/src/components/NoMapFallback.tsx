@@ -12,9 +12,12 @@ import {
   deriveSelectionBounds,
   getMercatorBoundsCenter,
   MAX_SEARCH_QUERY_LENGTH,
+  MAX_MAP_ZOOM,
+  MIN_MAP_ZOOM,
   normalizeMapCenter,
   normalizeMapZoom,
   sanitizeSearchQuery,
+  zoomSelectionBounds,
 } from "../app/stateSafety.ts";
 import type { MapSelectionCause, MapSelectionProps } from "./mapSelectionTypes.ts";
 import { useNominatimSearch } from "../app/useNominatimSearch.ts";
@@ -77,6 +80,12 @@ export function NoMapFallback({
     [selectCenter],
   );
   const locationSearch = useNominatimSearch({ onResult: handleSearchResult });
+
+  const zoomBy = useCallback((delta: number) => {
+    const nextZoom = normalizeMapZoom(zoom + delta, zoom);
+    if (nextZoom === zoom) return;
+    onChange(zoomSelectionBounds(bounds, zoom, nextZoom), nextZoom, "manual");
+  }, [bounds, onChange, zoom]);
 
   const selectPlace = useCallback(
     (place: CuratedPlace) => {
@@ -160,6 +169,25 @@ export function NoMapFallback({
           >
             <span aria-hidden="true">{expanded ? "✕" : "⤢"}</span>
           </button>
+        </div>
+        <div role="group" aria-label="Map zoom" className="flex items-center justify-between gap-2 border-t border-hairline px-3">
+          <span className="instrument-label text-ink-muted">Zoom</span>
+          <div className="flex">
+            <button
+              type="button"
+              aria-label="Zoom out"
+              disabled={zoom <= MIN_MAP_ZOOM}
+              onClick={() => zoomBy(-1)}
+              className="press flex h-11 w-11 items-center justify-center text-ink-muted hover:text-ink disabled:opacity-40"
+            >−</button>
+            <button
+              type="button"
+              aria-label="Zoom in"
+              disabled={zoom >= MAX_MAP_ZOOM}
+              onClick={() => zoomBy(1)}
+              className="press flex h-11 w-11 items-center justify-center text-ink-muted hover:text-ink disabled:opacity-40"
+            >+</button>
+          </div>
         </div>
         <form onSubmit={handleSubmit} className="flex items-center border-t border-hairline">
           <input

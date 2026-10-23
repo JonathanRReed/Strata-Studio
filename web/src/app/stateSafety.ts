@@ -247,6 +247,38 @@ export function getMercatorBoundsCenter(bounds: GeoBounds): [number, number] {
   ];
 }
 
+/** Scale the exact active selection, including viewport-dependent share bounds.
+ * A non-wrapping selection cannot expand past a world edge while retaining its
+ * center, so cap both spans together there rather than wrap or move the area.
+ */
+export function zoomSelectionBounds(
+  bounds: GeoBounds,
+  currentZoom: number,
+  requestedZoom: number,
+): GeoBounds {
+  const fromZoom = normalizeMapZoom(currentZoom, 11);
+  const toZoom = normalizeMapZoom(requestedZoom, fromZoom);
+  if (fromZoom === toZoom) return bounds;
+  const centerX = (bounds.west + bounds.east) / 2;
+  const halfX = (bounds.east - bounds.west) / 2;
+  const northY = mercatorY(bounds.north);
+  const southY = mercatorY(bounds.south);
+  const centerY = (northY + southY) / 2;
+  const halfY = (southY - northY) / 2;
+  const maxScale = Math.max(1, Math.min(
+    (180 - Math.abs(centerX)) / halfX,
+    Math.min(centerY, 1 - centerY) / halfY,
+  ));
+  const scale = Math.min(2 ** (fromZoom - toZoom), maxScale);
+  if (scale === 1) return bounds;
+  return {
+    west: clamp(centerX - halfX * scale, -180, 180),
+    east: clamp(centerX + halfX * scale, -180, 180),
+    north: latitudeFromMercatorY(centerY - halfY * scale),
+    south: latitudeFromMercatorY(centerY + halfY * scale),
+  };
+}
+
 /**
  * Pure deterministic selection for fresh and legacy center/zoom boots. Exact
  * validated share bounds bypass this helper and remain the source of truth.
