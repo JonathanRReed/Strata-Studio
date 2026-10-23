@@ -446,3 +446,35 @@ test("@smoke primary map tiles expose snapshot provenance and preserves SVG attr
   expect(directDataRequests(externalRequests)).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
+
+test("@smoke no-WebGL mountain selection recovers from the feature area limit by zooming in", async ({ page, pageErrors }) => {
+  await page.addInitScript(() => {
+    const original = HTMLCanvasElement.prototype.getContext;
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: function (this: HTMLCanvasElement, contextId: string, ...args: unknown[]) {
+        return contextId === "webgl" || contextId === "webgl2"
+          ? null : Reflect.apply(original, this, [contextId, ...args]);
+      },
+    });
+  });
+  await page.goto("/");
+  await expect(page.getByLabel("Map unavailable")).toBeVisible();
+  await page.getByRole("button", { name: "Expand map", exact: true }).first().click();
+  await page.getByRole("button", { name: "Yosemite Valley California, USA", exact: true }).click();
+  await page.getByRole("button", { name: "Collapse map", exact: true }).click();
+  await expect(page.getByLabel("Map unavailable")).toBeVisible();
+  await expect(page.getByText(/Incomplete preview: selected area is too large/)).toBeVisible();
+  await expect(page.getByText("Loading required streets, buildings and water…", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Export…", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Export", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Close export dialog", exact: true }).click();
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await expect(page.getByText(/Incomplete preview: selected area is too large/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Regenerate now" })).toBeEnabled({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "Features loaded", exact: true })).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Export…", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Export", exact: true })).toBeEnabled();
+  expect(sharedComposition(page.url())?.bounds).toBeTruthy();
+  expect(pageErrors).toEqual([]);
+});

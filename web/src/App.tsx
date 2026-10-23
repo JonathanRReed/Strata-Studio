@@ -43,6 +43,7 @@ import {
 } from "./app/bootSelection.ts";
 import { normalizeStyleParams } from "./app/stateSafety.ts";
 import { detectCapabilities } from "./app/capabilities.ts";
+import { mapDataNotice } from "./app/dataCompleteness.ts";
 import { ensurePosterFonts } from "./engine/posterFonts.ts";
 import {
   prepareImportedComposition,
@@ -650,8 +651,8 @@ export default function App() {
         hasArtwork={terrain.hasGenerated}
         isGenerating={isGenerating}
         statusText={statusText}
-        mapDataNotice={osm.status.phase === "done" && osm.features ? null : osm.status.phase === "error" ? "Incomplete preview: streets, buildings and water could not be loaded." : "Loading required streets, buildings and water…"}
-        onRetryMapData={osm.status.phase === "error" ? () => void fetchFeatures(true) : undefined}
+        mapDataNotice={mapDataNotice(bounds, osm.status, osm.features)}
+        onRetryMapData={osm.status.phase === "error" && isBboxSmallEnough(bounds) ? () => void fetchFeatures(true) : undefined}
         boundsDirty={terrain.boundsDirty}
         onRegenerate={handleGenerate}
         seed={params.seed}
