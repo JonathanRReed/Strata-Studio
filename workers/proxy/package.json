@@ -11,11 +11,12 @@
     "check:bundle": "bun run check:config && wrangler deploy --dry-run --outdir .wrangler/dry-run --metafile && bun run scripts/assert-bundle.ts .wrangler/dry-run",
     "test": "bun test",
     "typecheck": "node ../../scripts/bun-check.mjs",
-    "typecheck:tsc": "tsc --noEmit"
+    "typecheck:tsc": "tsc --noEmit",
+    "audit": "bun audit && bun audit --production"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260710.1",
-    "typescript": "^5.6.0",
-    "wrangler": "^4.110.0"
+    "@cloudflare/workers-types": "^5.20261023.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.152.0"
   }
 }

@@ -6,7 +6,8 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from "react";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
+import mapWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import type { GeoBounds } from "../engine/types.ts";
 import { normalizeBounds } from "../engine/projection.ts";
 import {
@@ -28,6 +29,9 @@ import { useNominatimSearch } from "../app/useNominatimSearch.ts";
 import type { MapSelectionCause, MapSelectionProps } from "./mapSelectionTypes.ts";
 
 import "maplibre-gl/dist/maplibre-gl.css";
+
+// Vite must emit the v6 module worker as a same-origin asset, not a CDN URL.
+maplibregl.setWorkerUrl(mapWorkerUrl);
 
 // OpenFreeMap vector basemap (free, keyless, commercial use allowed).
 // Swappable: other styles include /styles/positron, /styles/bright,
@@ -135,6 +139,7 @@ export default function MapSelector({
   const [showResultMarker, setShowResultMarker] = useState(false);
   const [mapFailure, setMapFailure] = useState<MapFailure | null>(null);
   const [mapAttempt, setMapAttempt] = useState(0);
+  const [mapReady, setMapReady] = useState(false);
 
   const queryRef = useRef("");
   const markerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -279,11 +284,12 @@ export default function MapSelector({
     if (!container || mapRef.current) return;
 
     if (!webGlAvailable()) {
-      setMapFailure({ message: "WebGL is unavailable in this browser or device" });
+      setMapFailure({ message: "WebGL2 is unavailable in this browser or device" });
       return;
     }
 
     setMapFailure(null);
+    setMapReady(false);
     let map: maplibregl.Map;
     try {
       map = new maplibregl.Map({
@@ -292,6 +298,8 @@ export default function MapSelector({
         center: normalizeMapCenter(initialCenter, [-122.4194, 37.7749]),
         zoom: normalizeMapZoom(initialZoom, 11),
         attributionControl: false,
+        // Preserve the v5 selector's vector-tile overscaling while migrating.
+        zoomLevelsToOverscale: undefined,
       });
     } catch (error) {
       setMapFailure({ message: mapErrorMessage(error) });
@@ -401,6 +409,7 @@ export default function MapSelector({
     function handleLoad() {
       if (disposed || removed) return;
       loaded = true;
+      setMapReady(true);
       if (loadTimeout !== null) clearTimeout(loadTimeout);
       setMapFailure(null);
       // Force a resize after the container has proper dimensions, then fit the
@@ -616,6 +625,7 @@ export default function MapSelector({
           ref={containerRef}
           style={{ position: "absolute", inset: 0, background: "var(--color-ground)" }}
           aria-label="Map for area selection"
+          aria-busy={!mapReady}
         />
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div

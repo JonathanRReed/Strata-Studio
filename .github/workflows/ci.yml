@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BUN_VERSION: "1.4.3"
+  BUN_VERSION: "1.4.4"
   VITE_APP_ORIGIN: "https://strata-studio.example"
   VITE_TERRAIN_TILE_URL: "https://strata-proxy.example/terrain"
   VITE_OVERPASS_URL: "https://strata-proxy.example/overpass"
@@ -27,6 +27,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -42,6 +46,9 @@ jobs:
 
       - name: Install all package boundaries from lockfiles
         run: bun run install:frozen
+
+      - name: Audit all package boundaries
+        run: bun run audit
 
       - name: Check pinned Bun version
         run: test "$(bun --version)" = "$BUN_VERSION"
@@ -85,6 +92,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
 
       - name: Install pinned Bun in the browser image
         # The official Playwright image intentionally omits unzip.
@@ -138,6 +149,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
 
       - name: Install pinned Bun in the browser image
         # The official Playwright image intentionally omits unzip.
