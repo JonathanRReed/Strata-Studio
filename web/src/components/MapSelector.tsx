@@ -26,6 +26,7 @@ import {
 import { NoMapFallback } from "./NoMapFallback.tsx";
 import { detectCapabilities } from "../app/capabilities.ts";
 import { useNominatimSearch } from "../app/useNominatimSearch.ts";
+import { resolveMapMoveCause } from "./mapSelectionCause.ts";
 import type { MapSelectionCause, MapSelectionProps } from "./mapSelectionTypes.ts";
 
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -347,9 +348,9 @@ export default function MapSelector({
     };
     reportSelectionRef.current = handleUpdate;
 
-    const debouncedHandleUpdate = () => {
+    const debouncedHandleUpdate = (event: { originalEvent?: unknown }) => {
       if (!frameSettledRef.current) return;
-      queuedCause = pendingMoveCauseRef.current ?? "manual";
+      queuedCause = resolveMapMoveCause(pendingMoveCauseRef.current, event.originalEvent);
       pendingMoveCauseRef.current = null;
       if (updateTimeout !== null) clearTimeout(updateTimeout);
       updateTimeout = setTimeout(() => handleUpdate(queuedCause), 200);
