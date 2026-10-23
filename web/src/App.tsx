@@ -287,6 +287,7 @@ export default function App() {
         newBounds,
         zoom,
         boot.selection.zoom,
+        cause,
       );
       if (!selection) return;
       const pendingFlyTo = mapFlyToRef.current;
@@ -301,7 +302,7 @@ export default function App() {
       // floating-point echo must synchronize the camera without invalidating
       // or generating the same selection a second time.
       if (!selection.changed) return;
-      if (cause === "manual" || cause === "search") {
+      if (cause === "manual" || cause === "zoom" || cause === "search") {
         setActivePlaceId(null);
         dismissOrientation();
       }

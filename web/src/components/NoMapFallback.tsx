@@ -84,7 +84,7 @@ export function NoMapFallback({
   const zoomBy = useCallback((delta: number) => {
     const nextZoom = normalizeMapZoom(zoom + delta, zoom);
     if (nextZoom === zoom) return;
-    onChange(zoomSelectionBounds(bounds, zoom, nextZoom), nextZoom, "manual");
+    onChange(zoomSelectionBounds(bounds, zoom, nextZoom), nextZoom, "zoom");
   }, [bounds, onChange, zoom]);
 
   const selectPlace = useCallback(
